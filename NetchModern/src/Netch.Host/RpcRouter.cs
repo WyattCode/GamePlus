@@ -143,6 +143,44 @@ internal sealed class RpcRouter
                 return Games.Games.Select(Mapping.ToDto).ToArray();
             }
 
+            case "games.add":
+            {
+                var game = Mapping.ToGame(@params);
+                if (string.IsNullOrWhiteSpace(game.Name))
+                    throw new InvalidOperationException("游戏名称不能为空");
+                Games.AddCustomGame(game);
+                return Games.Games.Select(Mapping.ToDto).ToArray();
+            }
+
+            case "games.update":
+            {
+                var id = JsonParams.RequiredString(@params, "id");
+                var existing = Games.Games.FirstOrDefault(g => g.Id == id)
+                               ?? throw new InvalidOperationException("游戏不存在");
+                if (!existing.IsCustom)
+                    throw new InvalidOperationException("只能编辑自定义游戏");
+                var updated = Mapping.ToGame(@params, id);
+                // Preserve identity/read-only bits, replace editable fields.
+                updated.IsCustom = true;
+                updated.IsFavorite = existing.IsFavorite;
+                var index = Games.Games.IndexOf(existing);
+                if (index >= 0)
+                {
+                    Games.Games[index] = updated;
+                    Games.UpdateCustomGame(updated);
+                }
+                return Games.Games.Select(Mapping.ToDto).ToArray();
+            }
+
+            case "games.remove":
+            {
+                var id = JsonParams.RequiredString(@params, "id");
+                var game = Games.Games.FirstOrDefault(g => g.Id == id)
+                           ?? throw new InvalidOperationException("游戏不存在");
+                Games.RemoveGame(game);
+                return Games.Games.Select(Mapping.ToDto).ToArray();
+            }
+
             case "settings.get":
                 return Mapping.ToDto(SettingsSvc.Settings);
 

@@ -16,7 +16,7 @@ const footNav = [
 <template>
   <aside class="sidebar">
     <nav class="nav">
-      <RouterLink v-for="item in nav" :key="item.to" :to="item.to" class="nav-item">
+      <RouterLink v-for="item in nav" :key="item.to" :to="item.to" class="nav-item" draggable="false">
         <span class="ind" />
         <AppIcon :name="item.icon" :size="20" />
         <span class="label">{{ item.label }}</span>
@@ -26,7 +26,7 @@ const footNav = [
     <div class="spacer" />
 
     <nav class="nav">
-      <RouterLink v-for="item in footNav" :key="item.to" :to="item.to" class="nav-item">
+      <RouterLink v-for="item in footNav" :key="item.to" :to="item.to" class="nav-item" draggable="false">
         <span class="ind" />
         <AppIcon :name="item.icon" :size="20" />
         <span class="label">{{ item.label }}</span>

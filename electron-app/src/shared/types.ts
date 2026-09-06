@@ -43,6 +43,15 @@ export interface Game {
   favorite: boolean
   /** True for user-added games (sorted to the top). */
   custom: boolean
+  // --- editor fields (present for custom games; optional for seed data) ---
+  englishName?: string
+  aliases?: string[]
+  category?: string
+  regions?: string[]
+  platforms?: string[]
+  proxyDomains?: string[]
+  proxyIps?: string[]
+  proxyProcesses?: string[]
 }
 
 export type AccelState =

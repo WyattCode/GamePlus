@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Netch.Core.Models;
 using Netch.Core.Models.Games;
 using Netch.Core.Models.Servers;
@@ -10,7 +11,9 @@ internal record ServerDto(string Id, string Kind, string Type, string Remark, st
     int Port, string Group, int Delay);
 
 internal record GameDto(string Id, string Name, string Icon, string Accent, string RegionText,
-    int RuleCount, string[] Categories, bool Favorite, bool Custom);
+    int RuleCount, string[] Categories, bool Favorite, bool Custom,
+    string EnglishName, string[] Aliases, string Category, string[] Regions, string[] Platforms,
+    string[] ProxyDomains, string[] ProxyIps, string[] ProxyProcesses);
 
 internal record SubscriptionDto(string Id, string Remark, string Link, int ServerCount, string? LastUpdated);
 
@@ -59,7 +62,28 @@ internal static class Mapping
 
     public static GameDto ToDto(Game g) =>
         new(g.Id, g.Name, g.Icon, g.Accent, g.RegionText, g.RuleCount,
-            BuildCategories(g), g.IsFavorite, g.IsCustom);
+            BuildCategories(g), g.IsFavorite, g.IsCustom,
+            g.EnglishName, g.Aliases.ToArray(), g.Category.ToString(), g.Regions.ToArray(),
+            g.Platforms.ToArray(), g.ProxyDomains.ToArray(), g.ProxyIps.ToArray(),
+            g.ProxyProcesses.ToArray());
+
+    /// <summary>Builds a <see cref="Game" /> from client-edit fields (used by games.add / games.update).</summary>
+    public static Game ToGame(JsonElement p, string? id = null)
+    {
+        var game = new Game { Id = id ?? "" };
+        if (JsonParams.OptionalString(p, "name") is { } name) game.Name = name;
+        if (JsonParams.OptionalString(p, "englishName") is { } en) game.EnglishName = en;
+        if (JsonParams.OptionalString(p, "icon") is { } icon) game.Icon = icon;
+        if (JsonParams.OptionalString(p, "category") is { } cat && Enum.TryParse<GameCategory>(cat, true, out var category))
+            game.Category = category;
+        game.Aliases = JsonParams.StringList(p, "aliases");
+        game.Regions = JsonParams.StringList(p, "regions");
+        game.Platforms = JsonParams.StringList(p, "platforms");
+        game.ProxyDomains = JsonParams.StringList(p, "proxyDomains");
+        game.ProxyIps = JsonParams.StringList(p, "proxyIps");
+        game.ProxyProcesses = JsonParams.StringList(p, "proxyProcesses");
+        return game;
+    }
 
     private static string[] BuildCategories(Game g)
     {

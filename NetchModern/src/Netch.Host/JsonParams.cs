@@ -21,4 +21,16 @@ internal static class JsonParams
         obj.TryGetProperty(name, out var v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False
             ? v.GetBoolean()
             : null;
+
+    /// <summary>Returns an array-of-strings field, or an empty list if absent / not a JSON array.</summary>
+    public static List<string> StringList(in JsonElement obj, string name)
+    {
+        if (!obj.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Array)
+            return new();
+        var list = new List<string>();
+        foreach (var item in v.EnumerateArray())
+            if (item.ValueKind == JsonValueKind.String)
+                list.Add(item.GetString() ?? "");
+        return list;
+    }
 }

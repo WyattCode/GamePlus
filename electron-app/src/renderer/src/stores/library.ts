@@ -42,6 +42,18 @@ export const useLibraryStore = defineStore('library', () => {
     games.value = await backend.toggleFavorite(id)
   }
 
+  async function addGame(data: Partial<Game>): Promise<void> {
+    games.value = await backend.addGame(data)
+  }
+
+  async function updateGame(id: string, data: Partial<Game>): Promise<void> {
+    games.value = await backend.updateGame(id, data)
+  }
+
+  async function removeGame(id: string): Promise<void> {
+    games.value = await backend.removeGame(id)
+  }
+
   async function addServerFromLink(link: string): Promise<number> {
     const before = servers.value.length
     servers.value = await backend.addServerFromLink(link)
@@ -82,6 +94,9 @@ export const useLibraryStore = defineStore('library', () => {
     load,
     pingAll,
     toggleFavorite,
+    addGame,
+    updateGame,
+    removeGame,
     addServerFromLink,
     removeServer,
     addSubscription,

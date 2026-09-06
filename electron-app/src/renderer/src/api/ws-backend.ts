@@ -190,6 +190,15 @@ export class WebSocketBackend implements Backend {
   toggleFavorite(id: string): Promise<Game[]> {
     return this.call('games.toggleFavorite', { id })
   }
+  addGame(data: Partial<Game>): Promise<Game[]> {
+    return this.call('games.add', data)
+  }
+  updateGame(id: string, data: Partial<Game>): Promise<Game[]> {
+    return this.call('games.update', { ...data, id })
+  }
+  removeGame(id: string): Promise<Game[]> {
+    return this.call('games.remove', { id })
+  }
   getSettings(): Promise<EngineSettings> {
     return this.call('settings.get')
   }

@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
+import GameEditorDialog from '@/components/GameEditorDialog.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useAccelStore } from '@/stores/accel'
 import { gameColor } from '@/utils/gameIcon'
@@ -14,6 +15,33 @@ const router = useRouter()
 
 const search = ref('')
 const activeCat = ref('全部')
+
+const editorOpen = ref(false)
+const editing = ref<Game | null>(null)
+
+function openAdd(): void {
+  editing.value = null
+  editorOpen.value = true
+}
+
+function openEdit(g: Game): void {
+  editing.value = g
+  editorOpen.value = true
+}
+
+async function onSave(data: Partial<Game>): Promise<void> {
+  if (editing.value) {
+    await library.updateGame(editing.value.id, data)
+  } else {
+    await library.addGame(data)
+  }
+  editorOpen.value = false
+}
+
+async function onRemove(g: Game): Promise<void> {
+  if (!g.custom) return
+  await library.removeGame(g.id)
+}
 
 const categories = computed(() => {
   const set = new Set<string>()
@@ -45,7 +73,7 @@ function pick(g: Game): void {
         <h1 class="page-title">游戏库</h1>
         <p class="page-sub">{{ library.games.length }} 款游戏 · 点击卡片开始加速</p>
       </div>
-      <button class="btn btn-primary"><AppIcon name="plus" :size="18" /> 添加游戏</button>
+      <button class="btn btn-primary" @click="openAdd"><AppIcon name="plus" :size="18" /> 添加游戏</button>
     </div>
 
     <div class="toolbar">
@@ -72,6 +100,10 @@ function pick(g: Game): void {
         <button class="fav" :class="{ on: g.favorite }" @click.stop="library.toggleFavorite(g.id)">
           <AppIcon name="star" :size="16" />
         </button>
+        <div v-if="g.custom" class="tile-actions" @click.stop>
+          <button class="tile-btn" title="编辑" @click="openEdit(g)"><AppIcon name="edit" :size="14" /></button>
+          <button class="tile-btn danger" title="删除" @click="onRemove(g)"><AppIcon name="trash" :size="14" /></button>
+        </div>
         <div class="tile-glyph" :style="{ '--a': gameColor(g.id) }">
           <GameGlyph :id="g.id" :name="g.name" :size="34" />
         </div>
@@ -83,6 +115,8 @@ function pick(g: Game): void {
         </div>
       </div>
     </div>
+
+    <GameEditorDialog :open="editorOpen" :game="editing" @close="editorOpen = false" @save="onSave" />
   </div>
 </template>
 
@@ -170,6 +204,34 @@ function pick(g: Game): void {
 }
 .fav.on :deep(svg) {
   fill: #f5b301;
+}
+.tile-actions {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.14s;
+}
+.tile:hover .tile-actions {
+  opacity: 1;
+}
+.tile-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.tile-btn:hover {
+  color: var(--text);
+}
+.tile-btn.danger:hover {
+  color: #e5484d;
 }
 .tile-glyph {
   width: 56px;

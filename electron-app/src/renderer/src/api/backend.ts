@@ -33,6 +33,9 @@ export interface Backend {
   removeSubscription(id: string): Promise<SubMutation>
   updateSubscription(id: string): Promise<SubMutation>
   toggleFavorite(id: string): Promise<Game[]>
+  addGame(data: Partial<Game>): Promise<Game[]>
+  updateGame(id: string, data: Partial<Game>): Promise<Game[]>
+  removeGame(id: string): Promise<Game[]>
   getSettings(): Promise<EngineSettings>
   setSettings(patch: Partial<EngineSettings>): Promise<EngineSettings>
   checkUpdate(): Promise<UpdateInfo | null>
@@ -164,6 +167,38 @@ class MockBackend implements Backend {
   async toggleFavorite(id: string): Promise<Game[]> {
     const g = this.mockGames.find((x) => x.id === id)
     if (g) g.favorite = !g.favorite
+    return structuredClone(this.mockGames)
+  }
+  async addGame(data: Partial<Game>): Promise<Game[]> {
+    const id = 'custom-' + crypto.randomUUID().slice(0, 8)
+    this.mockGames.push({
+      id,
+      name: data.name || '未命名游戏',
+      icon: data.icon || '',
+      accent: data.accent || '',
+      regionText: (data.regions || []).join(' · '),
+      ruleCount: (data.proxyDomains?.length || 0) + (data.proxyIps?.length || 0),
+      categories: [data.category || 'PC', ...(data.platforms || [])],
+      favorite: false,
+      custom: true,
+      englishName: data.englishName || '',
+      aliases: data.aliases || [],
+      category: data.category || 'PC',
+      regions: data.regions || [],
+      platforms: data.platforms || [],
+      proxyDomains: data.proxyDomains || [],
+      proxyIps: data.proxyIps || [],
+      proxyProcesses: data.proxyProcesses || []
+    })
+    return structuredClone(this.mockGames)
+  }
+  async updateGame(id: string, data: Partial<Game>): Promise<Game[]> {
+    const g = this.mockGames.find((x) => x.id === id)
+    if (g) Object.assign(g, data, { id })
+    return structuredClone(this.mockGames)
+  }
+  async removeGame(id: string): Promise<Game[]> {
+    this.mockGames = this.mockGames.filter((x) => x.id !== id)
     return structuredClone(this.mockGames)
   }
   async checkUpdate(): Promise<UpdateInfo | null> {

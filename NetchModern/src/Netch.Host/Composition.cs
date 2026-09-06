@@ -42,11 +42,11 @@ internal static class Composition
 
         services.AddSingleton<IAcceleratorService, AcceleratorService>();
 
-        // Update check. Repo defaults to the upstream Netch repo; override per release if Game+ gets its
-        // own repo (e.g. via GAMEPLUS_UPDATE_OWNER/REPO env vars). Current version = the host assembly's.
+        // Update check. Defaults to this project's repo; override per release (e.g. a fork/reorg) via
+        // GAMEPLUS_UPDATE_OWNER/REPO env vars. Current version = the host assembly's.
         var current = typeof(Composition).Assembly.GetName().Version ?? new Version(3, 0, 0);
-        var owner = Environment.GetEnvironmentVariable("GAMEPLUS_UPDATE_OWNER") ?? "NetchX";
-        var repo = Environment.GetEnvironmentVariable("GAMEPLUS_UPDATE_REPO") ?? "Netch";
+        var owner = Environment.GetEnvironmentVariable("GAMEPLUS_UPDATE_OWNER") ?? "WyattCode";
+        var repo = Environment.GetEnvironmentVariable("GAMEPLUS_UPDATE_REPO") ?? "GamePlus";
         services.AddSingleton<IUpdateChecker>(sp =>
             new GitHubUpdateChecker(sp.GetRequiredService<HttpClient>(), current, owner, repo));
 

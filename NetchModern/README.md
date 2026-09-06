@@ -81,8 +81,14 @@ npm run dist    # electron-vite build && electron-builder --win
 
 `./build.ps1` stages the backend (plus native binaries) into `electron-app/resources/backend`, which
 electron-builder packages as `resources/backend` in the distributable — matching the prod path in
-`src/main/sidecar.ts`. Drop the native binaries into `NetchModern/native/` to enable the native engine
-(a `NATIVE_COMPONENTS.txt` is written to the staged `bin/` documenting the expected files).
+`src/main/sidecar.ts`. It publishes **self-contained** (so the installer needs no .NET runtime),
+reads the version from `electron-app/package.json`, and clears the staging dir to avoid stale binaries.
+Drop the native binaries into `NetchModern/native/` to enable the native engine (a
+`NATIVE_COMPONENTS.txt` is written to the staged `bin/` documenting the expected files).
+
+The full end-to-end release flow (staging the backend, the installer, code signing and publishing) is
+documented in [`electron-app/README.md`](../electron-app/README.md). The update checker compares the
+installed version against the latest GitHub release of **`WyattCode/GamePlus`**.
 
 ## Status & roadmap
 

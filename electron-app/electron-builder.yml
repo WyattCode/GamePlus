@@ -1,0 +1,31 @@
+appId: com.gameplus.app
+productName: Game+
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+# The self-contained C# backend (gameplus-host.exe + native cores) ships unpacked under
+# resources/backend — matching the prod path in src/main/sidecar.ts.
+extraResources:
+  - from: resources/backend
+    to: backend
+    filter:
+      - '**/*'
+win:
+  icon: build/icon.ico
+  target:
+    - dir
+    - nsis
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  # Code signing is wired via the standard electron-builder env vars so no certificate path is baked in:
+  #   set CSC_LINK=<path to .pfx or base64 of the cert> and CSC_KEY_PASSWORD=<pw> before `npm run dist`.
+  #   When both are set, electron-builder signs Game+.exe, the backend exe/dll and the NSIS installer.
+  #   Leave unset to skip signing (installer will trigger a SmartScreen "unknown publisher" warning).
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: Game+
+compression: normal

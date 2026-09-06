@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Netch.Core/Netch.Core.csproj" />
+    <Project Path="src/Netch.Host/Netch.Host.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Netch.Tests/Netch.Tests.csproj" />
+  </Folder>
+</Solution>

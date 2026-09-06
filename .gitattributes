@@ -1,0 +1,13 @@
+# Normalize line endings: text files stored as LF in the repo, checked out with
+# native endings on Windows (CRLF) so editors/PowerShell behave.
+* text=auto
+
+# Shell/build scripts must stay CRLF for Windows PowerShell.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Media / binaries are never line-normalized.
+*.png binary
+*.ico binary
+*.svg binary

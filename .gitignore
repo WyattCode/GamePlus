@@ -1,0 +1,2 @@
+# Only electron-app + NetchModern are published. The legacy WinForms `netch/` tree stays out.
+netch/

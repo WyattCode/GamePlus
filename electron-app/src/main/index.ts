@@ -1,0 +1,170 @@
+import { app, shell, BrowserWindow, ipcMain, nativeTheme, Tray, Menu, nativeImage } from 'electron'
+import { readFileSync } from 'fs'
+import { join } from 'path'
+import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { startSidecar, stopSidecar } from './sidecar'
+import { trayIcon32 } from './trayIcon'
+
+let mainWindow: BrowserWindow | null = null
+let tray: Tray | null = null
+let isQuitting = false
+
+/** Honour the backend's MinimizeToTray setting (default on) so the close button hides to tray. */
+function minimizeToTrayEnabled(): boolean {
+  try {
+    const p = join(app.getPath('appData'), 'Game+', 'settings.json')
+    return JSON.parse(readFileSync(p, 'utf8')).MinimizeToTray !== false
+  } catch {
+    return true
+  }
+}
+
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+function createTray(): void {
+  if (tray) return
+  tray = new Tray(nativeImage.createFromDataURL(trayIcon32))
+  tray.setToolTip('Game+ 游戏加速器')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: '显示 Game+', click: showMainWindow },
+      { type: 'separator' },
+      {
+        label: '退出',
+        click: () => {
+          isQuitting = true
+          app.quit()
+        }
+      }
+    ])
+  )
+  tray.on('click', showMainWindow)
+  tray.on('double-click', showMainWindow)
+}
+
+function createWindow(): void {
+  mainWindow = new BrowserWindow({
+    width: 1120,
+    height: 720,
+    minWidth: 940,
+    minHeight: 600,
+    show: false,
+    frame: false, // Thunder-style custom chrome; titlebar is drawn in the renderer.
+    backgroundColor: '#f5f6f8',
+    autoHideMenuBar: true,
+    // Dev taskbar icon; the packaged build uses the exe's embedded icon.
+    ...(is.dev ? { icon: join(app.getAppPath(), 'build', 'icon.png') } : {}),
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.mjs'),
+      sandbox: false,
+      contextIsolation: true
+    }
+  })
+
+  mainWindow.on('ready-to-show', () => mainWindow?.show())
+
+  // Close button hides to the tray (unless the user turned MinimizeToTray off, or is really quitting).
+  mainWindow.on('close', (e) => {
+    if (!isQuitting && minimizeToTrayEnabled()) {
+      e.preventDefault()
+      mainWindow?.hide()
+    }
+  })
+  mainWindow.on('closed', () => (mainWindow = null))
+
+  mainWindow.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url)
+    return { action: 'deny' }
+  })
+
+  // Reflect the OS theme so the renderer can honour "system". Remove the listener when the window closes
+  // so re-creating the window doesn't accumulate dead nativeTheme listeners.
+  const pushTheme = (): void =>
+    mainWindow?.webContents.send('theme:system', nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
+  nativeTheme.on('updated', pushTheme)
+  mainWindow.on('closed', () => nativeTheme.off('updated', pushTheme))
+
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  } else {
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+}
+
+// --- Window control IPC (custom titlebar buttons) ---
+function registerWindowControls(): void {
+  ipcMain.on('win:minimize', () => mainWindow?.minimize())
+  ipcMain.on('win:toggle-maximize', () => {
+    if (!mainWindow) return
+    mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize()
+  })
+  ipcMain.on('win:close', () => mainWindow?.close())
+  ipcMain.handle('win:is-maximized', () => mainWindow?.isMaximized() ?? false)
+  ipcMain.handle('theme:get-system', () =>
+    nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+  )
+  // Renderer asks for the backend WebSocket coordinates; resolves once the sidecar is up.
+  ipcMain.handle('backend:get-connection', () => startSidecar())
+}
+
+// Single-instance: a second launch must not spawn another sidecar / proxy chain. Focus the running
+// window instead, then quit. Request the lock before whenReady so the second instance exits fast.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    showMainWindow()
+  })
+}
+
+app.whenReady().then(() => {
+  electronApp.setAppUserModelId('com.gameplus.app')
+
+  app.on('browser-window-created', (_, window) => {
+    optimizer.watchWindowShortcuts(window)
+  })
+
+  registerWindowControls()
+  // Kick the backend off early so it's ready by the time the renderer connects.
+  startSidecar().catch((e) => console.error('sidecar failed to start:', e))
+  createWindow()
+  createTray()
+
+  // Notify the renderer when maximize state changes so the button glyph can update.
+  const emitMax = (v: boolean): void => mainWindow?.webContents.send('win:maximized', v)
+  app.on('browser-window-created', (_, w) => {
+    w.on('maximize', () => emitMax(true))
+    w.on('unmaximize', () => emitMax(false))
+  })
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
+})
+
+// Any real quit — tray "退出", OS logoff/shutdown, auto-updater — must NOT be vetoed by the close→hide-to-tray
+// handler. before-quit fires for all of those (but not for a plain window X-close), so mark the intent here.
+app.on('before-quit', () => (isQuitting = true))
+
+// Hold the quit until the backend has gracefully torn down (restore system proxy, stop cores), then exit.
+// will-quit can fire more than once (tray-exit → app.quit → window-all-closed → app.quit); always hold the
+// quit, but run the teardown only once — its app.exit(0) is what actually terminates.
+let quitStarted = false
+app.on('will-quit', (e) => {
+  e.preventDefault()
+  if (quitStarted) return
+  quitStarted = true
+  stopSidecar().finally(() => app.exit(0))
+})
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit()
+})

@@ -1,0 +1,20 @@
+# Build output
+bin/
+obj/
+dist/
+
+# Bundled native binaries (downloaded, not committed — see build/docs)
+native/*.exe
+native/*.dll
+native/*.dat
+native/*.bin
+native/*.sys
+
+# IDE
+.vs/
+.idea/
+*.user
+
+# OS
+Thumbs.db
+.DS_Store

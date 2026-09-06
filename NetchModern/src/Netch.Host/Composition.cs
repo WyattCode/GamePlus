@@ -8,9 +8,8 @@ using Netch.Core.Services;
 namespace Netch.Host;
 
 /// <summary>
-///     Builds the Netch.Core service graph headlessly — the same registrations the WPF App used, minus
-///     everything UI-bound (WPF-UI navigation, dialogs, update checker). This is the engine the Electron
-///     frontend drives over the local WebSocket.
+///     Builds the Netch.Core service graph headlessly. This is the engine the Electron frontend drives
+///     over the local WebSocket — no UI project references it directly anymore.
 /// </summary>
 internal static class Composition
 {

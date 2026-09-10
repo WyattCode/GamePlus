@@ -199,6 +199,9 @@ export class WebSocketBackend implements Backend {
   removeGame(id: string): Promise<Game[]> {
     return this.call('games.remove', { id })
   }
+  exportServers(): Promise<string[]> {
+    return this.call('servers.export')
+  }
   getSettings(): Promise<EngineSettings> {
     return this.call('settings.get')
   }

@@ -61,6 +61,14 @@ internal sealed class RpcRouter
                 await Servers.PingAllAsync(ct);
                 return ServerList();
 
+            case "servers.export":
+                // Every server as a share link string (skips protocols the exporter can't emit, e.g. WireGuard).
+                return Servers.Servers.ToList()
+                    .Select(ShareLinkExporter.ToShareLink)
+                    .Where(l => l is not null)
+                    .Select(l => l!)
+                    .ToArray();
+
             case "accel.start":
             {
                 var gameId = JsonParams.RequiredString(@params, "gameId");

@@ -57,6 +57,22 @@ async function remove(id: string): Promise<void> {
   await library.removeServer(id)
 }
 
+async function exportToClipboard(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const links = await library.exportServers()
+    if (links.length === 0) return flash('没有可导出的线路')
+    const text = links.join('\n')
+    await navigator.clipboard.writeText(text)
+    flash(`已导出 ${links.length} 条线路的分享链接到剪贴板`)
+  } catch (e) {
+    flash('导出失败：' + (e as Error).message)
+  } finally {
+    busy.value = false
+  }
+}
+
 const typeColor: Record<string, string> = {
   VLESS: '#2e8bff',
   VMess: '#7a5cff',
@@ -81,6 +97,9 @@ const typeColor: Record<string, string> = {
         </button>
         <button class="btn" :disabled="busy" @click="importFromClipboard">
           <AppIcon name="copy" :size="18" /> 从剪贴板导入
+        </button>
+        <button class="btn" :disabled="busy || !library.servers.length" @click="exportToClipboard">
+          <AppIcon name="upload" :size="18" /> 导出
         </button>
         <button class="btn btn-primary" @click="showAdd = !showAdd">
           <AppIcon name="plus" :size="18" /> 添加

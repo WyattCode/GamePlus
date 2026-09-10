@@ -54,6 +54,10 @@ export const useLibraryStore = defineStore('library', () => {
     games.value = await backend.removeGame(id)
   }
 
+  async function exportServers(): Promise<string[]> {
+    return backend.exportServers()
+  }
+
   async function addServerFromLink(link: string): Promise<number> {
     const before = servers.value.length
     servers.value = await backend.addServerFromLink(link)
@@ -97,6 +101,7 @@ export const useLibraryStore = defineStore('library', () => {
     addGame,
     updateGame,
     removeGame,
+    exportServers,
     addServerFromLink,
     removeServer,
     addSubscription,

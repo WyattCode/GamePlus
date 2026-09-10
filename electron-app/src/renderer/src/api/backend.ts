@@ -36,6 +36,7 @@ export interface Backend {
   addGame(data: Partial<Game>): Promise<Game[]>
   updateGame(id: string, data: Partial<Game>): Promise<Game[]>
   removeGame(id: string): Promise<Game[]>
+  exportServers(): Promise<string[]>
   getSettings(): Promise<EngineSettings>
   setSettings(patch: Partial<EngineSettings>): Promise<EngineSettings>
   checkUpdate(): Promise<UpdateInfo | null>
@@ -200,6 +201,9 @@ class MockBackend implements Backend {
   async removeGame(id: string): Promise<Game[]> {
     this.mockGames = this.mockGames.filter((x) => x.id !== id)
     return structuredClone(this.mockGames)
+  }
+  async exportServers(): Promise<string[]> {
+    return this.mockServers.map((s) => `${s.type}://${s.hostname}:${s.port}#${s.remark}`)
   }
   async checkUpdate(): Promise<UpdateInfo | null> {
     return null

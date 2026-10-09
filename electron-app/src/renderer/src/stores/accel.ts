@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
-import { onScopeDispose, ref } from 'vue'
+import { computed, onScopeDispose, ref } from 'vue'
 import type { AccelStatus, Game, Server } from '@shared/types'
 import { backend } from '@/api/backend'
+import { useLibraryStore } from '@/stores/library'
 
 export const useAccelStore = defineStore('accel', () => {
   const status = ref<AccelStatus>({
@@ -13,19 +14,46 @@ export const useAccelStore = defineStore('accel', () => {
     downloadBps: 0,
     uploadBps: 0,
     gameId: null,
-    nodeId: null
+    nodeId: null,
+    captureMode: null
   })
 
   const selectedGame = ref<Game | null>(null)
-  const selectedNode = ref<Server | null>(null)
+  // Bind the node select by id, not by object: after servers.ping / list refresh the server objects are
+  // replaced, so an object binding would silently blank the select.
+  const selectedNodeId = ref<string | null>(null)
   const smartNode = ref(true)
+  // Set when the previously-selected node id disappears from the current list (e.g. subscription refresh).
+  const nodeUnavailable = ref(false)
+
+  const library = useLibraryStore()
+
+  const selectedNode = computed<Server | null>(() => {
+    if (!selectedNodeId.value) return null
+    return library.servers.find((s) => s.id === selectedNodeId.value) ?? null
+  })
+
+  function setSelectedNodeId(id: string | null): void {
+    selectedNodeId.value = id
+    nodeUnavailable.value = false
+  }
+
+  // If the selected id vanishes from the list, clear the selection and fall back to smart node.
+  function reconcileSelection(): void {
+    if (!selectedNodeId.value) return
+    if (!library.servers.some((s) => s.id === selectedNodeId.value)) {
+      selectedNodeId.value = null
+      nodeUnavailable.value = true
+      smartNode.value = true
+    }
+  }
 
   const off = backend.onStatus((s) => (status.value = s))
   onScopeDispose(off)
 
   async function start(): Promise<void> {
     if (!selectedGame.value) return
-    const nodeId = smartNode.value ? null : selectedNode.value?.id ?? null
+    const nodeId = smartNode.value ? null : selectedNodeId.value
     await backend.startAccelerate(selectedGame.value.id, nodeId)
   }
 
@@ -41,5 +69,17 @@ export const useAccelStore = defineStore('accel', () => {
     }
   }
 
-  return { status, selectedGame, selectedNode, smartNode, start, stop, toggle }
+  return {
+    status,
+    selectedGame,
+    selectedNodeId,
+    selectedNode,
+    smartNode,
+    nodeUnavailable,
+    setSelectedNodeId,
+    reconcileSelection,
+    start,
+    stop,
+    toggle
+  }
 })

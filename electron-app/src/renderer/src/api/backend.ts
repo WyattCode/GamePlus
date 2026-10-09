@@ -27,6 +27,7 @@ export interface Backend {
   stopAccelerate(): Promise<void>
   onStatus(cb: (s: AccelStatus) => void): () => void
   onLog(cb: (l: LogEntry) => void): () => void
+  recentLogs(): Promise<LogEntry[]>
   addServerFromLink(link: string): Promise<Server[]>
   removeServer(id: string): Promise<Server[]>
   addSubscription(remark: string, link: string): Promise<Subscription[]>
@@ -39,7 +40,7 @@ export interface Backend {
   exportServers(): Promise<string[]>
   getSettings(): Promise<EngineSettings>
   setSettings(patch: Partial<EngineSettings>): Promise<EngineSettings>
-  checkUpdate(): Promise<UpdateInfo | null>
+  checkUpdate(): Promise<UpdateInfo>
 }
 
 function jitter(base: number): number {
@@ -60,7 +61,8 @@ class MockBackend implements Backend {
     downloadBps: 0,
     uploadBps: 0,
     gameId: null,
-    nodeId: null
+    nodeId: null,
+    captureMode: null
   }
 
   async listGames(): Promise<Game[]> {
@@ -84,7 +86,8 @@ class MockBackend implements Backend {
     this.setState('connecting')
     await new Promise((r) => setTimeout(r, 800))
     this.startedAt = Date.now()
-    this.status = { ...this.status, gameId, nodeId, state: 'accelerating', loss: 0 }
+    // Mock always reports process capture — the real backend picks process/tun/proxy.
+    this.status = { ...this.status, gameId, nodeId, state: 'accelerating', loss: 0, captureMode: 'process' }
     this.emit()
     this.timer = setInterval(() => this.tick(), 1000)
     this.log('info', '加速已启动')
@@ -104,7 +107,8 @@ class MockBackend implements Backend {
       downloadBps: 0,
       uploadBps: 0,
       gameId: null,
-      nodeId: null
+      nodeId: null,
+      captureMode: null
     }
     this.emit()
     this.log('info', '加速已停止')
@@ -118,6 +122,9 @@ class MockBackend implements Backend {
   onLog(cb: (l: LogEntry) => void): () => void {
     this.logCbs.add(cb)
     return () => this.logCbs.delete(cb)
+  }
+  async recentLogs(): Promise<LogEntry[]> {
+    return []
   }
 
   private mockServers: Server[] = structuredClone(sampleServers)
@@ -205,8 +212,15 @@ class MockBackend implements Backend {
   async exportServers(): Promise<string[]> {
     return this.mockServers.map((s) => `${s.type}://${s.hostname}:${s.port}#${s.remark}`)
   }
-  async checkUpdate(): Promise<UpdateInfo | null> {
-    return null
+  async checkUpdate(): Promise<UpdateInfo> {
+    return {
+      status: 'notConfigured',
+      current: __APP_VERSION__,
+      latest: null,
+      tag: null,
+      url: null,
+      error: '未配置更新源'
+    }
   }
   async getSettings(): Promise<EngineSettings> {
     return structuredClone(this.mockSettings)

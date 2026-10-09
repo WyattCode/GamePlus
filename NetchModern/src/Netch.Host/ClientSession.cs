@@ -22,12 +22,18 @@ internal sealed class ClientSession
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
+    // Cap concurrent in-flight requests per session. A slow request (subs.update can take ~150s) must not
+    // block a fast one (accel.stop), but we still bound how many tasks a single client can spawn.
+    private const int MaxInFlight = 32;
+
     private readonly WebSocket _ws;
     private readonly RpcRouter _router;
     private readonly IServiceProvider _sp;
     private readonly Channel<string> _out = Channel.CreateUnbounded<string>();
     private readonly IAcceleratorService _accel;
     private readonly ILogService _log;
+    private readonly IServerRepository _servers;
+    private readonly SemaphoreSlim _inFlight = new(MaxInFlight, MaxInFlight);
 
     public ClientSession(WebSocket ws, RpcRouter router, IServiceProvider sp)
     {
@@ -36,6 +42,7 @@ internal sealed class ClientSession
         _sp = sp;
         _accel = sp.GetRequiredService<IAcceleratorService>();
         _log = sp.GetRequiredService<ILogService>();
+        _servers = sp.GetRequiredService<IServerRepository>();
     }
 
     public async Task RunAsync()
@@ -47,7 +54,7 @@ internal sealed class ClientSession
         _log.EntryAdded += OnLog;
 
         // Initial snapshot so the UI reflects current state on connect.
-        Enqueue("accel.status", Mapping.StatusDto(_accel, _router.ServerIds));
+        Enqueue("accel.status", StatusDto());
 
         var writer = WriteLoopAsync(cts.Token);
         try
@@ -95,10 +102,22 @@ internal sealed class ClientSession
 
             var message = Encoding.UTF8.GetString(frame.GetBuffer(), 0, (int)frame.Length);
             frame.SetLength(0);
-            // Dispatch sequentially: the repositories and accelerator are single-threaded (built for the
-            // WPF dispatcher), so concurrent handlers would race. Incoming frames buffer at the socket while
-            // we handle one; live status/log events still flow independently through the write channel.
-            await HandleRequestAsync(message, ct);
+
+            // Dispatch each request on its own task: a slow request (subs.update, accel.start) must not
+            // block a fast one (accel.stop). Responses carry their own id, and the write channel is
+            // thread-safe, so concurrent handlers are safe. The in-flight semaphore bounds the fan-out.
+            await _inFlight.WaitAsync(ct);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await HandleRequestAsync(message, ct);
+                }
+                finally
+                {
+                    _inFlight.Release();
+                }
+            }, ct);
         }
     }
 
@@ -118,6 +137,7 @@ internal sealed class ClientSession
         }
         catch (Exception e)
         {
+            // Always answer, even on cancellation — the client is waiting on this id.
             Send(new { id, error = e.Message });
         }
     }
@@ -149,15 +169,17 @@ internal sealed class ClientSession
     private void Enqueue(string @event, object data) =>
         _out.Writer.TryWrite(JsonSerializer.Serialize(new { @event, data }, Json));
 
+    private AccelStatusDto StatusDto() => Mapping.StatusDto(_accel, _servers.Servers.ToList());
+
     // Duration ticks once per second while accelerating — use it as the status heartbeat.
     private void OnStatusChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(AccelerationStatus.Duration) or nameof(AccelerationStatus.Latency))
-            Enqueue("accel.status", Mapping.StatusDto(_accel, _router.ServerIds));
+            Enqueue("accel.status", StatusDto());
     }
 
     private void OnStateChanged(object? sender, AccelerationState e) =>
-        Enqueue("accel.status", Mapping.StatusDto(_accel, _router.ServerIds));
+        Enqueue("accel.status", StatusDto());
 
     private void OnLog(object? sender, LogEntry e) => Enqueue("log", Mapping.ToDto(e));
 }

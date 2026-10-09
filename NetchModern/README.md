@@ -1,18 +1,13 @@
 # Game+
 
-A ground-up rewrite of [Netch](../netch) on **.NET 10**, the engine serving a modern
-[Electron + Vue](../electron-app) frontend. Rebranded as **Game+**, a game accelerator.
+The **backend** of Game+, a Windows game accelerator: a ground-up rewrite of
+[Netch](https://github.com/NetchX/Netch) on **.NET 10**, serving the
+[Electron + Vue frontend](../electron-app). It is a working proxy client — the bundled
+**Xray** / **sing-box** cores route real traffic through a local SOCKS5 + HTTP endpoint, and the
+Windows system proxy is pointed at it, so every app that honours the system proxy goes through your
+server.
 
-It's a **working proxy client**, not just a shell: the bundled **xray** core routes real traffic
-(ss / trojan / vmess / vless / socks) through a local SOCKS5 + HTTP proxy, and the **Windows system
-proxy** is pointed at it — so every app that honours the system proxy goes through your server.
-Turn it on in **Settings → "Use real proxy engine"**. A built-in **simulation** engine
-(`ProxyEngine`) is the default so the UI is fully interactive with zero setup.
-
-> Verified end-to-end: a real Shadowsocks chain (app → xray → SS protocol → server → internet)
-> returns the proxied IP; `xray -test` validates every generated config.
-
-![Dashboard](docs/screenshot-dashboard.png)
+![Game+ dashboard](docs/screenshot.png)
 
 ## Architecture
 
@@ -24,12 +19,12 @@ drives it over a local WebSocket. There is no longer a bundled WPF UI.
 NetchModern.slnx
 ├── src/Netch.Core          # UI-agnostic domain + services (net10.0-windows)
 │   ├── Models/             # Server hierarchy, Mode, AppSettings, TrafficStats, LogEntry…
-│   ├── Abstractions/       # IProxyService, IModeController(+Factory), IServerController, repositories
-│   ├── Enums/              # AppState, NatType, LogLevel
+│   ├── Abstractions/       # IAcceleratorService, IModeController(+Factory), IServerController, repositories
+│   ├── Enums/              # AppState, LogLevel
 │   ├── Interops/           # P/Invoke: RedirectorInterop (aio_*), Tun2socksInterop (LibraryImport)
 │   ├── Controllers/        # RedirectorModeController, TunModeController, ModeControllerFactory
-│   └── Services/           # ProxyEngine (sim) + NativeProxyEngine, V2ray config/controller,
-│                           #   ProcessGuard, ShareLinkParser, repositories, persistence, seed data
+│   └── Services/           # AcceleratorService, V2ray/SingBox config + controllers, ProcessGuard,
+│                           #   ShareLinkParser/Exporter, SystemProxyService, repositories, persistence
 │
 └── src/Netch.Host          # Headless backend (net10.0-windows, exe → gameplus-host.exe)
     ├── Program.cs          # loopback HTTP/WebSocket server + GAMEPLUS_READY handshake
@@ -46,6 +41,40 @@ NetchModern.slnx
 | WinForms controls                                 | Vue + Electron frontend                                  |
 | Tabbed dialogs                                    | Single-page app + navigation                             |
 | `Server` POCO + manual events                     | Observable domain models (`[ObservableProperty]`)        |
+
+### Engine architecture
+
+The backend wires a single engine in `Netch.Host/Composition.cs`:
+
+- **`AcceleratorService`** (the one and only implementation of `IAcceleratorService`) — resolves the
+  chosen node, starts the matching core (`V2rayServerController` / `SingBoxServerController`) for its
+  protocol, brings up traffic capture via `IModeControllerFactory`, points the Windows system proxy at
+  the local endpoint for domain routing, and continuously measures latency / jitter / loss plus polls
+  traffic stats. It is driven over JSON-RPC by the frontend.
+- **Degradation chain** — process mode (netfilter2) → TUN mode (tun2socks + WinTUN) → system proxy.
+  If a capture mode cannot start (missing driver, no admin), the accelerator falls back to the next
+  one instead of failing outright.
+- **Cores** — `V2rayServerController` (Xray) and `SingBoxServerController` (sing-box) generate the
+  core config, launch the process under `ProcessGuard`, and expose the local SOCKS5 + HTTP endpoint.
+- **Protocols** — ss / trojan / vmess / vless / socks, including the `ws`, `grpc`, `h2`,
+  `httpupgrade` and `xhttp` transports, TLS and Reality, WireGuard, and Shadowsocks plugins
+  (via sing-box).
+- **Control plane** — `Netch.Host` listens on a loopback HTTP/WebSocket endpoint and prints a
+  `GAMEPLUS_READY {port,pid}` handshake on stdout (and into the connection file) so the Electron
+  sidecar can discover the port. The shared secret is **not** in that handshake: Electron generates
+  it, passes only its SHA-256 to the host via `--token-sha256`, and the host compares the client's
+  token hash in constant time on every connection. `RpcRouter` maps JSON-RPC methods onto
+  Netch.Core operations; `ClientSession` pushes status/log events back to the renderer.
+- **Crash recovery** — on startup the host restores a system proxy left behind by a previous run and
+  kills orphaned core processes.
+- **Update check** — `GitHubUpdateChecker` compares the latest GitHub release tag to the running
+  version; the source is configurable (see [`electron-app/README.md`](../electron-app/README.md)).
+
+There is no simulated/real engine selection anymore — `useRealEngine` was a dead setting, and the
+previous `IProxyService` implementations (`ProxyEngine`, `NativeProxyEngine`, `LocalProxyEngine`) were
+unwired and have been removed. The simulation that `MockBackend` provides now lives entirely in the
+Electron renderer (`electron-app/src/renderer/src/api/backend.ts`), which is only used when running the
+UI outside Electron (browser preview).
 
 ## Requirements
 
@@ -72,6 +101,23 @@ dotnet test NetchModern.slnx
 >
 >Run the UI from [`electron-app`](../electron-app): `npm run dev`.
 
+The test project targets `net10.0-windows` (it references the Windows-targeted `Netch.Core`), but it
+builds and runs on Linux as well: the Windows-only interop is behind abstractions/fakes, and the
+Windows targeting packs are pulled in with `-p:EnableWindowsTargeting=true`:
+
+```bash
+dotnet test NetchModern.slnx -p:EnableWindowsTargeting=true
+```
+
+### Native binaries
+
+`build.ps1` stages the native cores from `NetchModern/native/` into the published `bin/` and then
+**verifies** that every required component is present — a missing required component fails the build
+(use `-AllowMissingNative` to downgrade that to a warning for dev/CI packaging tests). The expected
+components, their purpose, licences and download URLs are documented in
+[`native/README.md`](native/README.md); the staged `bin/NATIVE_COMPONENTS.txt` records, per file,
+whether it is present plus its size and SHA-256.
+
 ### Package the frontend
 
 ```powershell
@@ -83,8 +129,6 @@ npm run dist    # electron-vite build && electron-builder --win
 electron-builder packages as `resources/backend` in the distributable — matching the prod path in
 `src/main/sidecar.ts`. It publishes **self-contained** (so the installer needs no .NET runtime),
 reads the version from `electron-app/package.json`, and clears the staging dir to avoid stale binaries.
-Drop the native binaries into `NetchModern/native/` to enable the native engine (a
-`NATIVE_COMPONENTS.txt` is written to the staged `bin/` documenting the expected files).
 
 The full end-to-end release flow (staging the backend, the installer, code signing and publishing) is
 documented in [`electron-app/README.md`](../electron-app/README.md). The update checker compares the
@@ -92,60 +136,58 @@ installed version against the latest GitHub release of **`WyattCode/GamePlus`**.
 
 ## Status & roadmap
 
-**Done — this milestone**
+**Done**
 
 - [x] Solution, projects, packages (DI container, MVVM toolkit)
 - [x] Core domain models + service abstractions
-- [x] Headless backend (`Netch.Host`) — loopback WebSocket + JSON-RPC, spawned by the Electron sidecar
-- [x] Simulated engine with live status + traffic; builds and runs
-- [x] **Share-link import** — `ShareLinkParser` for `ss://`, `trojan://`, `vmess://`,
-      `vless://` and Telegram socks links, plus Base64 subscription blobs
-- [x] **JSON persistence** — polymorphic servers, modes and subscriptions saved to
-      `%AppData%\NetchModern\` and reloaded on launch
+- [x] Headless backend (`Netch.Host`) — loopback WebSocket + JSON-RPC with SHA-256 token handshake,
+      spawned by the Electron sidecar
+- [x] **Share-link import/export** — `ShareLinkParser` / `ShareLinkExporter` for `ss://`,
+      `trojan://`, `vmess://`, `vless://`, `wireguard://` / `wg://` and Telegram socks links, plus
+      Base64 subscription blobs
+- [x] **JSON persistence** — polymorphic servers and subscriptions (plus `settings.json` and custom
+      games) saved to `%AppData%\Game+\` (the legacy `%AppData%\NetchModern\` folder is migrated on
+      first launch) and reloaded on launch; writes are atomic (write-temp-then-rename)
 - [x] **Server editor** — add/edit with a protocol picker and type-specific fields; changes persist
 - [x] **Subscription fetch** — real `HttpClient` download → parse → merge into the server
       list grouped by subscription; re-updates replace cleanly (no duplicates)
 - [x] **v2ray outbound** — `V2rayConfigGenerator` (Server → v2ray/xray JSON for ss/trojan/
       vmess/vless/socks/wireguard) + `ProcessGuard` + `V2rayServerController`
-- [x] **Native interop + engine** — `RedirectorInterop`/`Tun2socksInterop`/`RouteHelperInterop`
+- [x] **sing-box outbound** — `SingBoxConfigGenerator` + `SingBoxServerController` (hysteria2,
+      Shadowsocks plugins)
+- [x] **Native interop + capture modes** — `RedirectorInterop`/`Tun2socksInterop`/`RouteHelperInterop`
       (P/Invoke via `LibraryImport`), `RedirectorModeController`/`TunModeController` (+ route-table
-      setup) + factory, and `NativeProxyEngine` (MainController-style orchestration: DNS → server
-      controller → mode controller → live traffic).
-- [x] **STUN NAT detection** — `StunClient` (RFC 5389 binding + RFC 3489 change-request tests)
-- [x] **Packaging** — `build.ps1` publishes the headless backend and stages it into
-      `electron-app/resources/backend` for electron-builder.
+      setup) + factory, and the process → TUN → system-proxy degradation chain in `AcceleratorService`
+- [x] **Real proxy engine** — bundled **Xray** core (staged into `bin/`), `V2rayServerController`
+      launches it with a generated SOCKS5 + HTTP config, `SystemProxyService` sets/restores the WinINET
+      system proxy, and `AcceleratorService` ties it together. Routes real traffic through a
+      Shadowsocks chain.
+- [x] **Live traffic counters** — the real engine enables xray's stats API and polls
+      `xray api statsquery`, so the dashboard shows actual up/down bytes (e.g. a 1 MB download
+      reports `down=1012284`).
+- [x] **Crash recovery** — restores a system proxy left behind by a previous run and kills orphaned
+      core processes on startup.
+- [x] **Packaging** — `build.ps1` publishes the headless backend, stages it into
+      `electron-app/resources/backend` for electron-builder, and verifies the native components.
 - [x] **Update check** — `GitHubUpdateChecker` compares the latest GitHub release tag to the running
       version; surfaced in the Electron renderer.
-- [x] **Share-link export** — `ShareLinkExporter` (round-trips with the parser)
-- [x] **Atomic persistence** — settings and data save via write-temp-then-rename, so an interrupted
-      write can't corrupt the file.
-- [x] **Real proxy engine** 🎉 — bundled **xray** core (auto-copied to `bin/`), `V2rayServerController`
-      launches it with a generated SOCKS5 + HTTP config, `SystemProxyService` sets/restores the WinINET
-      system proxy, and `LocalProxyEngine` ties it together. Real traffic verified through a Shadowsocks
-      chain.
-- [x] **Live traffic counters** — the real engine enables xray's stats API and polls
-      `xray api statsquery`, so the dashboard shows actual up/down bytes (verified: 1 MB download →
-      `down=1012284`).
-- [x] Servers/subscriptions start **empty** (no fake demo data); mode templates are still seeded.
+- [x] Servers/subscriptions start **empty** (no fake demo data).
 
 **Next**
 
-- [ ] Transparent capture modes (Process via netfilter2, TUN via tun2socks/wintun) — code + interop
-      are in place; need the driver binaries + admin install
-- [ ] Share mode (pcap), Serilog file logging
+- [ ] Serilog file logging
 
-### Engine architecture
+## Known limitations / not verified
 
-The backend wires a single engine in `Netch.Host/Composition.cs`:
+- **Windows-only runtime.** The backend targets `net10.0-windows`; only the unit tests run on Linux.
+- **Capture modes need admin + drivers.** Process mode (netfilter2) and TUN mode (tun2socks/WinTUN)
+  require administrator rights and the corresponding driver binaries; without them Game+ falls back to
+  the system proxy.
+- **Native binaries are not in the repository.** `NetchModern/native/` is git-ignored; you must
+  populate it before packaging — see [`native/README.md`](native/README.md).
 
-- **`AcceleratorService`** (the one and only implementation of `IAcceleratorService`) — resolves the
-  chosen node, starts the matching core (`V2rayServerController` / `SingBoxServerController`) for its
-  protocol, brings up traffic capture via `IModeControllerFactory` (process/netfilter or IP/TUN), points
-  the Windows system proxy at the local endpoint for domain routing, and continuously measures
-  latency / jitter / loss plus polls traffic stats. It is driven over JSON-RPC by the frontend.
+## License
 
-There is no simulated/real engine selection anymore — `useRealEngine` was a dead setting, and the
-previous `IProxyService` implementations (`ProxyEngine`, `NativeProxyEngine`, `LocalProxyEngine`) were
-unwired and have been removed. The simulation that `MockBackend` provides now lives entirely in the
-Electron renderer (`electron-app/src/renderer/src/api/backend.ts`), which is only used when running the
-UI outside Electron (browser preview).
+Game+ is licensed under the **GNU General Public License v3.0** (`GPL-3.0-only`). See
+[`LICENSE`](../LICENSE) and [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) for the full
+licence text and third-party attributions.

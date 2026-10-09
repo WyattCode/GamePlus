@@ -2,13 +2,12 @@ using System.Collections.ObjectModel;
 using System.Text.Json;
 using Netch.Core.Abstractions;
 using Netch.Core.Models;
-using Netch.Core.Models.Modes;
 using Netch.Core.Models.Servers;
 
 namespace Netch.Core.Services;
 
 /// <summary>
-///     Persists servers, modes and subscriptions as JSON under %AppData%\Game+\.
+///     Persists servers and subscriptions as JSON under %AppData%\Game+\.
 ///     On first run (no files) the seeded repository contents are written out as-is.
 /// </summary>
 public sealed class JsonPersistenceService : IPersistenceService
@@ -19,35 +18,99 @@ public sealed class JsonPersistenceService : IPersistenceService
     };
 
     private readonly string _dir;
-    private readonly IModeRepository _modes;
     private readonly IServerRepository _servers;
     private readonly ISubscriptionRepository _subscriptions;
 
-    public JsonPersistenceService(IServerRepository servers, IModeRepository modes, ISubscriptionRepository subscriptions)
+    // Serializes concurrent SaveAsync calls so two overlapping saves can't interleave their temp-file
+    // swaps (each write already uses a unique temp name, but the final File.Move ordering still matters).
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
+
+    public JsonPersistenceService(IServerRepository servers, ISubscriptionRepository subscriptions)
+        : this(servers, subscriptions, AppPaths.DataDirectory)
+    {
+    }
+
+    /// <summary>Test-friendly constructor: lets callers point the service at a temp directory.</summary>
+    public JsonPersistenceService(IServerRepository servers, ISubscriptionRepository subscriptions, string directory)
     {
         _servers = servers;
-        _modes = modes;
         _subscriptions = subscriptions;
 
-        _dir = AppPaths.DataDirectory;
+        _dir = directory;
     }
 
     private string ServersPath => Path.Combine(_dir, "servers.json");
-    private string ModesPath => Path.Combine(_dir, "modes.json");
     private string SubscriptionsPath => Path.Combine(_dir, "subscriptions.json");
+
+    // NOTE: modes.json is no longer read or written. Any existing file on disk is left untouched.
 
     public async Task LoadAsync()
     {
         var loadedAny = false;
         loadedAny |= await LoadInto(ServersPath, _servers.Servers);
-        loadedAny |= await LoadInto(ModesPath, _modes.Modes);
         loadedAny |= await LoadInto(SubscriptionsPath, _subscriptions.Subscriptions);
+
+        // Migrate BEFORE the orphan purge: legacy servers still carry the old group key (remark/link) and
+        // would otherwise be deleted as orphans.
+        var migrated = MigrateSubscriptionIds();
 
         ReconcileSubscriptionServers();
 
         // First run: no files yet — persist the seeded data so it exists next time.
-        if (!loadedAny)
+        if (!loadedAny || migrated)
             await SaveAsync();
+    }
+
+    /// <summary>
+    ///     One-time migration for subscriptions created before <see cref="Subscription.Id" /> existed:
+    ///     assign an id to every subscription, then re-tag servers whose <c>Group</c> matches a legacy key
+    ///     (old formula: remark if not blank else link) to the new <c>"sub:&lt;id&gt;"</c> key. When several
+    ///     subscriptions share the same legacy key, only the first one claims those servers — the others
+    ///     will re-import their own nodes on their next update.
+    /// </summary>
+    private bool MigrateSubscriptionIds()
+    {
+        var subs = _subscriptions.Subscriptions.ToList();
+        if (subs.Count == 0)
+            return false;
+
+        var changed = false;
+
+        // Assign ids first so GroupKey is stable for the re-tagging pass below.
+        foreach (var sub in subs)
+        {
+            if (string.IsNullOrWhiteSpace(sub.Id))
+            {
+                sub.EnsureId();
+                changed = true;
+            }
+        }
+
+        // Map legacy key -> first subscription that owns it.
+        var legacyOwners = new Dictionary<string, Subscription>(StringComparer.Ordinal);
+        foreach (var sub in subs)
+        {
+            var legacy = sub.LegacyGroupKey;
+            if (string.IsNullOrWhiteSpace(legacy))
+                continue;
+            if (!legacyOwners.ContainsKey(legacy))
+                legacyOwners[legacy] = sub;
+        }
+
+        foreach (var server in _servers.Servers.ToList())
+        {
+            if (!server.IsInGroup)
+                continue;
+            if (server.Group.StartsWith("sub:", StringComparison.Ordinal))
+                continue; // already migrated
+            if (legacyOwners.TryGetValue(server.Group, out var owner))
+            {
+                server.Group = owner.GroupKey;
+                changed = true;
+            }
+        }
+
+        return changed;
     }
 
     /// <summary>
@@ -70,12 +133,18 @@ public sealed class JsonPersistenceService : IPersistenceService
         // Snapshot on the calling thread before any await: the source ObservableCollections can be mutated
         // (subscription import / ping) on the UI thread, and enumerating one mid-write would throw.
         var servers = _servers.Servers.ToList();
-        var modes = _modes.Modes.ToList();
         var subscriptions = _subscriptions.Subscriptions.ToList();
 
-        await WriteList(ServersPath, servers);
-        await WriteList(ModesPath, modes);
-        await WriteList(SubscriptionsPath, subscriptions);
+        await _saveGate.WaitAsync();
+        try
+        {
+            await WriteList(ServersPath, servers);
+            await WriteList(SubscriptionsPath, subscriptions);
+        }
+        finally
+        {
+            _saveGate.Release();
+        }
     }
 
     private static async Task<bool> LoadInto<T>(string path, ObservableCollection<T> target)

@@ -6,11 +6,13 @@ import GameGlyph from '@/components/GameGlyph.vue'
 import GameEditorDialog from '@/components/GameEditorDialog.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useAccelStore } from '@/stores/accel'
+import { useToastStore, errorMessage } from '@/stores/toast'
 import { gameColor } from '@/utils/gameIcon'
 import type { Game } from '@shared/types'
 
 const library = useLibraryStore()
 const accel = useAccelStore()
+const toast = useToastStore()
 const router = useRouter()
 
 const search = ref('')
@@ -30,17 +32,33 @@ function openEdit(g: Game): void {
 }
 
 async function onSave(data: Partial<Game>): Promise<void> {
-  if (editing.value) {
-    await library.updateGame(editing.value.id, data)
-  } else {
-    await library.addGame(data)
+  try {
+    if (editing.value) {
+      await library.updateGame(editing.value.id, data)
+    } else {
+      await library.addGame(data)
+    }
+    editorOpen.value = false
+  } catch (e) {
+    toast.error('保存游戏失败：' + errorMessage(e))
   }
-  editorOpen.value = false
 }
 
 async function onRemove(g: Game): Promise<void> {
   if (!g.custom) return
-  await library.removeGame(g.id)
+  try {
+    await library.removeGame(g.id)
+  } catch (e) {
+    toast.error('删除游戏失败：' + errorMessage(e))
+  }
+}
+
+async function onToggleFavorite(id: string): Promise<void> {
+  try {
+    await library.toggleFavorite(id)
+  } catch (e) {
+    toast.error('操作失败：' + errorMessage(e))
+  }
 }
 
 const categories = computed(() => {
@@ -97,7 +115,7 @@ function pick(g: Game): void {
 
     <div class="grid">
       <div v-for="g in filtered" :key="g.id" class="tile" @click="pick(g)">
-        <button class="fav" :class="{ on: g.favorite }" @click.stop="library.toggleFavorite(g.id)">
+        <button class="fav" :class="{ on: g.favorite }" @click.stop="onToggleFavorite(g.id)">
           <AppIcon name="star" :size="16" />
         </button>
         <div v-if="g.custom" class="tile-actions" @click.stop>

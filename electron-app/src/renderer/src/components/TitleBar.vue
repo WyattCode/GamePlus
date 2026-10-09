@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import AppIcon from './AppIcon.vue'
 import { useAppStore } from '@/stores/app'
 import { useAccelStore } from '@/stores/accel'
@@ -10,10 +10,17 @@ const maximized = ref(false)
 
 const inElectron = typeof window !== 'undefined' && !!window.gameplus
 
+let unsubscribeMaximize: (() => void) | null = null
+
 onMounted(async () => {
   if (!inElectron) return
   maximized.value = await window.gameplus.window.isMaximized()
-  window.gameplus.window.onMaximizeChange((v) => (maximized.value = v))
+  unsubscribeMaximize = window.gameplus.window.onMaximizeChange((v) => (maximized.value = v))
+})
+
+onUnmounted(() => {
+  unsubscribeMaximize?.()
+  unsubscribeMaximize = null
 })
 
 // `window` is not accessible from Vue template expressions, so the window controls must go through

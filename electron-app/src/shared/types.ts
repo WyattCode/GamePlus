@@ -24,12 +24,6 @@ export interface Server {
   delay: number
 }
 
-export interface GameServerOption {
-  id: string
-  /** Region label, e.g. "亚服", "美服". */
-  region: string
-}
-
 export interface Game {
   id: string
   name: string
@@ -60,6 +54,9 @@ export type AccelState =
   | 'accelerating'
   | 'stopping'
 
+/** Which capture method is actually active. Null while idle. */
+export type CaptureMode = 'process' | 'tun' | 'proxy'
+
 export interface AccelStatus {
   state: AccelState
   latency: number
@@ -71,6 +68,8 @@ export interface AccelStatus {
   uploadBps: number
   gameId: string | null
   nodeId: string | null
+  /** Active capture method, or null when idle. */
+  captureMode: CaptureMode | null
 }
 
 export interface Subscription {
@@ -89,13 +88,6 @@ export interface LogEntry {
   message: string
 }
 
-export interface AppSettings {
-  language: 'zh-CN' | 'en-US'
-  theme: 'light' | 'dark' | 'system'
-  minimizeToTray: boolean
-  smartNode: boolean
-}
-
 /** Engine-side settings persisted by the C# backend (subset of the full AppSettings). */
 export interface EngineSettings {
   theme: 'light' | 'dark' | 'system'
@@ -106,9 +98,18 @@ export interface EngineSettings {
 /** Connection state of the C# backend sidecar. */
 export type BackendState = 'starting' | 'connected' | 'disconnected' | 'error'
 
+export type UpdateCheckStatus = 'upToDate' | 'updateAvailable' | 'failed' | 'notConfigured'
+
 export interface UpdateInfo {
-  hasUpdate: boolean
-  latest: string
-  tag: string
+  status: UpdateCheckStatus
+  /** Running version, e.g. "3.0.0". */
+  current: string
+  /** Latest version parsed from the update source, when available. */
+  latest: string | null
+  /** Raw tag from the update source, when available. */
+  tag: string | null
+  /** Release page URL, when available. */
   url: string | null
+  /** Short user-facing reason when status is "failed" or "notConfigured". */
+  error: string | null
 }

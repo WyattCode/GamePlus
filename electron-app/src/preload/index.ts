@@ -8,8 +8,11 @@ const api = {
     toggleMaximize: (): void => ipcRenderer.send('win:toggle-maximize'),
     close: (): void => ipcRenderer.send('win:close'),
     isMaximized: (): Promise<boolean> => ipcRenderer.invoke('win:is-maximized'),
-    onMaximizeChange: (cb: (maximized: boolean) => void): void => {
-      ipcRenderer.on('win:maximized', (_e, v: boolean) => cb(v))
+    // Returns an unsubscribe function so callers can detach the listener (e.g. on component unmount).
+    onMaximizeChange: (cb: (maximized: boolean) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, v: boolean): void => cb(v)
+      ipcRenderer.on('win:maximized', listener)
+      return () => ipcRenderer.removeListener('win:maximized', listener)
     }
   },
   theme: {

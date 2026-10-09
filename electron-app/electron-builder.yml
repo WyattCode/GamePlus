@@ -13,6 +13,11 @@ extraResources:
     to: backend
     filter:
       - '**/*'
+  # Ship the licence and third-party notices with the app (resources root).
+  - from: ../LICENSE
+    to: LICENSE
+  - from: ../THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
 win:
   icon: build/icon.ico
   target:
@@ -28,4 +33,6 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   shortcutName: Game+
+  # Show the GPL-3.0 licence in the installer.
+  license: ../LICENSE
 compression: normal

@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Netch.Core.Models;
 using Netch.Core.Models.Games;
@@ -18,27 +17,11 @@ internal record GameDto(string Id, string Name, string Icon, string Accent, stri
 internal record SubscriptionDto(string Id, string Remark, string Link, int ServerCount, string? LastUpdated);
 
 internal record AccelStatusDto(string State, int Latency, double Loss, int Jitter, int DurationSec,
-    long DownloadBps, long UploadBps, string? GameId, string? NodeId);
+    long DownloadBps, long UploadBps, string? GameId, string? NodeId, string? CaptureMode);
 
 internal record LogDto(string Ts, string Level, string Message);
 
 internal record SettingsDto(string Theme, string Language, bool MinimizeToTray);
-
-/// <summary>Assigns stable ids to reference-typed domain objects that have no id of their own (servers, subs).</summary>
-internal sealed class IdRegistry<T> where T : class
-{
-    private readonly ConditionalWeakTable<T, string> _ids = new();
-
-    public string IdOf(T item) => _ids.GetValue(item, static _ => Guid.NewGuid().ToString("N")[..12]);
-
-    public T? Resolve(string id, IEnumerable<T> pool)
-    {
-        foreach (var item in pool)
-            if (IdOf(item) == id)
-                return item;
-        return null;
-    }
-}
 
 internal static class Mapping
 {
@@ -57,8 +40,8 @@ internal static class Mapping
     // Short chip label; Hysteria2 is abbreviated to HY2 to match the UI palette.
     public static string ChipOf(Server s) => s is Hysteria2Server ? "HY2" : s.Type;
 
-    public static ServerDto ToDto(Server s, IdRegistry<Server> ids) =>
-        new(ids.IdOf(s), KindOf(s), ChipOf(s), s.Remark, s.Hostname, s.Port, s.Group, s.Delay);
+    public static ServerDto ToDto(Server s, string id) =>
+        new(id, KindOf(s), ChipOf(s), s.Remark, s.Hostname, s.Port, s.Group, s.Delay);
 
     public static GameDto ToDto(Game g) =>
         new(g.Id, g.Name, g.Icon, g.Accent, g.RegionText, g.RuleCount,
@@ -67,21 +50,65 @@ internal static class Mapping
             g.Platforms.ToArray(), g.ProxyDomains.ToArray(), g.ProxyIps.ToArray(),
             g.ProxyProcesses.ToArray());
 
-    /// <summary>Builds a <see cref="Game" /> from client-edit fields (used by games.add / games.update).</summary>
-    public static Game ToGame(JsonElement p, string? id = null)
+    /// <summary>
+    ///     Builds a <see cref="Game" /> from client-edit fields (used by games.add / games.update).
+    ///     When <paramref name="existing" /> is supplied the fields absent from <paramref name="p" /> are
+    ///     carried over from it (merge semantics), so an editor that doesn't send every field can't wipe
+    ///     data such as <c>Icon</c>, <c>Aliases</c> or <c>AccentColor</c>.
+    /// </summary>
+    public static Game ToGame(JsonElement p, string? id = null, Game? existing = null)
     {
-        var game = new Game { Id = id ?? "" };
+        var game = new Game { Id = id ?? existing?.Id ?? "" };
+        if (existing is not null)
+        {
+            game.Name = existing.Name;
+            game.EnglishName = existing.EnglishName;
+            game.Icon = existing.Icon;
+            game.AccentColor = existing.AccentColor;
+            game.Category = existing.Category;
+            game.Aliases = new List<string>(existing.Aliases);
+            game.Regions = new List<string>(existing.Regions);
+            game.Platforms = new List<string>(existing.Platforms);
+            game.ProxyDomains = new List<string>(existing.ProxyDomains);
+            game.ProxyIps = new List<string>(existing.ProxyIps);
+            game.ProxyProcesses = new List<string>(existing.ProxyProcesses);
+            game.IsCustom = existing.IsCustom;
+            game.IsFavorite = existing.IsFavorite;
+        }
+
         if (JsonParams.OptionalString(p, "name") is { } name) game.Name = name;
         if (JsonParams.OptionalString(p, "englishName") is { } en) game.EnglishName = en;
         if (JsonParams.OptionalString(p, "icon") is { } icon) game.Icon = icon;
-        if (JsonParams.OptionalString(p, "category") is { } cat && Enum.TryParse<GameCategory>(cat, true, out var category))
-            game.Category = category;
-        game.Aliases = JsonParams.StringList(p, "aliases");
-        game.Regions = JsonParams.StringList(p, "regions");
-        game.Platforms = JsonParams.StringList(p, "platforms");
-        game.ProxyDomains = JsonParams.StringList(p, "proxyDomains");
-        game.ProxyIps = JsonParams.StringList(p, "proxyIps");
-        game.ProxyProcesses = JsonParams.StringList(p, "proxyProcesses");
+        if (JsonParams.OptionalString(p, "accent") is { } accent) game.AccentColor = accent;
+        if (JsonParams.HasProperty(p, "category"))
+        {
+            var cat = JsonParams.OptionalString(p, "category");
+            if (string.IsNullOrWhiteSpace(cat))
+            {
+                // Absent/blank → keep existing value on update, default Pc on add.
+                if (existing is null) game.Category = GameCategory.Pc;
+            }
+            else if (Enum.TryParse<GameCategory>(cat, true, out var category))
+            {
+                game.Category = category;
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    $"未知的游戏分类：{cat}（可选：Hot / Pc / Console / Platform）");
+            }
+        }
+        else if (existing is null)
+        {
+            game.Category = GameCategory.Pc;
+        }
+
+        if (JsonParams.HasProperty(p, "aliases")) game.Aliases = JsonParams.StringList(p, "aliases");
+        if (JsonParams.HasProperty(p, "regions")) game.Regions = JsonParams.StringList(p, "regions");
+        if (JsonParams.HasProperty(p, "platforms")) game.Platforms = JsonParams.StringList(p, "platforms");
+        if (JsonParams.HasProperty(p, "proxyDomains")) game.ProxyDomains = JsonParams.StringList(p, "proxyDomains");
+        if (JsonParams.HasProperty(p, "proxyIps")) game.ProxyIps = JsonParams.StringList(p, "proxyIps");
+        if (JsonParams.HasProperty(p, "proxyProcesses")) game.ProxyProcesses = JsonParams.StringList(p, "proxyProcesses");
         return game;
     }
 
@@ -94,8 +121,8 @@ internal static class Mapping
         return cats.ToArray();
     }
 
-    public static SubscriptionDto ToDto(Subscription s, IdRegistry<Subscription> ids) =>
-        new(ids.IdOf(s), s.Remark, s.Link, s.ServerCount, s.LastUpdated?.ToString("o"));
+    public static SubscriptionDto ToDto(Subscription s) =>
+        new(s.Id, s.Remark, s.Link, s.ServerCount, s.LastUpdated?.ToString("o"));
 
     public static string StateName(AccelerationState state) => state switch
     {
@@ -105,9 +132,19 @@ internal static class Mapping
         _ => "idle"
     };
 
-    public static AccelStatusDto StatusDto(Netch.Core.Abstractions.IAcceleratorService a, IdRegistry<Server> ids)
+    public static AccelStatusDto StatusDto(Netch.Core.Abstractions.IAcceleratorService a, IReadOnlyList<Server> pool)
     {
         var st = a.Status;
+        string? nodeId = null;
+        if (a.CurrentNode is { } n)
+        {
+            var map = ServerIds.Assign(pool);
+            if (map.TryGetValue(n, out var id))
+                nodeId = id;
+            else
+                nodeId = ServerIds.Fingerprint(n);
+        }
+
         return new AccelStatusDto(
             StateName(a.State),
             st.Latency,
@@ -117,7 +154,8 @@ internal static class Mapping
             st.DownloadRate,
             st.UploadRate,
             a.CurrentGame?.Id,
-            a.CurrentNode is { } n ? ids.IdOf(n) : null);
+            nodeId,
+            st.CaptureMode);
     }
 
     public static LogDto ToDto(LogEntry e) =>

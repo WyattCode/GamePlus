@@ -18,6 +18,7 @@ public static class ShareLinkExporter
         VlessServer vl => Vless(vl),
         Socks5Server s5 => Socks(s5),
         Hysteria2Server hy2 => Hysteria2(hy2),
+        WireGuardServer wg => WireGuard(wg),
         _ => null
     };
 
@@ -38,13 +39,37 @@ public static class ShareLinkExporter
         return $"hysteria2://{Uri.EscapeDataString(s.Password)}@{s.Hostname}:{s.Port}{query}{Fragment(s.Remark)}";
     }
 
+    private static string WireGuard(WireGuardServer s)
+    {
+        var query = $"?publickey={Uri.EscapeDataString(s.PublicKey)}";
+        if (!string.IsNullOrEmpty(s.LocalAddresses))
+            query += $"&address={Uri.EscapeDataString(s.LocalAddresses)}";
+        if (s.Mtu > 0 && s.Mtu != 1420)
+            query += $"&mtu={s.Mtu}";
+        if (!string.IsNullOrEmpty(s.Reserved))
+            query += $"&reserved={Uri.EscapeDataString(s.Reserved)}";
+        if (!string.IsNullOrEmpty(s.PreSharedKey))
+            query += $"&presharedkey={Uri.EscapeDataString(s.PreSharedKey)}";
+
+        return $"wireguard://{Uri.EscapeDataString(s.PrivateKey)}@{s.Hostname}:{s.Port}{query}{Fragment(s.Remark)}";
+    }
+
     private static string Fragment(string remark)
         => string.IsNullOrEmpty(remark) ? string.Empty : "#" + Uri.EscapeDataString(remark);
 
     private static string Shadowsocks(ShadowsocksServer s)
     {
         var userInfo = ShareLinkUtils.Base64UrlEncode($"{s.EncryptMethod}:{s.Password}");
-        return $"ss://{userInfo}@{s.Hostname}:{s.Port}{Fragment(s.Remark)}";
+        var query = string.Empty;
+        if (!string.IsNullOrEmpty(s.Plugin))
+        {
+            var plugin = s.Plugin;
+            if (!string.IsNullOrEmpty(s.PluginOption))
+                plugin += ";" + s.PluginOption;
+            query = "?plugin=" + Uri.EscapeDataString(plugin);
+        }
+
+        return $"ss://{userInfo}@{s.Hostname}:{s.Port}{query}{Fragment(s.Remark)}";
     }
 
     private static string Trojan(TrojanServer s)
@@ -52,6 +77,20 @@ public static class ShareLinkExporter
         var query = $"?sni={Uri.EscapeDataString(string.IsNullOrEmpty(s.Sni) ? s.Hostname : s.Sni)}";
         if (s.AllowInsecure)
             query += "&allowInsecure=1";
+        if (!string.IsNullOrEmpty(s.Network) && !string.Equals(s.Network, "tcp", StringComparison.OrdinalIgnoreCase))
+            query += $"&type={Uri.EscapeDataString(s.Network)}";
+        if (!string.IsNullOrEmpty(s.Host))
+            query += $"&host={Uri.EscapeDataString(s.Host)}";
+        if (!string.IsNullOrEmpty(s.Path))
+            query += $"&path={Uri.EscapeDataString(s.Path)}";
+        if (!string.IsNullOrEmpty(s.ServiceName))
+            query += $"&serviceName={Uri.EscapeDataString(s.ServiceName)}";
+        if (!string.IsNullOrEmpty(s.Mode))
+            query += $"&mode={Uri.EscapeDataString(s.Mode)}";
+        if (!string.IsNullOrEmpty(s.Alpn))
+            query += $"&alpn={Uri.EscapeDataString(s.Alpn)}";
+        if (!string.IsNullOrEmpty(s.Fingerprint))
+            query += $"&fp={Uri.EscapeDataString(s.Fingerprint)}";
 
         return $"trojan://{Uri.EscapeDataString(s.Password)}@{s.Hostname}:{s.Port}{query}{Fragment(s.Remark)}";
     }
@@ -71,6 +110,19 @@ public static class ShareLinkExporter
             ["tls"] = s.Tls ? "tls" : string.Empty
         };
 
+        if (!string.IsNullOrEmpty(s.Host))
+            json["host"] = s.Host;
+        if (!string.IsNullOrEmpty(s.Path))
+            json["path"] = s.Path;
+        if (!string.IsNullOrEmpty(s.Sni))
+            json["sni"] = s.Sni;
+        if (!string.IsNullOrEmpty(s.Alpn))
+            json["alpn"] = s.Alpn;
+        if (!string.IsNullOrEmpty(s.Fingerprint))
+            json["fp"] = s.Fingerprint;
+        if (!string.IsNullOrEmpty(s.Mode))
+            json["type"] = s.Mode;
+
         return "vmess://" + ShareLinkUtils.Base64UrlEncode(json.ToJsonString());
     }
 
@@ -89,6 +141,18 @@ public static class ShareLinkExporter
             query += $"&spx={Uri.EscapeDataString(s.SpiderX)}";
         if (!string.IsNullOrEmpty(s.Fingerprint))
             query += $"&fp={Uri.EscapeDataString(s.Fingerprint)}";
+        if (!string.IsNullOrEmpty(s.Host))
+            query += $"&host={Uri.EscapeDataString(s.Host)}";
+        if (!string.IsNullOrEmpty(s.Path))
+            query += $"&path={Uri.EscapeDataString(s.Path)}";
+        if (!string.IsNullOrEmpty(s.ServiceName))
+            query += $"&serviceName={Uri.EscapeDataString(s.ServiceName)}";
+        if (!string.IsNullOrEmpty(s.Mode))
+            query += $"&mode={Uri.EscapeDataString(s.Mode)}";
+        if (!string.IsNullOrEmpty(s.Alpn))
+            query += $"&alpn={Uri.EscapeDataString(s.Alpn)}";
+        if (s.AllowInsecure)
+            query += "&allowInsecure=1";
 
         return $"vless://{s.UserId}@{s.Hostname}:{s.Port}{query}{Fragment(s.Remark)}";
     }

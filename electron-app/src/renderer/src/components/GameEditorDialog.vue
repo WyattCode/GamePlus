@@ -5,13 +5,27 @@ import type { Game } from '@shared/types'
 const props = defineProps<{ open: boolean; game: Game | null }>()
 const emit = defineEmits<{ close: []; save: [data: Partial<Game>] }>()
 
-const CATS = ['PC', '主机', '平台', '热门'] as const
+// Values are the backend GameCategory enum names (parsed case-insensitively); labels are Chinese.
+const CATS = [
+  { value: 'Hot', label: '热门' },
+  { value: 'Pc', label: 'PC' },
+  { value: 'Console', label: '主机' },
+  { value: 'Platform', label: '平台' }
+] as const
 const PLATFORMS = ['Steam', 'Epic', 'Xbox', 'PlayStation', 'Switch', 'Riot', '暴雪', 'EA', 'R星', '其他'] as const
+
+/** Normalise an incoming category (enum name, any case) to a known option value, else 'Pc'. */
+function normalizeCategory(value?: string): string {
+  if (!value) return 'Pc'
+  const found = CATS.find((c) => c.value.toLowerCase() === value.toLowerCase())
+  return found ? found.value : 'Pc'
+}
 
 const form = reactive({
   name: '',
   englishName: '',
-  category: 'PC',
+  icon: '',
+  category: 'Pc',
   platforms: [] as string[],
   regions: [] as string[],
   proxyDomains: [] as string[],
@@ -23,6 +37,7 @@ const domainsText = ref('')
 const ipsText = ref('')
 const processesText = ref('')
 const regionsText = ref('')
+const aliasesText = ref('')
 
 // Line-separated text helper: bind textarea ↔ array.
 const splitLines = (s: string): string[] =>
@@ -39,7 +54,8 @@ watch(
     const g = props.game
     form.name = g?.name ?? ''
     form.englishName = g?.englishName ?? ''
-    form.category = g?.category ?? 'PC'
+    form.icon = g?.icon ?? ''
+    form.category = normalizeCategory(g?.category)
     form.platforms = g?.platforms ? [...g.platforms] : []
     form.regions = g?.regions ? [...g.regions] : []
     form.proxyDomains = g?.proxyDomains ? [...g.proxyDomains] : []
@@ -49,6 +65,7 @@ watch(
     ipsText.value = joinLines(g?.proxyIps)
     processesText.value = joinLines(g?.proxyProcesses)
     regionsText.value = joinLines(g?.regions)
+    aliasesText.value = (g?.aliases || []).join(', ')
   }
 )
 
@@ -68,7 +85,9 @@ function save(): void {
   emit('save', {
     name,
     englishName: form.englishName.trim(),
+    icon: form.icon.trim(),
     category: form.category,
+    aliases: splitLines(aliasesText.value),
     platforms: [...form.platforms],
     regions: splitLines(regionsText.value),
     proxyDomains: splitLines(domainsText.value),
@@ -101,8 +120,19 @@ function save(): void {
             <div class="field">
               <label>分类</label>
               <select v-model="form.category">
-                <option v-for="c in CATS" :key="c" :value="c">{{ c }}</option>
+                <option v-for="c in CATS" :key="c.value" :value="c.value">{{ c.label }}</option>
               </select>
+            </div>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label>图标（Emoji）</label>
+              <input v-model="form.icon" placeholder="如：🎮" />
+            </div>
+            <div class="field">
+              <label>别名（逗号分隔）</label>
+              <input v-model="aliasesText" placeholder="如：MC, 麦块" />
             </div>
           </div>
 

@@ -43,8 +43,6 @@ public partial class Mode : ObservableObject
     {
         ModeType.ProcessMode => "Process",
         ModeType.TunMode => "TUN",
-        ModeType.ShareMode => "Share",
-        ModeType.WebMode => "Web",
         _ => "Unknown"
     };
 

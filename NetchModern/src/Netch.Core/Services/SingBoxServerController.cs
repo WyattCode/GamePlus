@@ -5,8 +5,9 @@ using Netch.Core.Models.Servers;
 namespace Netch.Core.Services;
 
 /// <summary>
-///     Brings a Hysteria2 node up as a local SOCKS5 + HTTP proxy by generating a sing-box client config and
-///     launching the bundled <c>sing-box.exe</c>. xray can't do Hysteria2, so this is its dedicated core.
+///     Brings a node up as a local SOCKS5 + HTTP proxy by generating a sing-box client config and launching
+///     the bundled <c>sing-box.exe</c>. Used for protocols xray can't do: Hysteria2 and Shadowsocks nodes
+///     that carry a SIP003 plugin (obfs-local / v2ray-plugin).
 /// </summary>
 public sealed class SingBoxServerController : ProcessGuard, IServerController
 {
@@ -31,8 +32,8 @@ public sealed class SingBoxServerController : ProcessGuard, IServerController
 
     public async Task<Socks5Server> StartAsync(Server server, CancellationToken ct = default)
     {
-        if (server is not Hysteria2Server hy2)
-            throw new InvalidOperationException("SingBoxServerController only handles Hysteria2 servers.");
+        if (server is not (Hysteria2Server or ShadowsocksServer))
+            throw new InvalidOperationException("SingBoxServerController only handles Hysteria2 and Shadowsocks servers.");
 
         SocksPort = GetFreeTcpPort();
         HttpPort = NextDistinctPort(SocksPort);
@@ -43,7 +44,7 @@ public sealed class SingBoxServerController : ProcessGuard, IServerController
         // Unique per-instance name so two concurrent sing-box controllers never clobber each other's config.
         _configPath = Path.Combine(dir, $"singbox-{SocksPort}.json");
 
-        var config = SingBoxConfigGenerator.GenerateHysteria2(hy2, SocksPort, HttpPort, ApiPort, ProxyDomains, ProxyIps);
+        var config = SingBoxConfigGenerator.Generate(server, SocksPort, HttpPort, ApiPort, ProxyDomains, ProxyIps);
         await File.WriteAllTextAsync(_configPath, config, ct);
 
         StartProcess($"run -c \"{_configPath}\"");

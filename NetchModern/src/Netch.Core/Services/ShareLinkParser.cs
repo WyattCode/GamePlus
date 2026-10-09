@@ -9,7 +9,7 @@ namespace Netch.Core.Services;
 /// <summary>
 ///     Parses share links / subscription payloads into <see cref="Server" /> models.
 ///     Ported from the original Netch per-protocol <c>*Util.ParseUri</c> logic, BCL-only.
-///     Supports: ss://, trojan://, vmess://, vless://, and Telegram socks links.
+///     Supports: ss://, trojan://, vmess://, vless://, wireguard://, wg://, and Telegram socks links.
 /// </summary>
 public static partial class ShareLinkParser
 {
@@ -62,6 +62,8 @@ public static partial class ShareLinkParser
             return ParseVless(text);
         if (text.StartsWith("hysteria2://") || text.StartsWith("hy2://"))
             return ParseHysteria2(text);
+        if (text.StartsWith("wireguard://") || text.StartsWith("wg://"))
+            return ParseWireGuard(text);
 
         return null;
     }
@@ -108,6 +110,59 @@ public static partial class ShareLinkParser
             data.UpMbps = up;
         if (int.TryParse(query.GetValueOrDefault("down") ?? query.GetValueOrDefault("downmbps"), out var down) && down > 0)
             data.DownMbps = down;
+
+        return data;
+    }
+
+    /// <summary>
+    ///     wireguard://&lt;url-encoded private key&gt;@host:port?publickey=..&amp;address=10.0.0.2/32,fd00::2/128
+    ///     &amp;mtu=1420&amp;reserved=1,2,3&amp;presharedkey=..#remark
+    /// </summary>
+    private static WireGuardServer ParseWireGuard(string text)
+    {
+        var (body, remark) = SplitFragment(text);
+        var data = new WireGuardServer();
+        if (remark != null)
+            data.Remark = remark;
+
+        body = body.Replace("wireguard://", string.Empty).Replace("wg://", string.Empty);
+
+        var qIndex = body.IndexOf('?');
+        var query = qIndex >= 0 ? ShareLinkUtils.ParseQuery(body[(qIndex + 1)..]) : new Dictionary<string, string>();
+        if (qIndex >= 0)
+            body = body[..qIndex];
+        body = body.TrimEnd('/');
+
+        var atIndex = body.LastIndexOf('@');
+        if (atIndex < 0)
+            throw new FormatException("Invalid wireguard link");
+
+        // WireGuard keys are standard base64 and many share links leave '+' unescaped. UrlDecode turns a
+        // literal '+' into a space, which is never valid base64 — restore it.
+        data.PrivateKey = ShareLinkUtils.UrlDecode(body[..atIndex]).Replace(' ', '+');
+
+        var hostPort = body[(atIndex + 1)..];
+        var colon = hostPort.LastIndexOf(':');
+        if (colon < 0)
+            throw new FormatException("Invalid wireguard host:port");
+
+        data.Hostname = hostPort[..colon];
+        data.Port = ushort.Parse(hostPort[(colon + 1)..]);
+
+        data.PublicKey = (query.GetValueOrDefault("publickey")
+                          ?? query.GetValueOrDefault("public_key")
+                          ?? query.GetValueOrDefault("pk")
+                          ?? string.Empty).Replace(' ', '+');
+        data.LocalAddresses = query.GetValueOrDefault("address")
+                              ?? query.GetValueOrDefault("ip")
+                              ?? string.Empty;
+        var psk = query.GetValueOrDefault("presharedkey")
+                  ?? query.GetValueOrDefault("preshared_key")
+                  ?? query.GetValueOrDefault("psk");
+        data.PreSharedKey = psk?.Replace(' ', '+');
+        data.Reserved = query.GetValueOrDefault("reserved");
+        if (int.TryParse(query.GetValueOrDefault("mtu"), out var mtu) && mtu > 0)
+            data.Mtu = mtu;
 
         return data;
     }
@@ -217,8 +272,12 @@ public static partial class ShareLinkParser
             var query = ShareLinkUtils.ParseQuery(text[(qIndex + 1)..]);
             if (query.TryGetValue("peer", out var peer) || query.TryGetValue("sni", out peer))
                 data.Sni = peer;
-            if (query.TryGetValue("allowInsecure", out var insecure))
+            if (query.TryGetValue("allowInsecure", out var insecure) || query.TryGetValue("insecure", out insecure))
                 data.AllowInsecure = insecure is "1" or "true";
+
+            ApplyTransport(data, query, out var network);
+            if (!string.IsNullOrEmpty(network))
+                data.Network = network;
 
             text = text[..qIndex];
         }
@@ -248,6 +307,11 @@ public static partial class ShareLinkParser
         public string net { get; set; } = "tcp";
         public string? tls { get; set; }
         public string? sni { get; set; }
+        public string? host { get; set; }
+        public string? path { get; set; }
+        public string? type { get; set; }
+        public string? alpn { get; set; }
+        public string? fp { get; set; }
     }
 
     private static readonly JsonSerializerOptions VmessJsonOptions = new()
@@ -272,7 +336,14 @@ public static partial class ShareLinkParser
             // the defaults here to avoid a null Security/Network (NRE-prone in export/MaskedData).
             Security = string.IsNullOrEmpty(vmess.scy) ? "auto" : vmess.scy,
             Network = string.IsNullOrEmpty(vmess.net) ? "tcp" : vmess.net,
-            Tls = string.Equals(vmess.tls, "tls", StringComparison.OrdinalIgnoreCase)
+            Tls = string.Equals(vmess.tls, "tls", StringComparison.OrdinalIgnoreCase),
+            Sni = string.IsNullOrEmpty(vmess.sni) ? null : vmess.sni,
+            Host = string.IsNullOrEmpty(vmess.host) ? null : vmess.host,
+            Path = string.IsNullOrEmpty(vmess.path) ? null : vmess.path,
+            ServiceName = string.IsNullOrEmpty(vmess.path) ? null : vmess.path,
+            Mode = string.IsNullOrEmpty(vmess.type) ? null : vmess.type,
+            Alpn = string.IsNullOrEmpty(vmess.alpn) ? null : vmess.alpn,
+            Fingerprint = string.IsNullOrEmpty(vmess.fp) ? null : vmess.fp
         };
     }
 
@@ -363,7 +434,63 @@ public static partial class ShareLinkParser
         else if (query.TryGetValue("xtls", out var xtls) && xtls is not ("" or "0"))
             data.Flow = "xtls-rprx-vision";
 
+        ApplyTransport(data, query, out _);
+
+        if (query.TryGetValue("allowInsecure", out var insecure) || query.TryGetValue("insecure", out insecure))
+            data.AllowInsecure = insecure is "1" or "true";
+
         return data;
+    }
+
+    #endregion
+
+    #region Transport helpers
+
+    /// <summary>
+    ///     Copies the shared transport query params (host/path/serviceName/mode/alpn/fp) onto the model.
+    ///     Returns the network via <paramref name="network" /> when the link specifies one.
+    /// </summary>
+    private static void ApplyTransport(Server server, Dictionary<string, string> query, out string? network)
+    {
+        network = null;
+
+        if (query.TryGetValue("type", out var net) || query.TryGetValue("net", out net))
+            network = net;
+
+        var host = query.GetValueOrDefault("host");
+        var path = query.GetValueOrDefault("path");
+        var serviceName = query.GetValueOrDefault("serviceName") ?? query.GetValueOrDefault("servicename");
+        var mode = query.GetValueOrDefault("mode");
+        var alpn = query.GetValueOrDefault("alpn");
+        var fp = query.GetValueOrDefault("fp");
+
+        switch (server)
+        {
+            case VMessServer vm:
+                if (!string.IsNullOrEmpty(host)) vm.Host = host;
+                if (!string.IsNullOrEmpty(path)) vm.Path = path;
+                if (!string.IsNullOrEmpty(serviceName)) vm.ServiceName = serviceName;
+                if (!string.IsNullOrEmpty(mode)) vm.Mode = mode;
+                if (!string.IsNullOrEmpty(alpn)) vm.Alpn = alpn;
+                if (!string.IsNullOrEmpty(fp)) vm.Fingerprint = fp;
+                break;
+            case VlessServer vl:
+                if (!string.IsNullOrEmpty(host)) vl.Host = host;
+                if (!string.IsNullOrEmpty(path)) vl.Path = path;
+                if (!string.IsNullOrEmpty(serviceName)) vl.ServiceName = serviceName;
+                if (!string.IsNullOrEmpty(mode)) vl.Mode = mode;
+                if (!string.IsNullOrEmpty(alpn)) vl.Alpn = alpn;
+                if (!string.IsNullOrEmpty(fp)) vl.Fingerprint = fp;
+                break;
+            case TrojanServer tr:
+                if (!string.IsNullOrEmpty(host)) tr.Host = host;
+                if (!string.IsNullOrEmpty(path)) tr.Path = path;
+                if (!string.IsNullOrEmpty(serviceName)) tr.ServiceName = serviceName;
+                if (!string.IsNullOrEmpty(mode)) tr.Mode = mode;
+                if (!string.IsNullOrEmpty(alpn)) tr.Alpn = alpn;
+                if (!string.IsNullOrEmpty(fp)) tr.Fingerprint = fp;
+                break;
+        }
     }
 
     #endregion

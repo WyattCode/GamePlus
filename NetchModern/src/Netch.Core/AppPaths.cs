@@ -15,14 +15,16 @@ public static class AppPaths
 
     private static string ResolveAndMigrate()
     {
-        var root = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var root = ResolveRoot();
         var dir = Path.Combine(root, FolderName);
         var legacy = Path.Combine(root, LegacyFolderName);
 
         try
         {
             // First run after the rename: move the whole old folder over (atomic on the same volume).
-            if (!Directory.Exists(dir) && Directory.Exists(legacy))
+            // Only ever migrate absolute paths — a relative root would move an unrelated folder in the CWD.
+            if (Path.IsPathRooted(dir) && Path.IsPathRooted(legacy) &&
+                !Directory.Exists(dir) && Directory.Exists(legacy))
                 Directory.Move(legacy, dir);
         }
         catch
@@ -32,5 +34,22 @@ public static class AppPaths
 
         Directory.CreateDirectory(dir);
         return dir;
+    }
+
+    /// <summary>
+    ///     Resolves the roaming app-data root. <see cref="Environment.GetFolderPath(Environment.SpecialFolder)" />
+    ///     can return an empty string (e.g. on non-Windows when the folder does not exist), and
+    ///     <c>Path.Combine("", "Game+")</c> would then be a path relative to the current directory. Fall back
+    ///     to the app base directory in that case.
+    /// </summary>
+    private static string ResolveRoot()
+    {
+        var root = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        if (string.IsNullOrEmpty(root))
+            root = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.Create);
+        if (string.IsNullOrEmpty(root))
+            root = Path.Combine(AppContext.BaseDirectory, "data");
+
+        return root;
     }
 }

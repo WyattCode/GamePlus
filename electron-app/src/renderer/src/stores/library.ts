@@ -12,11 +12,15 @@ export const useLibraryStore = defineStore('library', () => {
 
   async function load(): Promise<void> {
     if (loaded.value) return
-    ;[games.value, servers.value, subscriptions.value] = await Promise.all([
+    // Only mark loaded once every call succeeded, so a failed load can be retried.
+    const [g, s, subs] = await Promise.all([
       backend.listGames(),
       backend.listServers(),
       backend.listSubscriptions()
     ])
+    games.value = g
+    servers.value = s
+    subscriptions.value = subs
     loaded.value = true
   }
 
@@ -84,8 +88,21 @@ export const useLibraryStore = defineStore('library', () => {
     servers.value = srv
   }
 
-  async function updateAllSubscriptions(): Promise<void> {
-    for (const s of [...subscriptions.value]) await updateSubscription(s.id)
+  /**
+   * Updates every subscription, continuing past individual failures. Returns the number that failed so
+   * the caller can surface a summary (the per-subscription error is not thrown, so one bad link can't
+   * abort the whole batch).
+   */
+  async function updateAllSubscriptions(): Promise<number> {
+    let failed = 0
+    for (const s of [...subscriptions.value]) {
+      try {
+        await updateSubscription(s.id)
+      } catch {
+        failed++
+      }
+    }
+    return failed
   }
 
   return {

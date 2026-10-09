@@ -9,11 +9,5 @@ public enum ModeType
     ProcessMode = 0,
 
     /// <summary>Create a WinTUN virtual adapter and route through tun2socks.</summary>
-    TunMode = 1,
-
-    /// <summary>Share the proxied network over LAN using Npcap / WinPcap.</summary>
-    ShareMode = 2,
-
-    /// <summary>Plain local web proxy.</summary>
-    WebMode = 3
+    TunMode = 1
 }

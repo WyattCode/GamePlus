@@ -3,6 +3,7 @@ using Netch.Core.Abstractions;
 using Netch.Core.Interops;
 using Netch.Core.Models.Modes;
 using Netch.Core.Models.Servers;
+using Netch.Core.Services;
 using static Netch.Core.Interops.RedirectorInterop;
 
 namespace Netch.Core.Controllers;
@@ -12,10 +13,23 @@ namespace Netch.Core.Controllers;
 ///     Ported from the original <c>NFController</c>. Installs/updates the netfilter2 kernel driver
 ///     (<c>nfdriver.sys</c> → <c>System32\drivers\netfilter2.sys</c>, registered as the "netfilter2"
 ///     service) before starting, then runs the Dial → Init sequence and traffic counters.
+///     <para>
+///         The driver file is shared with other software (several game accelerators / proxy tools ship the
+///         same NetFilter SDK driver under the same service name). We therefore only ever install or
+///         replace a driver we wrote ourselves (tracked via <c>netfilter2-owner.json</c>); if a foreign
+///         driver is present we leave it untouched and try to use it as-is — see
+///         <see cref="NetfilterDriverPolicy" />.
+///     </para>
 /// </summary>
 public sealed class RedirectorModeController : IModeController
 {
     private const string ServiceName = "netfilter2";
+
+    /// <summary>
+    ///     Set when <see cref="CheckDriver" /> found a foreign netfilter2 driver. Used to produce a clearer
+    ///     error if attaching to it fails afterwards.
+    /// </summary>
+    private string? _foreignDriverVersion;
 
     public string Name => "Redirector";
 
@@ -53,8 +67,9 @@ public sealed class RedirectorModeController : IModeController
 
         Trace("Init (attach netfilter2)");
         if (!await InitAsync())
-            throw new InvalidOperationException(
-                "进程模式启动失败：netfilter2 驱动无法加载。请确认以管理员运行，且系统未被“内核隔离/驱动签名强制”阻止（可在 Windows 安全中心关闭“内核隔离-内存完整性”后重试）。");
+            throw new InvalidOperationException(_foreignDriverVersion is null
+                ? "进程模式启动失败：netfilter2 驱动无法加载。请确认以管理员运行，且系统未被“内核隔离/驱动签名强制”阻止（可在 Windows 安全中心关闭“内核隔离-内存完整性”后重试）。"
+                : $"进程模式启动失败：系统中已安装其它程序的 netfilter2 驱动（版本 {_foreignDriverVersion}），为避免破坏该程序，Game+ 不会替换它，因此无法附加。将自动回退到 TUN/代理模式。");
         Trace("Init OK — process capture up");
     }
 
@@ -65,50 +80,74 @@ public sealed class RedirectorModeController : IModeController
     public long GetDownloadBytes() => (long)RedirectorInterop.GetDownloadBytes();
 
     /// <summary>
-    ///     Ensures <c>System32\drivers\netfilter2.sys</c> matches the bundled <c>nfdriver.sys</c> and the
-    ///     "netfilter2" service is registered. Mirrors the original NFController.CheckDriver/InstallDriver.
+    ///     Ensures the "netfilter2" service is usable. The decision whether to install, keep, replace or
+    ///     leave alone the installed driver is made by the pure <see cref="NetfilterDriverPolicy" />; this
+    ///     method only performs the resulting file/service operations.
     /// </summary>
-    private static void CheckDriver()
+    private void CheckDriver()
     {
         var builtIn = ResolveNative("nfdriver.sys");
         var system = Path.Combine(Environment.SystemDirectory, "drivers", $"{ServiceName}.sys");
 
         var builtInVer = FileVersion(builtIn);
         var systemVer = FileVersion(system);
-        Trace($"driver: built-in={builtInVer} installed={systemVer}");
+        var builtInSha = NetfilterDriverPolicy.Sha256OfFile(builtIn);
+        var systemSha = NetfilterDriverPolicy.Sha256OfFile(system);
+        var ownedSha = NetfilterDriverPolicy.ReadOwnedSha256();
 
-        var needInstall = !File.Exists(system) || !string.Equals(builtInVer, systemVer, StringComparison.OrdinalIgnoreCase);
-        if (!needInstall)
+        var action = NetfilterDriverPolicy.Decide(
+            File.Exists(system), systemSha, systemVer, builtInSha ?? string.Empty, builtInVer, ownedSha);
+
+        Trace($"driver: built-in={builtInVer} installed={systemVer} action={action}");
+
+        switch (action)
         {
-            Trace("driver: up-to-date, ensuring registration");
-            // File matches but the service may not be registered (e.g. cleaned manually) — register is idempotent.
-            aio_register(ServiceName);
-            return;
-        }
+            case NetfilterDriverAction.UseExisting:
+                Trace("driver: up-to-date, ensuring registration");
+                // File matches but the service may not be registered (e.g. cleaned manually) — register is idempotent.
+                aio_register(ServiceName);
+                return;
 
-        try
-        {
-            if (File.Exists(system))
-            {
-                Trace("driver: version differs, unregister + delete old");
-                try { aio_unregister(ServiceName); } catch { /* ignore */ }
-                try { File.Delete(system); } catch { /* ignore */ }
-            }
+            case NetfilterDriverAction.UseForeign:
+                _foreignDriverVersion = string.IsNullOrEmpty(systemVer) ? "未知" : systemVer;
+                Trace($"driver: foreign netfilter2 driver (version {_foreignDriverVersion}) installed by another program — leaving it untouched, will try to use it as-is");
+                // Do not touch the file or the service: we cannot cheaply tell whether it is registered,
+                // and unregistering/re-registering someone else's driver would break that program.
+                return;
 
-            Directory.CreateDirectory(Path.GetDirectoryName(system)!);
-            File.Copy(builtIn, system, true);
-            Trace("driver: copied nfdriver.sys → System32\\drivers\\netfilter2.sys");
+            case NetfilterDriverAction.Install:
+            case NetfilterDriverAction.Replace:
+                try
+                {
+                    if (action == NetfilterDriverAction.Replace && File.Exists(system))
+                    {
+                        Trace("driver: our older driver, unregister + delete");
+                        try { aio_unregister(ServiceName); } catch { /* ignore */ }
+                        try { File.Delete(system); } catch { /* ignore */ }
+                    }
 
-            if (aio_register(ServiceName))
-                Trace("driver: aio_register OK");
-            else
-                Trace("driver: aio_register returned false");
-        }
-        catch (Exception e)
-        {
-            Trace($"driver: install failed: {e.Message}");
-            throw new InvalidOperationException(
-                $"无法安装 netfilter2 驱动（可能被其它加速器占用或权限不足）：{e.Message}。请以管理员运行并关闭其它加速器后重试。");
+                    Directory.CreateDirectory(Path.GetDirectoryName(system)!);
+                    File.Copy(builtIn, system, true);
+                    Trace("driver: copied nfdriver.sys → System32\\drivers\\netfilter2.sys");
+
+                    if (aio_register(ServiceName))
+                        Trace("driver: aio_register OK");
+                    else
+                        Trace("driver: aio_register returned false");
+
+                    // Record ownership so a later run can tell our file from someone else's.
+                    var writtenSha = NetfilterDriverPolicy.Sha256OfFile(system) ?? builtInSha;
+                    if (!string.IsNullOrEmpty(writtenSha))
+                        NetfilterDriverPolicy.WriteOwnedSha256(writtenSha, builtInVer);
+                }
+                catch (Exception e)
+                {
+                    Trace($"driver: install failed: {e.Message}");
+                    throw new InvalidOperationException(
+                        $"无法安装 netfilter2 驱动（可能被其它加速器占用或权限不足）：{e.Message}。请以管理员运行并关闭其它加速器后重试。");
+                }
+
+                return;
         }
     }
 
@@ -136,12 +175,7 @@ public sealed class RedirectorModeController : IModeController
 
     private static void Trace(string s)
     {
-        try
-        {
-            var p = Path.Combine(AppPaths.DataDirectory, "redirector-trace.log");
-            File.AppendAllText(p, $"{DateTime.Now:HH:mm:ss.fff}  {s}\n");
-        }
-        catch { /* ignore */ }
+        TraceLog.Append(Path.Combine(AppPaths.DataDirectory, "redirector-trace.log"), s);
     }
 
     private static void EnsureNativeAvailable()

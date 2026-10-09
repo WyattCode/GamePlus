@@ -1,16 +1,27 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
 import { gameColor } from '@/utils/gameIcon'
 import { useAccelStore } from '@/stores/accel'
 import { useLibraryStore } from '@/stores/library'
+import { errorMessage } from '@/stores/toast'
 import { fmtDelay, fmtDuration, fmtLatency, fmtRate } from '@/utils/format'
 
 const accel = useAccelStore()
 const library = useLibraryStore()
 const router = useRouter()
+
+const error = ref<string | null>(null)
+const busy = ref(false)
+
+// If the selected node id disappears from the list (e.g. after a subscription refresh), clear the
+// selection and fall back to smart node rather than silently showing a blank select.
+watch(
+  () => library.servers,
+  () => accel.reconcileSelection()
+)
 
 const running = computed(
   () => accel.status.state === 'accelerating' || accel.status.state === 'connecting'
@@ -28,6 +39,19 @@ const buttonText = computed(() => {
   }
 })
 
+const captureHint = computed(() => {
+  if (accel.status.state !== 'accelerating') return null
+  switch (accel.status.captureMode) {
+    case 'process':
+      return { text: '进程模式', warn: false }
+    case 'tun':
+      return { text: 'TUN 模式', warn: false }
+    case 'proxy':
+      return { text: '系统代理模式（仅加速支持代理的程序）', warn: true }
+    default:
+      return null
+  }
+})
 
 const metrics = computed(() => [
   { icon: 'timer', color: 'var(--ok)', label: '延迟', value: fmtLatency(accel.status.latency) },
@@ -35,6 +59,19 @@ const metrics = computed(() => [
   { icon: 'pulse', color: 'var(--info)', label: '抖动', value: `${accel.status.jitter} ms` },
   { icon: 'clock', color: '#9b5de5', label: '时长', value: fmtDuration(accel.status.durationSec) }
 ])
+
+async function toggle(): Promise<void> {
+  if (busy.value) return
+  error.value = null
+  busy.value = true
+  try {
+    await accel.toggle()
+  } catch (e) {
+    error.value = errorMessage(e)
+  } finally {
+    busy.value = false
+  }
+}
 </script>
 
 <template>
@@ -70,6 +107,15 @@ const metrics = computed(() => [
         </div>
       </div>
 
+      <!-- Start failure banner -->
+      <div v-if="error" class="card error-banner">
+        <AppIcon name="warning" :size="16" />
+        <span class="err-msg">{{ error }}</span>
+        <button class="err-close" title="关闭" @click="error = null">
+          <AppIcon name="close" :size="14" />
+        </button>
+      </div>
+
       <!-- Node + action -->
       <div class="card panel">
         <div class="row">
@@ -85,19 +131,30 @@ const metrics = computed(() => [
 
         <select
           v-if="!accel.smartNode"
-          v-model="accel.selectedNode"
+          :value="accel.selectedNodeId ?? ''"
           class="input select"
+          @change="accel.setSelectedNodeId(($event.target as HTMLSelectElement).value || null)"
         >
-          <option :value="null" disabled>选择线路…</option>
-          <option v-for="s in library.servers" :key="s.id" :value="s">
+          <option :value="''" disabled>选择线路…</option>
+          <option v-for="s in library.servers" :key="s.id" :value="s.id">
             [{{ s.type }}] {{ s.remark }} · {{ fmtDelay(s.delay) }}
           </option>
         </select>
 
-        <button class="action" :class="{ stop: running }" @click="accel.toggle()">
+        <div v-if="accel.nodeUnavailable" class="capture-hint warn">
+          <AppIcon name="info" :size="14" />
+          之前选择的线路已不存在，已切换为智能选路
+        </div>
+
+        <button class="action" :class="{ stop: running }" :disabled="busy" @click="toggle">
           <AppIcon name="bolt" :size="22" />
           {{ buttonText }}
         </button>
+
+        <div v-if="captureHint" class="capture-hint" :class="{ warn: captureHint.warn }">
+          <AppIcon name="info" :size="14" />
+          {{ captureHint.text }}
+        </div>
       </div>
 
       <!-- Metrics -->
@@ -222,6 +279,28 @@ const metrics = computed(() => [
   background: #7dffb0;
 }
 
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px 16px;
+  border-color: var(--danger);
+  color: var(--danger);
+  font-size: 13px;
+}
+.err-msg {
+  flex: 1;
+  word-break: break-word;
+}
+.err-close {
+  color: var(--danger);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+}
+
 .panel {
   margin-top: 16px;
   padding: 22px;
@@ -264,8 +343,24 @@ const metrics = computed(() => [
 .action:active {
   transform: translateY(1px);
 }
+.action:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
 .action.stop {
   background: var(--danger);
+}
+
+.capture-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.capture-hint.warn {
+  color: var(--warn);
 }
 
 .metrics {

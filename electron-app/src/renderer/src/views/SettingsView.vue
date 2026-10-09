@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { useAppStore } from '@/stores/app'
 import { backend } from '@/api/backend'
@@ -27,14 +27,38 @@ async function patch(p: Partial<EngineSettings>): Promise<void> {
 }
 
 const update = ref<UpdateInfo | null>(null)
+const updateError = ref<string | null>(null)
 const updateChecked = ref(false)
+
 onMounted(async () => {
   try {
     update.value = await backend.checkUpdate()
-  } catch {
+  } catch (e) {
     update.value = null
+    updateError.value = e instanceof Error ? e.message : String(e)
   } finally {
     updateChecked.value = true
+  }
+})
+
+// Prefer the backend's reported version; fall back to the build-time injected package.json version.
+const version = computed(() => update.value?.current || __APP_VERSION__)
+
+const updateText = computed<string | null>(() => {
+  if (!updateChecked.value) return null
+  if (updateError.value) return `无法检查更新：${updateError.value}`
+  const u = update.value
+  if (!u) return '无法检查更新：未知错误'
+  switch (u.status) {
+    case 'upToDate':
+      return `已是最新版本 (v${u.current})`
+    case 'updateAvailable':
+      return `发现新版本 ${u.tag ?? u.latest ?? ''}，点击查看`
+    case 'notConfigured':
+      return '未配置更新源'
+    case 'failed':
+    default:
+      return `无法检查更新：${u.error ?? '未知错误'}`
   }
 })
 </script>
@@ -88,13 +112,20 @@ onMounted(async () => {
       <div class="about">
         <div class="logo"><AppIcon name="bolt" :size="22" /></div>
         <div>
-          <div class="s-name">Game+ <span class="muted">v3.0.0</span></div>
+          <div class="s-name">Game+ <span class="muted">v{{ version }}</span></div>
           <div class="muted small">Electron + Vue 3 · 游戏加速器</div>
-          <div v-if="updateChecked" class="muted small">
-            <a v-if="update?.hasUpdate" :href="update.url ?? '#'" target="_blank" rel="noopener">
-              发现新版本 {{ update.tag }}，点击查看
+          <div v-if="updateText" class="muted small">
+            <a
+              v-if="update?.status === 'updateAvailable'"
+              :href="update.url ?? '#'"
+              target="_blank"
+              rel="noopener"
+            >
+              {{ updateText }}
             </a>
-            <span v-else>已是最新版本</span>
+            <span v-else :class="{ warn: update?.status === 'failed' || !!updateError }">
+              {{ updateText }}
+            </span>
           </div>
         </div>
       </div>
@@ -137,6 +168,9 @@ onMounted(async () => {
 .small {
   font-size: 12px;
   margin-top: 2px;
+}
+.warn {
+  color: var(--warn);
 }
 .seg {
   display: flex;

@@ -5,7 +5,8 @@ using Netch.Core.Models.Servers;
 namespace Netch.Core.Services;
 
 /// <summary>
-///     Builds a sing-box client config exposing a local SOCKS5 (+ HTTP) inbound for a Hysteria2 node.
+///     Builds a sing-box client config exposing a local SOCKS5 (+ HTTP) inbound. Used for protocols xray
+///     cannot handle: Hysteria2 and Shadowsocks nodes that carry a SIP003 plugin (obfs-local / v2ray-plugin).
 ///     Mirrors the routing behaviour of <see cref="V2rayConfigGenerator" /> (game mode vs global mode).
 /// </summary>
 public static class SingBoxConfigGenerator
@@ -14,27 +15,24 @@ public static class SingBoxConfigGenerator
 
     public static string GenerateHysteria2(Hysteria2Server s, int localSocksPort, int localHttpPort = 0, int apiPort = 0,
         IReadOnlyCollection<string>? proxyDomains = null, IReadOnlyCollection<string>? proxyIps = null)
-    {
-        var inbounds = new JsonArray
+        => Build(ProxyHysteria2(s), localSocksPort, localHttpPort, apiPort, proxyDomains, proxyIps).ToJsonString(Options);
+
+    public static string GenerateShadowsocks(ShadowsocksServer s, int localSocksPort, int localHttpPort = 0, int apiPort = 0,
+        IReadOnlyCollection<string>? proxyDomains = null, IReadOnlyCollection<string>? proxyIps = null)
+        => Build(ProxyShadowsocks(s), localSocksPort, localHttpPort, apiPort, proxyDomains, proxyIps).ToJsonString(Options);
+
+    /// <summary>Dispatches to the right sing-box outbound builder for the given node.</summary>
+    public static string Generate(Server server, int localSocksPort, int localHttpPort = 0, int apiPort = 0,
+        IReadOnlyCollection<string>? proxyDomains = null, IReadOnlyCollection<string>? proxyIps = null)
+        => server switch
         {
-            new JsonObject
-            {
-                ["type"] = "socks",
-                ["tag"] = "socks-in",
-                ["listen"] = "127.0.0.1",
-                ["listen_port"] = localSocksPort
-            }
+            Hysteria2Server hy2 => GenerateHysteria2(hy2, localSocksPort, localHttpPort, apiPort, proxyDomains, proxyIps),
+            ShadowsocksServer ss => GenerateShadowsocks(ss, localSocksPort, localHttpPort, apiPort, proxyDomains, proxyIps),
+            _ => throw new NotSupportedException($"sing-box does not handle server type: {server.Type}")
         };
 
-        if (localHttpPort > 0)
-            inbounds.Add(new JsonObject
-            {
-                ["type"] = "http",
-                ["tag"] = "http-in",
-                ["listen"] = "127.0.0.1",
-                ["listen_port"] = localHttpPort
-            });
-
+    private static JsonObject ProxyHysteria2(Hysteria2Server s)
+    {
         var proxy = new JsonObject
         {
             ["type"] = "hysteria2",
@@ -62,6 +60,69 @@ public static class SingBoxConfigGenerator
             proxy["up_mbps"] = s.UpMbps;
         if (s.DownMbps > 0)
             proxy["down_mbps"] = s.DownMbps;
+
+        return proxy;
+    }
+
+    private static JsonObject ProxyShadowsocks(ShadowsocksServer s)
+    {
+        var proxy = new JsonObject
+        {
+            ["type"] = "shadowsocks",
+            ["tag"] = "proxy",
+            ["server"] = s.Hostname,
+            ["server_port"] = s.Port,
+            ["method"] = s.EncryptMethod,
+            ["password"] = s.Password
+        };
+
+        if (!string.IsNullOrEmpty(s.Plugin))
+        {
+            proxy["plugin"] = NormalisePlugin(s.Plugin);
+            if (!string.IsNullOrEmpty(s.PluginOption))
+                proxy["plugin_opts"] = s.PluginOption;
+        }
+
+        return proxy;
+    }
+
+    /// <summary>
+    ///     Maps SIP003 plugin aliases onto the two names sing-box understands. Anything else is rejected
+    ///     with a user-facing (Chinese) message.
+    /// </summary>
+    private static string NormalisePlugin(string plugin)
+    {
+        var name = plugin.Trim().ToLowerInvariant();
+        return name switch
+        {
+            "obfs-local" or "simple-obfs" or "obfs" => "obfs-local",
+            "v2ray-plugin" => "v2ray-plugin",
+            _ => throw new NotSupportedException($"不支持的 Shadowsocks 插件：{plugin}")
+        };
+    }
+
+    private static JsonObject Build(JsonObject proxy, int localSocksPort, int localHttpPort, int apiPort,
+        IReadOnlyCollection<string>? proxyDomains, IReadOnlyCollection<string>? proxyIps)
+    {
+        var inbounds = new JsonArray
+        {
+            new JsonObject
+            {
+                ["type"] = "socks",
+                ["tag"] = "socks-in",
+                ["listen"] = "127.0.0.1",
+                ["listen_port"] = localSocksPort
+            }
+        };
+
+        if (localHttpPort > 0)
+            inbounds.Add(new JsonObject
+            {
+                ["type"] = "http",
+                ["tag"] = "http-in",
+                ["listen"] = "127.0.0.1",
+                ["listen_port"] = localHttpPort
+            });
 
         // Keep LAN / loopback direct so the local proxy stays reachable.
         var rules = new JsonArray
@@ -126,6 +187,6 @@ public static class SingBoxConfigGenerator
                 }
             };
 
-        return config.ToJsonString(Options);
+        return config;
     }
 }

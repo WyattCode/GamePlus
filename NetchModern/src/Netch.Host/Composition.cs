@@ -33,9 +33,10 @@ internal static class Composition
 
         services.AddTransient<V2rayServerController>();
         services.AddTransient<SingBoxServerController>();
-        // Pick the proxy core by node protocol: Hysteria2 → sing-box, everything else → xray.
+        // Pick the proxy core by node protocol: Hysteria2 and Shadowsocks-with-plugin → sing-box,
+        // everything else → xray (which cannot do Hysteria2 or SIP003 plugins).
         services.AddSingleton<Func<Server, IServerController>>(sp => server =>
-            server is Hysteria2Server
+            server is Hysteria2Server || (server is ShadowsocksServer { Plugin.Length: > 0 })
                 ? sp.GetRequiredService<SingBoxServerController>()
                 : sp.GetRequiredService<V2rayServerController>());
 

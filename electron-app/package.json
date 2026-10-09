@@ -4,6 +4,7 @@
   "description": "Game+ 游戏加速器",
   "main": "./out/main/index.js",
   "author": "Game+",
+  "license": "GPL-3.0-only",
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",

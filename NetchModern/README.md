@@ -149,3 +149,9 @@ previous `IProxyService` implementations (`ProxyEngine`, `NativeProxyEngine`, `L
 unwired and have been removed. The simulation that `MockBackend` provides now lives entirely in the
 Electron renderer (`electron-app/src/renderer/src/api/backend.ts`), which is only used when running the
 UI outside Electron (browser preview).
+
+## License
+
+Game+ is licensed under the **GNU General Public License v3.0** (`GPL-3.0-only`). See
+[`LICENSE`](../LICENSE) and [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) for the full
+licence text and third-party attributions.

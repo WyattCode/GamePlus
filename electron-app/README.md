@@ -98,3 +98,9 @@ order:
 4. Default: `WyattCode/GamePlus` (private → the check will report "无法检查更新").
 
 When the check fails the Settings page shows the reason instead of claiming the app is up to date.
+
+## License
+
+Game+ is licensed under the **GNU General Public License v3.0** (`GPL-3.0-only`). See
+[`LICENSE`](../LICENSE) and [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) for the full
+licence text and third-party attributions.

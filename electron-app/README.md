@@ -19,6 +19,8 @@ electron-app/
 - Windows 10 build 17763+ / Windows 11
 - [Node.js](https://nodejs.org) (with npm) and the [.NET 10 SDK](https://dotnet.microsoft.com)
   (the latter only builds the backend; the packaged app needs no .NET runtime)
+- Electron 44 (`electron` ^44.7.0) and electron-builder 26 (`electron-builder` ^26.17.0) — see
+  [Dev](#dev) for the first-run binary download note
 
 ## Dev
 
@@ -31,6 +33,25 @@ npm run dev        # electron-vite dev (Vite HMR + Electron)
 `npm run dev` spawns the debug backend from
 `NetchModern/src/Netch.Host/bin/Debug/net10.0-windows/gameplus-host.exe` (see `src/main/sidecar.ts`).
 If that exe is missing, build it first: `dotnet build ../NetchModern/NetchModern.slnx`.
+
+### Electron binary download
+
+Since Electron 42 the `electron` npm package no longer downloads its binary in a `postinstall`
+script; the binary is fetched on demand the first time the package's `bin` runs. electron-vite 2.3
+locates the binary via `node_modules/electron/path.txt`, which is only written by that download — so
+after a fresh `npm ci` the first `npm run dev` / `npm run preview` would otherwise fail with
+`Error: Electron uninstall`.
+
+To handle this, `dev` and `preview` have `predev` / `prepreview` hooks that run
+`install-electron --no` first. That script is idempotent: it exits early when the correct version is
+already present, so it is a no-op on subsequent runs. For offline or CI environments you can
+pre-download the binary explicitly:
+
+```powershell
+npx install-electron --no
+```
+
+Note: `ELECTRON_SKIP_BINARY_DOWNLOAD` is no longer supported by Electron 42+ and has no effect.
 
 ## Typecheck / build
 

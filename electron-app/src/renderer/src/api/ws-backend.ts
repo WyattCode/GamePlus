@@ -208,7 +208,7 @@ export class WebSocketBackend implements Backend {
   setSettings(patch: Partial<EngineSettings>): Promise<EngineSettings> {
     return this.call('settings.set', patch)
   }
-  checkUpdate(): Promise<UpdateInfo | null> {
+  checkUpdate(): Promise<UpdateInfo> {
     return this.call('update.check')
   }
 }

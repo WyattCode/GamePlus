@@ -111,9 +111,18 @@ export interface EngineSettings {
 /** Connection state of the C# backend sidecar. */
 export type BackendState = 'starting' | 'connected' | 'disconnected' | 'error'
 
+export type UpdateCheckStatus = 'upToDate' | 'updateAvailable' | 'failed' | 'notConfigured'
+
 export interface UpdateInfo {
-  hasUpdate: boolean
-  latest: string
-  tag: string
+  status: UpdateCheckStatus
+  /** Running version, e.g. "3.0.0". */
+  current: string
+  /** Latest version parsed from the update source, when available. */
+  latest: string | null
+  /** Raw tag from the update source, when available. */
+  tag: string | null
+  /** Release page URL, when available. */
   url: string | null
+  /** Short user-facing reason when status is "failed" or "notConfigured". */
+  error: string | null
 }

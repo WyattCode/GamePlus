@@ -82,6 +82,19 @@ git commit -m "release: Game+ <version>"
 git push
 ```
 
-The built-in update check (in `Netch.Host`) compares the installed version against the latest GitHub
-release tag of `WyattCode/GamePlus`, so create a GitHub **release** with a tag like `v3.0.0` for it to
-be picked up.
+### Update checks
+
+The built-in update check (in `Netch.Host`) fetches a GitHub-release-shaped JSON document
+(`tag_name`, `html_url`) and compares its tag to the installed version. Because the main repo is
+private, the default GitHub API endpoint returns 404 — configure a public source instead. Resolution
+order:
+
+1. `GAMEPLUS_UPDATE_URL` — any URL returning that JSON (a public repo's `releases/latest` API, a
+   GitHub Pages `latest.json`, your own server, …).
+2. `GAMEPLUS_UPDATE_OWNER` / `GAMEPLUS_UPDATE_REPO` — a public GitHub repo's releases API.
+3. `update.json` next to `gameplus-host.exe` (i.e. in `resources/backend/bin`), e.g.
+   `{ "url": "https://example.com/latest.json" }`, `{ "owner": "me", "repo": "releases" }`, or
+   `{ "enabled": false }` to disable the check.
+4. Default: `WyattCode/GamePlus` (private → the check will report "无法检查更新").
+
+When the check fails the Settings page shows the reason instead of claiming the app is up to date.

@@ -39,7 +39,7 @@ export interface Backend {
   exportServers(): Promise<string[]>
   getSettings(): Promise<EngineSettings>
   setSettings(patch: Partial<EngineSettings>): Promise<EngineSettings>
-  checkUpdate(): Promise<UpdateInfo | null>
+  checkUpdate(): Promise<UpdateInfo>
 }
 
 function jitter(base: number): number {
@@ -208,8 +208,15 @@ class MockBackend implements Backend {
   async exportServers(): Promise<string[]> {
     return this.mockServers.map((s) => `${s.type}://${s.hostname}:${s.port}#${s.remark}`)
   }
-  async checkUpdate(): Promise<UpdateInfo | null> {
-    return null
+  async checkUpdate(): Promise<UpdateInfo> {
+    return {
+      status: 'notConfigured',
+      current: '3.0.0',
+      latest: null,
+      tag: null,
+      url: null,
+      error: '未配置更新源'
+    }
   }
   async getSettings(): Promise<EngineSettings> {
     return structuredClone(this.mockSettings)

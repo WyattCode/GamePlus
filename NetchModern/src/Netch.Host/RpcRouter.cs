@@ -199,10 +199,22 @@ internal sealed class RpcRouter
 
             case "update.check":
             {
-                var info = await UpdateChecker.CheckAsync(ct);
-                return info == null
-                    ? null
-                    : new { hasUpdate = info.HasUpdate, latest = info.Latest.ToString(), tag = info.TagName, url = info.Url };
+                var result = await UpdateChecker.CheckAsync(ct);
+                return new
+                {
+                    status = result.Status switch
+                    {
+                        UpdateCheckStatus.UpToDate => "upToDate",
+                        UpdateCheckStatus.UpdateAvailable => "updateAvailable",
+                        UpdateCheckStatus.NotConfigured => "notConfigured",
+                        _ => "failed"
+                    },
+                    current = result.Current.ToString(),
+                    latest = result.Latest?.ToString(),
+                    tag = result.TagName,
+                    url = result.Url,
+                    error = result.Error
+                };
             }
 
             default:

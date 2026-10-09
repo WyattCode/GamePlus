@@ -42,13 +42,18 @@ internal static class Composition
 
         services.AddSingleton<IAcceleratorService, AcceleratorService>();
 
-        // Update check. Defaults to this project's repo; override per release (e.g. a fork/reorg) via
-        // GAMEPLUS_UPDATE_OWNER/REPO env vars. Current version = the host assembly's.
+        // Update check. Source is resolved by UpdateSourceOptions (env vars, then update.json next to
+        // the exe, then the default repo). Current version = the host assembly's.
         var current = typeof(Composition).Assembly.GetName().Version ?? new Version(3, 0, 0);
-        var owner = Environment.GetEnvironmentVariable("GAMEPLUS_UPDATE_OWNER") ?? "WyattCode";
-        var repo = Environment.GetEnvironmentVariable("GAMEPLUS_UPDATE_REPO") ?? "GamePlus";
+        var options = UpdateSourceOptions.Resolve();
         services.AddSingleton<IUpdateChecker>(sp =>
-            new GitHubUpdateChecker(sp.GetRequiredService<HttpClient>(), current, owner, repo));
+            new GitHubUpdateChecker(
+                sp.GetRequiredService<HttpClient>(),
+                current,
+                options.Owner,
+                options.Repo,
+                options.Url,
+                options.Enabled));
 
         return services.BuildServiceProvider();
     }

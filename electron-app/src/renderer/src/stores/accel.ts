@@ -13,7 +13,8 @@ export const useAccelStore = defineStore('accel', () => {
     downloadBps: 0,
     uploadBps: 0,
     gameId: null,
-    nodeId: null
+    nodeId: null,
+    captureMode: null
   })
 
   const selectedGame = ref<Game | null>(null)

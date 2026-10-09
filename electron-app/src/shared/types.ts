@@ -60,6 +60,9 @@ export type AccelState =
   | 'accelerating'
   | 'stopping'
 
+/** Which capture method is actually active. Null while idle. */
+export type CaptureMode = 'process' | 'tun' | 'proxy'
+
 export interface AccelStatus {
   state: AccelState
   latency: number
@@ -71,6 +74,8 @@ export interface AccelStatus {
   uploadBps: number
   gameId: string | null
   nodeId: string | null
+  /** Active capture method, or null when idle. */
+  captureMode: CaptureMode | null
 }
 
 export interface Subscription {

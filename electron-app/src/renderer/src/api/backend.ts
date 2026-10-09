@@ -60,7 +60,8 @@ class MockBackend implements Backend {
     downloadBps: 0,
     uploadBps: 0,
     gameId: null,
-    nodeId: null
+    nodeId: null,
+    captureMode: null
   }
 
   async listGames(): Promise<Game[]> {
@@ -84,7 +85,8 @@ class MockBackend implements Backend {
     this.setState('connecting')
     await new Promise((r) => setTimeout(r, 800))
     this.startedAt = Date.now()
-    this.status = { ...this.status, gameId, nodeId, state: 'accelerating', loss: 0 }
+    // Mock always reports process capture — the real backend picks process/tun/proxy.
+    this.status = { ...this.status, gameId, nodeId, state: 'accelerating', loss: 0, captureMode: 'process' }
     this.emit()
     this.timer = setInterval(() => this.tick(), 1000)
     this.log('info', '加速已启动')
@@ -104,7 +106,8 @@ class MockBackend implements Backend {
       downloadBps: 0,
       uploadBps: 0,
       gameId: null,
-      nodeId: null
+      nodeId: null,
+      captureMode: null
     }
     this.emit()
     this.log('info', '加速已停止')

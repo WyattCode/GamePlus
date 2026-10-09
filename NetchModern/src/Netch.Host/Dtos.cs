@@ -18,7 +18,7 @@ internal record GameDto(string Id, string Name, string Icon, string Accent, stri
 internal record SubscriptionDto(string Id, string Remark, string Link, int ServerCount, string? LastUpdated);
 
 internal record AccelStatusDto(string State, int Latency, double Loss, int Jitter, int DurationSec,
-    long DownloadBps, long UploadBps, string? GameId, string? NodeId);
+    long DownloadBps, long UploadBps, string? GameId, string? NodeId, string? CaptureMode);
 
 internal record LogDto(string Ts, string Level, string Message);
 
@@ -117,7 +117,8 @@ internal static class Mapping
             st.DownloadRate,
             st.UploadRate,
             a.CurrentGame?.Id,
-            a.CurrentNode is { } n ? ids.IdOf(n) : null);
+            a.CurrentNode is { } n ? ids.IdOf(n) : null,
+            st.CaptureMode);
     }
 
     public static LogDto ToDto(LogEntry e) =>

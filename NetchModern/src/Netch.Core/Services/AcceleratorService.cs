@@ -26,6 +26,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
 {
     private const int WindowSize = 15;
     private readonly Func<Server, IServerController> _controllerFactory;
+    private readonly IModeControllerFactory _modeControllerFactory;
     private readonly ILogService _log;
     private readonly Queue<int> _samples = new();
     private readonly ISystemProxyService _systemProxy;
@@ -49,11 +50,19 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     [ObservableProperty]
     private AccelerationState _state = AccelerationState.Idle;
 
-    public AcceleratorService(ILogService log, Func<Server, IServerController> controllerFactory, ISystemProxyService systemProxy)
+    public AcceleratorService(ILogService log, Func<Server, IServerController> controllerFactory,
+        ISystemProxyService systemProxy, IModeControllerFactory modeControllerFactory)
     {
         _log = log;
         _controllerFactory = controllerFactory;
         _systemProxy = systemProxy;
+        _modeControllerFactory = modeControllerFactory;
+    }
+
+    /// <summary>Convenience overload using the default <see cref="ModeControllerFactory" /> (real drivers).</summary>
+    public AcceleratorService(ILogService log, Func<Server, IServerController> controllerFactory, ISystemProxyService systemProxy)
+        : this(log, controllerFactory, systemProxy, new ModeControllerFactory())
+    {
     }
 
     public AccelerationStatus Status { get; } = new();
@@ -80,9 +89,11 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             // traffic we capture it at driver level: by process (netfilter Redirector) when process names
             // are configured, else by destination IP (WinTUN + tun2socks). In those cases xray runs in
             // "global" mode (proxy everything it receives) and the capture layer does the filtering.
-            // Prefer IP/TUN capture (WinTUN is Microsoft-signed and loads on Win11; the netfilter driver
-            // used by process capture is often blocked by driver-signature enforcement). Fall back to
-            // process capture only when no IPs are configured.
+            // Preference order (see StartCaptureAsync): process capture first (most complete — covers every
+            // domain/IP the game touches), then IP/TUN capture (WinTUN is Microsoft-signed and loads on
+            // Win11, whereas the netfilter driver used by process capture is often blocked by
+            // driver-signature enforcement), and finally domain system-proxy routing when neither driver
+            // is available and the game lists domains.
             var hasProcess = game.ProxyProcesses.Count > 0;
             var hasIp = game.ProxyIps.Count > 0;
             var hasDomain = game.ProxyDomains.Count > 0;
@@ -100,10 +111,11 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             var socks5 = await _controller.StartAsync(node, ct);
 
             if (useCapture)
-                await StartCaptureAsync(game, node, socks5, hasProcess, hasIp, ct);
+                await StartCaptureAsync(game, node, socks5, hasProcess, hasIp, hasDomain, ct);
             else if (hasDomain)
             {
                 _systemProxy.Enable("127.0.0.1", _controller.HttpPort);
+                Status.CaptureMode = "proxy";
                 _log.Log(LogLevel.Info, $"System-proxy routing {game.ProxyDomains.Count} domain(s) via {node.Hostname}");
             }
             else
@@ -125,41 +137,98 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     }
 
     /// <summary>
-    ///     Brings up traffic capture. Prefers process capture (netfilter2 captures the whole game process,
-    ///     covering every domain/IP it touches — the most complete method for raw-socket games); falls back
-    ///     to IP/TUN capture (WinTUN, Microsoft-signed, always loads) when the driver is unavailable and the
-    ///     game also lists server IPs.
+    ///     Brings up traffic capture with graceful degradation:
+    ///     process capture (netfilter2, most complete) → IP/TUN capture (WinTUN, Microsoft-signed) →
+    ///     domain system-proxy routing (only apps honouring the Windows proxy). Throws only when no
+    ///     strategy is available.
     /// </summary>
-    private async Task StartCaptureAsync(Game game, Server node, Socks5Server socks5, bool hasProcess, bool hasIp, CancellationToken ct)
+    private async Task StartCaptureAsync(Game game, Server node, Socks5Server socks5, bool hasProcess, bool hasIp, bool hasDomain, CancellationToken ct)
     {
+        Exception? processError = null;
+
         if (hasProcess)
         {
             try
             {
-                _modeController = new RedirectorModeController();
+                _modeController = _modeControllerFactory.Create(ModeType.ProcessMode);
                 await _modeController.StartAsync(socks5, BuildMode(ModeType.ProcessMode, game.ProxyProcesses), ct);
+                Status.CaptureMode = "process";
                 _log.Log(LogLevel.Info,
                     $"Capturing {game.ProxyProcesses.Count} process(es) via {_modeController.Name} → {node.Hostname}");
                 return;
             }
             catch (Exception e)
             {
+                processError = e;
                 _log.Log(LogLevel.Warning, $"Process capture failed: {e.Message}");
                 if (_modeController != null)
                 {
                     try { await _modeController.StopAsync(ct); } catch { /* ignore */ }
                     _modeController = null;
                 }
-
-                if (!hasIp)
-                    throw;
-                _log.Log(LogLevel.Info, "Falling back to IP/TUN capture");
             }
         }
 
-        _modeController = new TunModeController();
-        await _modeController.StartAsync(socks5, BuildMode(ModeType.TunMode, game.ProxyIps), ct);
-        _log.Log(LogLevel.Info, $"Capturing {game.ProxyIps.Count} IP rule(s) via {_modeController.Name} → {node.Hostname}");
+        if (hasIp)
+        {
+            try
+            {
+                _modeController = _modeControllerFactory.Create(ModeType.TunMode);
+                await _modeController.StartAsync(socks5, BuildMode(ModeType.TunMode, game.ProxyIps), ct);
+                Status.CaptureMode = "tun";
+                _log.Log(LogLevel.Info, $"Capturing {game.ProxyIps.Count} IP rule(s) via {_modeController.Name} → {node.Hostname}");
+                return;
+            }
+            catch (Exception e)
+            {
+                _log.Log(LogLevel.Warning, $"IP/TUN capture failed: {e.Message}");
+                if (_modeController != null)
+                {
+                    try { await _modeController.StopAsync(ct); } catch { /* ignore */ }
+                    _modeController = null;
+                }
+            }
+        }
+
+        if (hasDomain)
+        {
+            await StartDomainProxyAsync(game, node, ct);
+            return;
+        }
+
+        // Nothing worked. Surface the most relevant cause to the user.
+        if (processError != null)
+            throw new InvalidOperationException(
+                "进程抓包失败（通常是没有管理员权限或 netfilter 驱动被系统拦截），且该游戏没有配置 IP 或域名规则，无法加速。请以管理员身份运行，或在游戏设置里补充 IP/域名规则。",
+                processError);
+        throw new InvalidOperationException(
+            "该游戏没有配置任何可用的加速规则（进程/IP/域名），无法加速。请先在游戏设置里填写。");
+    }
+
+    /// <summary>
+    ///     Degrades to domain system-proxy routing. The controller was started in "global" mode (no
+    ///     ProxyDomains/ProxyIps), so it must be stopped and restarted with the game's domain/IP rules
+    ///     before the system proxy is enabled.
+    /// </summary>
+    private async Task StartDomainProxyAsync(Game game, Server node, CancellationToken ct)
+    {
+        _log.Log(LogLevel.Warning,
+            "降级为系统代理模式：仅加速遵循系统代理的程序（启动器/浏览器/HTTP），游戏原始 socket 流量不会被加速。");
+
+        if (_controller == null)
+            throw new InvalidOperationException("系统代理模式启动失败：节点控制器不可用。");
+
+        // Restart the controller with domain/IP routing so xray only proxies the game's rules.
+        try { await _controller.StopAsync(ct); }
+        catch (Exception e) { _log.Log(LogLevel.Warning, $"Node stop error during fallback: {e.Message}"); }
+
+        _controller.ProxyDomains = game.ProxyDomains;
+        _controller.ProxyIps = game.ProxyIps;
+        await _controller.StartAsync(node, ct);
+
+        _systemProxy.Enable("127.0.0.1", _controller.HttpPort);
+        Status.CaptureMode = "proxy";
+        _log.Log(LogLevel.Info, $"System-proxy routing {game.ProxyDomains.Count} domain(s) via {node.Hostname}");
     }
 
     private static Mode BuildMode(ModeType type, IEnumerable<string> rules)

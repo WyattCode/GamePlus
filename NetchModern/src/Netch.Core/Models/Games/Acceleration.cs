@@ -37,6 +37,13 @@ public sealed partial class AccelerationStatus : ObservableObject
     [NotifyPropertyChangedFor(nameof(UploadText))]
     private long _uploadRate;
 
+    /// <summary>
+    ///     Which capture method is actually active: "process" (netfilter2 per-process capture),
+    ///     "tun" (WinTUN + IP rules) or "proxy" (system-proxy domain routing only). Null while idle.
+    /// </summary>
+    [ObservableProperty]
+    private string? _captureMode;
+
     public string LatencyText => Latency < 0 ? "—" : $"{Latency} ms";
     public string LossText => $"{Loss:0.#}%";
     public string JitterText => $"{Jitter} ms";
@@ -52,5 +59,6 @@ public sealed partial class AccelerationStatus : ObservableObject
         Duration = TimeSpan.Zero;
         DownloadRate = 0;
         UploadRate = 0;
+        CaptureMode = null;
     }
 }

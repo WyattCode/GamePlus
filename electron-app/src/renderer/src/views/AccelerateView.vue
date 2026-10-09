@@ -28,6 +28,19 @@ const buttonText = computed(() => {
   }
 })
 
+const captureHint = computed(() => {
+  if (accel.status.state !== 'accelerating') return null
+  switch (accel.status.captureMode) {
+    case 'process':
+      return { text: '进程模式', warn: false }
+    case 'tun':
+      return { text: 'TUN 模式', warn: false }
+    case 'proxy':
+      return { text: '系统代理模式（仅加速支持代理的程序）', warn: true }
+    default:
+      return null
+  }
+})
 
 const metrics = computed(() => [
   { icon: 'timer', color: 'var(--ok)', label: '延迟', value: fmtLatency(accel.status.latency) },
@@ -98,6 +111,11 @@ const metrics = computed(() => [
           <AppIcon name="bolt" :size="22" />
           {{ buttonText }}
         </button>
+
+        <div v-if="captureHint" class="capture-hint" :class="{ warn: captureHint.warn }">
+          <AppIcon name="info" :size="14" />
+          {{ captureHint.text }}
+        </div>
       </div>
 
       <!-- Metrics -->
@@ -266,6 +284,18 @@ const metrics = computed(() => [
 }
 .action.stop {
   background: var(--danger);
+}
+
+.capture-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.capture-hint.warn {
+  color: var(--warn);
 }
 
 .metrics {

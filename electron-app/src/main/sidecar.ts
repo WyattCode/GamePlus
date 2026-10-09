@@ -219,7 +219,9 @@ async function spawnElevatedWithFallback(): Promise<BackendConnection> {
     }
     // launcher exited non-zero before the file appeared → UAC declined / failed → fall back.
     if (launcherExited !== null && launcherExited !== 0 && !existsSync(connFile)) {
-      console.warn('[sidecar] elevation declined; falling back to non-elevated (domain games only)')
+      // Non-elevated host: process/TUN capture (netfilter/WinTUN drivers) will fail, so only games with
+      // domain rules can be accelerated — the accelerator degrades to system-proxy routing for those.
+      console.warn('[sidecar] elevation declined; falling back to non-elevated (domain-rule games only)')
       return spawnDirect()
     }
     await new Promise((r) => setTimeout(r, 300))

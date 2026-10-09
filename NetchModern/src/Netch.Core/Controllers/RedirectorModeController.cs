@@ -3,6 +3,7 @@ using Netch.Core.Abstractions;
 using Netch.Core.Interops;
 using Netch.Core.Models.Modes;
 using Netch.Core.Models.Servers;
+using Netch.Core.Services;
 using static Netch.Core.Interops.RedirectorInterop;
 
 namespace Netch.Core.Controllers;
@@ -136,12 +137,7 @@ public sealed class RedirectorModeController : IModeController
 
     private static void Trace(string s)
     {
-        try
-        {
-            var p = Path.Combine(AppPaths.DataDirectory, "redirector-trace.log");
-            File.AppendAllText(p, $"{DateTime.Now:HH:mm:ss.fff}  {s}\n");
-        }
-        catch { /* ignore */ }
+        TraceLog.Append(Path.Combine(AppPaths.DataDirectory, "redirector-trace.log"), s);
     }
 
     private static void EnsureNativeAvailable()

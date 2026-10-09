@@ -1,16 +1,20 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
 import { gameColor } from '@/utils/gameIcon'
 import { useAccelStore } from '@/stores/accel'
 import { useLibraryStore } from '@/stores/library'
+import { errorMessage } from '@/stores/toast'
 import { fmtDelay, fmtDuration, fmtLatency, fmtRate } from '@/utils/format'
 
 const accel = useAccelStore()
 const library = useLibraryStore()
 const router = useRouter()
+
+const error = ref<string | null>(null)
+const busy = ref(false)
 
 // If the selected node id disappears from the list (e.g. after a subscription refresh), clear the
 // selection and fall back to smart node rather than silently showing a blank select.
@@ -55,6 +59,19 @@ const metrics = computed(() => [
   { icon: 'pulse', color: 'var(--info)', label: '抖动', value: `${accel.status.jitter} ms` },
   { icon: 'clock', color: '#9b5de5', label: '时长', value: fmtDuration(accel.status.durationSec) }
 ])
+
+async function toggle(): Promise<void> {
+  if (busy.value) return
+  error.value = null
+  busy.value = true
+  try {
+    await accel.toggle()
+  } catch (e) {
+    error.value = errorMessage(e)
+  } finally {
+    busy.value = false
+  }
+}
 </script>
 
 <template>
@@ -90,6 +107,15 @@ const metrics = computed(() => [
         </div>
       </div>
 
+      <!-- Start failure banner -->
+      <div v-if="error" class="card error-banner">
+        <AppIcon name="warning" :size="16" />
+        <span class="err-msg">{{ error }}</span>
+        <button class="err-close" title="关闭" @click="error = null">
+          <AppIcon name="close" :size="14" />
+        </button>
+      </div>
+
       <!-- Node + action -->
       <div class="card panel">
         <div class="row">
@@ -105,7 +131,7 @@ const metrics = computed(() => [
 
         <select
           v-if="!accel.smartNode"
-          :value="accel.selectedNodeId"
+          :value="accel.selectedNodeId ?? ''"
           class="input select"
           @change="accel.setSelectedNodeId(($event.target as HTMLSelectElement).value || null)"
         >
@@ -120,7 +146,7 @@ const metrics = computed(() => [
           之前选择的线路已不存在，已切换为智能选路
         </div>
 
-        <button class="action" :class="{ stop: running }" @click="accel.toggle()">
+        <button class="action" :class="{ stop: running }" :disabled="busy" @click="toggle">
           <AppIcon name="bolt" :size="22" />
           {{ buttonText }}
         </button>
@@ -253,6 +279,28 @@ const metrics = computed(() => [
   background: #7dffb0;
 }
 
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px 16px;
+  border-color: var(--danger);
+  color: var(--danger);
+  font-size: 13px;
+}
+.err-msg {
+  flex: 1;
+  word-break: break-word;
+}
+.err-close {
+  color: var(--danger);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+}
+
 .panel {
   margin-top: 16px;
   padding: 22px;
@@ -294,6 +342,10 @@ const metrics = computed(() => [
 }
 .action:active {
   transform: translateY(1px);
+}
+.action:disabled {
+  opacity: 0.7;
+  cursor: default;
 }
 .action.stop {
   background: var(--danger);

@@ -33,6 +33,7 @@ internal sealed class RpcRouter
     private IPersistenceService Persistence => _sp.GetRequiredService<IPersistenceService>();
     private ISettingsService SettingsSvc => _sp.GetRequiredService<ISettingsService>();
     private IUpdateChecker UpdateChecker => _sp.GetRequiredService<IUpdateChecker>();
+    private ILogService Logs => _sp.GetRequiredService<ILogService>();
 
     public Task<object?> DispatchAsync(string method, JsonElement @params, CancellationToken ct) =>
         DispatchCoreAsync(method, @params, ct);
@@ -49,6 +50,10 @@ internal sealed class RpcRouter
 
             case "subs.list":
                 return await WithStateValue(SubList, ct);
+
+            case "logs.recent":
+                // LogService.Recent is thread-safe (ConcurrentQueue snapshot), so no state lock needed.
+                return Logs.Recent.Select(Mapping.ToDto).ToArray();
 
             case "servers.ping":
             {
@@ -201,8 +206,9 @@ internal sealed class RpcRouter
                                    ?? throw new InvalidOperationException("游戏不存在");
                     if (!existing.IsCustom)
                         throw new InvalidOperationException("只能编辑自定义游戏");
-                    var updated = Mapping.ToGame(@params, id);
-                    // Preserve identity/read-only bits, replace editable fields.
+                    // Merge: start from the existing game and only overwrite fields present in params, so
+                    // fields the editor doesn't send (icon, aliases, accent, …) are preserved.
+                    var updated = Mapping.ToGame(@params, id, existing);
                     updated.IsCustom = true;
                     updated.IsFavorite = existing.IsFavorite;
                     var index = Games.Games.IndexOf(existing);

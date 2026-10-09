@@ -27,6 +27,7 @@ export interface Backend {
   stopAccelerate(): Promise<void>
   onStatus(cb: (s: AccelStatus) => void): () => void
   onLog(cb: (l: LogEntry) => void): () => void
+  recentLogs(): Promise<LogEntry[]>
   addServerFromLink(link: string): Promise<Server[]>
   removeServer(id: string): Promise<Server[]>
   addSubscription(remark: string, link: string): Promise<Subscription[]>
@@ -122,6 +123,9 @@ class MockBackend implements Backend {
     this.logCbs.add(cb)
     return () => this.logCbs.delete(cb)
   }
+  async recentLogs(): Promise<LogEntry[]> {
+    return []
+  }
 
   private mockServers: Server[] = structuredClone(sampleServers)
   private mockSubs: Subscription[] = structuredClone(sampleSubscriptions)
@@ -211,7 +215,7 @@ class MockBackend implements Backend {
   async checkUpdate(): Promise<UpdateInfo> {
     return {
       status: 'notConfigured',
-      current: '3.0.0',
+      current: __APP_VERSION__,
       latest: null,
       tag: null,
       url: null,

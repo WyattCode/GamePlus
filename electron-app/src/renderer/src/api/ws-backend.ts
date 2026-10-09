@@ -195,6 +195,9 @@ export class WebSocketBackend implements Backend {
     this.ensure().catch(() => this.onDisconnected())
     return () => this.logCbs.delete(cb)
   }
+  recentLogs(): Promise<LogEntry[]> {
+    return this.call('logs.recent')
+  }
 
   addServerFromLink(link: string): Promise<Server[]> {
     return this.call('servers.add', { link })

@@ -2,15 +2,21 @@
 import { onMounted } from 'vue'
 import TitleBar from './components/TitleBar.vue'
 import SideBar from './components/SideBar.vue'
+import Toast from './components/Toast.vue'
 import { useAppStore } from './stores/app'
 import { useLibraryStore } from './stores/library'
+import { useLogsStore } from './stores/logs'
+import { useToastStore, errorMessage } from './stores/toast'
 
 const app = useAppStore()
 const library = useLibraryStore()
+const logs = useLogsStore()
+const toast = useToastStore()
 
 onMounted(() => {
   app.init()
-  library.load()
+  logs.init()
+  library.load().catch((e) => toast.error('加载数据失败：' + errorMessage(e)))
 })
 </script>
 
@@ -27,6 +33,7 @@ onMounted(() => {
         </RouterView>
       </main>
     </div>
+    <Toast />
   </div>
 </template>
 

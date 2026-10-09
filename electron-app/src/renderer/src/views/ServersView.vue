@@ -2,9 +2,11 @@
 import { computed, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { useLibraryStore } from '@/stores/library'
+import { useToastStore, errorMessage } from '@/stores/toast'
 import { delayColor, fmtDelay } from '@/utils/format'
 
 const library = useLibraryStore()
+const toast = useToastStore()
 const search = ref('')
 const showAdd = ref(false)
 const addLink = ref('')
@@ -32,7 +34,7 @@ async function importFromClipboard(): Promise<void> {
     const added = await library.addServerFromLink(text.trim())
     flash(added > 0 ? `已导入 ${added} 条线路` : '未识别到线路')
   } catch (e) {
-    flash('导入失败：' + (e as Error).message)
+    flash('导入失败：' + errorMessage(e))
   } finally {
     busy.value = false
   }
@@ -47,14 +49,18 @@ async function addFromInput(): Promise<void> {
     addLink.value = ''
     showAdd.value = false
   } catch (e) {
-    flash('添加失败：' + (e as Error).message)
+    flash('添加失败：' + errorMessage(e))
   } finally {
     busy.value = false
   }
 }
 
 async function remove(id: string): Promise<void> {
-  await library.removeServer(id)
+  try {
+    await library.removeServer(id)
+  } catch (e) {
+    toast.error('删除线路失败：' + errorMessage(e))
+  }
 }
 
 async function exportToClipboard(): Promise<void> {
@@ -67,7 +73,7 @@ async function exportToClipboard(): Promise<void> {
     await navigator.clipboard.writeText(text)
     flash(`已导出 ${links.length} 条线路的分享链接到剪贴板`)
   } catch (e) {
-    flash('导出失败：' + (e as Error).message)
+    flash('导出失败：' + errorMessage(e))
   } finally {
     busy.value = false
   }
@@ -79,8 +85,8 @@ const typeColor: Record<string, string> = {
   Trojan: '#e0533d',
   SS: '#17b26a',
   HY2: '#f79009',
-  Socks5: '#9aa0ac',
-  WireGuard: '#d946a0'
+  S5: '#9aa0ac',
+  WG: '#d946a0'
 }
 </script>
 

@@ -1,22 +1,13 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
-import { backend } from '@/api/backend'
-import type { LogEntry } from '@shared/types'
+import { useLogsStore } from '@/stores/logs'
 
-const logs = ref<LogEntry[]>([])
-let off: (() => void) | null = null
-
-onMounted(() => {
-  off = backend.onLog((l) => {
-    logs.value.push(l)
-    if (logs.value.length > 500) logs.value.shift()
-  })
-})
-onUnmounted(() => off?.())
+const logs = useLogsStore()
+const entries = computed(() => logs.entries)
 
 function clear(): void {
-  logs.value = []
+  logs.clear()
 }
 function time(ts: string): string {
   return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false })
@@ -28,14 +19,14 @@ function time(ts: string): string {
     <div class="head">
       <div>
         <h1 class="page-title">日志</h1>
-        <p class="page-sub">{{ logs.length }} 条记录</p>
+        <p class="page-sub">{{ entries.length }} 条记录</p>
       </div>
       <button class="btn" @click="clear"><AppIcon name="trash" :size="18" /> 清空</button>
     </div>
 
     <div class="card console">
-      <div v-if="!logs.length" class="empty muted">暂无日志。开始加速后这里会显示运行记录。</div>
-      <div v-for="(l, i) in logs" :key="i" class="line" :class="l.level">
+      <div v-if="!entries.length" class="empty muted">暂无日志。开始加速后这里会显示运行记录。</div>
+      <div v-for="(l, i) in entries" :key="i" class="line" :class="l.level">
         <span class="ts">{{ time(l.ts) }}</span>
         <span class="lv">{{ l.level.toUpperCase() }}</span>
         <span class="msg">{{ l.message }}</span>

@@ -2,8 +2,10 @@
 import { ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { useLibraryStore } from '@/stores/library'
+import { useToastStore, errorMessage } from '@/stores/toast'
 
 const library = useLibraryStore()
+const toast = useToastStore()
 const name = ref('')
 const link = ref('')
 const busy = ref(false)
@@ -16,19 +18,27 @@ async function add(): Promise<void> {
     await library.addSubscription(name.value.trim(), link.value.trim())
     name.value = ''
     link.value = ''
+  } catch (e) {
+    toast.error('添加订阅失败：' + errorMessage(e))
   } finally {
     busy.value = false
   }
 }
 
 async function remove(id: string): Promise<void> {
-  await library.removeSubscription(id)
+  try {
+    await library.removeSubscription(id)
+  } catch (e) {
+    toast.error('删除订阅失败：' + errorMessage(e))
+  }
 }
 
 async function update(id: string): Promise<void> {
   updatingId.value = id
   try {
     await library.updateSubscription(id)
+  } catch (e) {
+    toast.error('更新订阅失败：' + errorMessage(e))
   } finally {
     updatingId.value = null
   }
@@ -38,7 +48,10 @@ async function updateAll(): Promise<void> {
   if (busy.value) return
   busy.value = true
   try {
-    await library.updateAllSubscriptions()
+    const failed = await library.updateAllSubscriptions()
+    if (failed > 0) toast.error(`有 ${failed} 个订阅更新失败`)
+  } catch (e) {
+    toast.error('更新订阅失败：' + errorMessage(e))
   } finally {
     busy.value = false
   }

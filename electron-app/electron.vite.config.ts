@@ -1,6 +1,10 @@
+import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import vue from '@vitejs/plugin-vue'
+
+// The config is ESM, so read package.json manually (no `require`).
+const pkg = JSON.parse(readFileSync(resolve('package.json'), 'utf-8')) as { version: string }
 
 export default defineConfig({
   main: {
@@ -20,6 +24,9 @@ export default defineConfig({
     }
   },
   renderer: {
+    define: {
+      __APP_VERSION__: JSON.stringify(pkg.version)
+    },
     resolve: {
       alias: {
         '@': resolve('src/renderer/src'),

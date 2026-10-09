@@ -71,21 +71,66 @@ internal static class Mapping
             g.Platforms.ToArray(), g.ProxyDomains.ToArray(), g.ProxyIps.ToArray(),
             g.ProxyProcesses.ToArray());
 
-    /// <summary>Builds a <see cref="Game" /> from client-edit fields (used by games.add / games.update).</summary>
-    public static Game ToGame(JsonElement p, string? id = null)
+    /// <summary>
+    ///     Builds a <see cref="Game" /> from client-edit fields (used by games.add / games.update).
+    ///     When <paramref name="existing" /> is supplied the fields absent from <paramref name="p" /> are
+    ///     carried over from it (merge semantics), so an editor that doesn't send every field can't wipe
+    ///     data such as <c>Icon</c>, <c>Aliases</c> or <c>AccentColor</c>.
+    /// </summary>
+    public static Game ToGame(JsonElement p, string? id = null, Game? existing = null)
     {
-        var game = new Game { Id = id ?? "" };
+        var game = new Game { Id = id ?? existing?.Id ?? "" };
+        if (existing is not null)
+        {
+            game.Name = existing.Name;
+            game.EnglishName = existing.EnglishName;
+            game.Icon = existing.Icon;
+            game.AccentColor = existing.AccentColor;
+            game.Category = existing.Category;
+            game.Aliases = new List<string>(existing.Aliases);
+            game.Regions = new List<string>(existing.Regions);
+            game.Platforms = new List<string>(existing.Platforms);
+            game.ProxyDomains = new List<string>(existing.ProxyDomains);
+            game.ProxyIps = new List<string>(existing.ProxyIps);
+            game.ProxyProcesses = new List<string>(existing.ProxyProcesses);
+            game.OnlinePlayers = existing.OnlinePlayers;
+            game.IsCustom = existing.IsCustom;
+            game.IsFavorite = existing.IsFavorite;
+        }
+
         if (JsonParams.OptionalString(p, "name") is { } name) game.Name = name;
         if (JsonParams.OptionalString(p, "englishName") is { } en) game.EnglishName = en;
         if (JsonParams.OptionalString(p, "icon") is { } icon) game.Icon = icon;
-        if (JsonParams.OptionalString(p, "category") is { } cat && Enum.TryParse<GameCategory>(cat, true, out var category))
-            game.Category = category;
-        game.Aliases = JsonParams.StringList(p, "aliases");
-        game.Regions = JsonParams.StringList(p, "regions");
-        game.Platforms = JsonParams.StringList(p, "platforms");
-        game.ProxyDomains = JsonParams.StringList(p, "proxyDomains");
-        game.ProxyIps = JsonParams.StringList(p, "proxyIps");
-        game.ProxyProcesses = JsonParams.StringList(p, "proxyProcesses");
+        if (JsonParams.OptionalString(p, "accent") is { } accent) game.AccentColor = accent;
+        if (JsonParams.HasProperty(p, "category"))
+        {
+            var cat = JsonParams.OptionalString(p, "category");
+            if (string.IsNullOrWhiteSpace(cat))
+            {
+                // Absent/blank → keep existing value on update, default Pc on add.
+                if (existing is null) game.Category = GameCategory.Pc;
+            }
+            else if (Enum.TryParse<GameCategory>(cat, true, out var category))
+            {
+                game.Category = category;
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    $"未知的游戏分类：{cat}（可选：Hot / Pc / Console / Platform）");
+            }
+        }
+        else if (existing is null)
+        {
+            game.Category = GameCategory.Pc;
+        }
+
+        if (JsonParams.HasProperty(p, "aliases")) game.Aliases = JsonParams.StringList(p, "aliases");
+        if (JsonParams.HasProperty(p, "regions")) game.Regions = JsonParams.StringList(p, "regions");
+        if (JsonParams.HasProperty(p, "platforms")) game.Platforms = JsonParams.StringList(p, "platforms");
+        if (JsonParams.HasProperty(p, "proxyDomains")) game.ProxyDomains = JsonParams.StringList(p, "proxyDomains");
+        if (JsonParams.HasProperty(p, "proxyIps")) game.ProxyIps = JsonParams.StringList(p, "proxyIps");
+        if (JsonParams.HasProperty(p, "proxyProcesses")) game.ProxyProcesses = JsonParams.StringList(p, "proxyProcesses");
         return game;
     }
 

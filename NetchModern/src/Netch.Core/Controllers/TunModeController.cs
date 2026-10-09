@@ -21,6 +21,17 @@ public sealed class TunModeController : IModeController
     private const string TunGateway = "10.6.7.1";
     private const string TunNetmask = "255.255.255.0";
 
+    private readonly string _dnsServer;
+
+    /// <param name="dnsServer">
+    ///     DNS server handed to tun2socks. Accepts <c>host</c> or <c>host:port</c>; <c>:53</c> is appended
+    ///     when no port is given. Blank falls back to <c>1.1.1.1</c>.
+    /// </param>
+    public TunModeController(string? dnsServer = null)
+    {
+        _dnsServer = NormalizeDns(dnsServer);
+    }
+
     private Mode? _mode;
     private NetRoute _outbound;
     private NetRoute _tun;
@@ -61,7 +72,7 @@ public sealed class TunModeController : IModeController
             Dial(NameList.TYPE_UDPPASS, socks5.Password!);
         }
 
-        Trace("dial DNSADDR"); Dial(NameList.TYPE_DNSADDR, "1.1.1.1:53");
+        Trace($"dial DNSADDR {_dnsServer}"); Dial(NameList.TYPE_DNSADDR, _dnsServer);
 
         Trace("Init (create wintun + start tun2socks)");
         if (!Init())
@@ -72,6 +83,21 @@ public sealed class TunModeController : IModeController
         SetupRouteTable();
         Trace("SetupRouteTable OK — TUN up");
         return Task.CompletedTask;
+    }
+
+    /// <summary>Normalises a settings DNS value into the <c>host:port</c> form tun2socks expects.</summary>
+    internal static string NormalizeDns(string? value)
+    {
+        var dns = (value ?? "").Trim();
+        if (dns.Length == 0)
+            return "1.1.1.1:53";
+        // IPv6 literal in brackets, e.g. [2606:4700:4700::1111]:53
+        if (dns.StartsWith('['))
+            return dns.Contains("]:") ? dns : $"{dns}:53";
+        // Already has a port (single colon for IPv4/hostname).
+        if (dns.Count(c => c == ':') == 1)
+            return dns;
+        return $"{dns}:53";
     }
 
     private static bool IsAdmin()
@@ -86,12 +112,7 @@ public sealed class TunModeController : IModeController
 
     private static void Trace(string s)
     {
-        try
-        {
-            var p = Path.Combine(AppPaths.DataDirectory, "tun-trace.log");
-            File.AppendAllText(p, $"{DateTime.Now:HH:mm:ss.fff}  {s}\n");
-        }
-        catch { /* ignore */ }
+        TraceLog.Append(Path.Combine(AppPaths.DataDirectory, "tun-trace.log"), s);
     }
 
     public async Task StopAsync(CancellationToken ct = default)

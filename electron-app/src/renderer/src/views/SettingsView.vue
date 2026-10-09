@@ -41,6 +41,9 @@ onMounted(async () => {
   }
 })
 
+// Prefer the backend's reported version; fall back to the build-time injected package.json version.
+const version = computed(() => update.value?.current || __APP_VERSION__)
+
 const updateText = computed<string | null>(() => {
   if (!updateChecked.value) return null
   if (updateError.value) return `无法检查更新：${updateError.value}`
@@ -109,7 +112,7 @@ const updateText = computed<string | null>(() => {
       <div class="about">
         <div class="logo"><AppIcon name="bolt" :size="22" /></div>
         <div>
-          <div class="s-name">Game+ <span class="muted">v3.0.0</span></div>
+          <div class="s-name">Game+ <span class="muted">v{{ version }}</span></div>
           <div class="muted small">Electron + Vue 3 · 游戏加速器</div>
           <div v-if="updateText" class="muted small">
             <a
@@ -167,7 +170,7 @@ const updateText = computed<string | null>(() => {
   margin-top: 2px;
 }
 .warn {
-  color: var(--warning, #d97706);
+  color: var(--warn);
 }
 .seg {
   display: flex;

@@ -22,6 +22,10 @@ internal static class JsonParams
             ? v.GetBoolean()
             : null;
 
+    /// <summary>True if the property is present (any JSON kind).</summary>
+    public static bool HasProperty(in JsonElement obj, string name) =>
+        obj.ValueKind == JsonValueKind.Object && obj.TryGetProperty(name, out _);
+
     /// <summary>Returns an array-of-strings field, or an empty list if absent / not a JSON array.</summary>
     public static List<string> StringList(in JsonElement obj, string name)
     {

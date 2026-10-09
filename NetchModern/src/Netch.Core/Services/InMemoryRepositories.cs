@@ -77,7 +77,11 @@ public sealed class SubscriptionRepository : ISubscriptionRepository
 
     public ObservableCollection<Subscription> Subscriptions { get; } = new();
 
-    public void Add(Subscription subscription) => Subscriptions.Add(subscription);
+    public void Add(Subscription subscription)
+    {
+        subscription.EnsureId();
+        Subscriptions.Add(subscription);
+    }
 
     public void Remove(Subscription subscription)
     {
@@ -127,6 +131,7 @@ public sealed class SubscriptionRepository : ISubscriptionRepository
     /// <summary>Mutates shared state — call under a state lock.</summary>
     public void Apply(Subscription subscription, IReadOnlyList<Server> servers)
     {
+        subscription.EnsureId();
         var group = subscription.GroupKey;
 
         // Drop servers from a previous fetch of this subscription, then add the fresh set.
@@ -154,7 +159,7 @@ public sealed class SubscriptionRepository : ISubscriptionRepository
                 using var request = new HttpRequestMessage(HttpMethod.Get, link);
                 request.Headers.UserAgent.Clear();
                 request.Headers.UserAgent.ParseAdd(ua);
-                // Browser-like Accept headers — Cloudflare (and similar WAFs) 403 requests without them.
+                // Browser-like Accept headers — Cloudflare (and similar WAF) 403 requests without them.
                 request.Headers.Accept.ParseAdd("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
                 request.Headers.AcceptLanguage.ParseAdd("en-US,en;q=0.9");
 

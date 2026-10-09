@@ -15,9 +15,6 @@ internal sealed class RpcRouter
 
     public RpcRouter(IServiceProvider sp) => _sp = sp;
 
-    public IdRegistry<Server> ServerIds { get; } = new();
-    public IdRegistry<Netch.Core.Models.Subscription> SubIds { get; } = new();
-
     // The repositories are single-threaded (built for the WPF dispatcher). This lock is held only for
     // in-memory reads/mutations + persistence saves — never across long network I/O — so a slow
     // subs.update can't block accel.stop. Two sessions (e.g. a renderer reload overlapping the old
@@ -77,15 +74,15 @@ internal sealed class RpcRouter
                 var gameId = JsonParams.RequiredString(@params, "gameId");
                 var nodeId = JsonParams.OptionalString(@params, "nodeId");
                 await StartAccelAsync(gameId, nodeId, ct);
-                return Mapping.StatusDto(Accel, ServerIds);
+                return await WithStateValue(() => Mapping.StatusDto(Accel, Servers.Servers.ToList()), ct);
             }
 
             case "accel.stop":
                 await StopAccelAsync(ct);
-                return Mapping.StatusDto(Accel, ServerIds);
+                return await WithStateValue(() => Mapping.StatusDto(Accel, Servers.Servers.ToList()), ct);
 
             case "accel.status":
-                return Mapping.StatusDto(Accel, ServerIds);
+                return await WithStateValue(() => Mapping.StatusDto(Accel, Servers.Servers.ToList()), ct);
 
             case "servers.add":
             {
@@ -123,11 +120,15 @@ internal sealed class RpcRouter
                     throw new InvalidOperationException("订阅链接不能为空");
                 return await WithStateValueAsync(async () =>
                 {
-                    Subs.Add(new Netch.Core.Models.Subscription
+                    var sub = new Netch.Core.Models.Subscription
                     {
-                        Remark = string.IsNullOrWhiteSpace(remark) ? "未命名订阅" : remark,
+                        Remark = string.IsNullOrWhiteSpace(remark)
+                            ? Netch.Core.Models.Subscription.DefaultRemarkFor(link)
+                            : remark,
                         Link = link.Trim()
-                    });
+                    };
+                    sub.EnsureId();
+                    Subs.Add(sub);
                     await Persistence.SaveAsync();
                     return SubList();
                 }, ct);
@@ -138,7 +139,7 @@ internal sealed class RpcRouter
                 var id = JsonParams.RequiredString(@params, "id");
                 return await WithStateValueAsync(async () =>
                 {
-                    var sub = SubIds.Resolve(id, Subs.Subscriptions.ToList())
+                    var sub = Subs.Subscriptions.FirstOrDefault(s => s.Id == id)
                               ?? throw new InvalidOperationException("订阅不存在");
                     Subs.Remove(sub); // also purges the servers this subscription imported
                     await Persistence.SaveAsync();
@@ -152,7 +153,7 @@ internal sealed class RpcRouter
                 // Resolve under the lock, then fetch+parse OUTSIDE it (network I/O can take tens of seconds),
                 // then apply the result under the lock again.
                 var sub = await WithStateValue(
-                    () => SubIds.Resolve(id, Subs.Subscriptions.ToList())
+                    () => Subs.Subscriptions.FirstOrDefault(s => s.Id == id)
                           ?? throw new InvalidOperationException("订阅不存在"),
                     ct);
 
@@ -294,11 +295,15 @@ internal sealed class RpcRouter
         }
     }
 
-    private ServerDto[] ServerList() =>
-        Servers.Servers.ToList().Select(s => Mapping.ToDto(s, ServerIds)).ToArray();
+    private ServerDto[] ServerList()
+    {
+        var list = Servers.Servers.ToList();
+        var ids = ServerIds.Assign(list);
+        return list.Select(s => Mapping.ToDto(s, ids[s])).ToArray();
+    }
 
     private SubscriptionDto[] SubList() =>
-        Subs.Subscriptions.ToList().Select(s => Mapping.ToDto(s, SubIds)).ToArray();
+        Subs.Subscriptions.ToList().Select(Mapping.ToDto).ToArray();
 
     private void ApplySettings(JsonElement p)
     {

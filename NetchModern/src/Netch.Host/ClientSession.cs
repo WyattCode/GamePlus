@@ -32,6 +32,7 @@ internal sealed class ClientSession
     private readonly Channel<string> _out = Channel.CreateUnbounded<string>();
     private readonly IAcceleratorService _accel;
     private readonly ILogService _log;
+    private readonly IServerRepository _servers;
     private readonly SemaphoreSlim _inFlight = new(MaxInFlight, MaxInFlight);
 
     public ClientSession(WebSocket ws, RpcRouter router, IServiceProvider sp)
@@ -41,6 +42,7 @@ internal sealed class ClientSession
         _sp = sp;
         _accel = sp.GetRequiredService<IAcceleratorService>();
         _log = sp.GetRequiredService<ILogService>();
+        _servers = sp.GetRequiredService<IServerRepository>();
     }
 
     public async Task RunAsync()
@@ -52,7 +54,7 @@ internal sealed class ClientSession
         _log.EntryAdded += OnLog;
 
         // Initial snapshot so the UI reflects current state on connect.
-        Enqueue("accel.status", Mapping.StatusDto(_accel, _router.ServerIds));
+        Enqueue("accel.status", StatusDto());
 
         var writer = WriteLoopAsync(cts.Token);
         try
@@ -167,15 +169,17 @@ internal sealed class ClientSession
     private void Enqueue(string @event, object data) =>
         _out.Writer.TryWrite(JsonSerializer.Serialize(new { @event, data }, Json));
 
+    private AccelStatusDto StatusDto() => Mapping.StatusDto(_accel, _servers.Servers.ToList());
+
     // Duration ticks once per second while accelerating — use it as the status heartbeat.
     private void OnStatusChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(AccelerationStatus.Duration) or nameof(AccelerationStatus.Latency))
-            Enqueue("accel.status", Mapping.StatusDto(_accel, _router.ServerIds));
+            Enqueue("accel.status", StatusDto());
     }
 
     private void OnStateChanged(object? sender, AccelerationState e) =>
-        Enqueue("accel.status", Mapping.StatusDto(_accel, _router.ServerIds));
+        Enqueue("accel.status", StatusDto());
 
     private void OnLog(object? sender, LogEntry e) => Enqueue("log", Mapping.ToDto(e));
 }

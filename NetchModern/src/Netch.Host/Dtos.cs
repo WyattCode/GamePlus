@@ -24,7 +24,11 @@ internal record LogDto(string Ts, string Level, string Message);
 
 internal record SettingsDto(string Theme, string Language, bool MinimizeToTray);
 
-/// <summary>Assigns stable ids to reference-typed domain objects that have no id of their own (servers, subs).</summary>
+/// <summary>
+///     Assigns stable ids to reference-typed domain objects that have no id of their own. Kept for
+///     subscriptions (which now carry their own persisted <see cref="Subscription.Id" />, so this is only
+///     used as a fallback for objects created before the id was assigned).
+/// </summary>
 internal sealed class IdRegistry<T> where T : class
 {
     private readonly ConditionalWeakTable<T, string> _ids = new();
@@ -57,8 +61,8 @@ internal static class Mapping
     // Short chip label; Hysteria2 is abbreviated to HY2 to match the UI palette.
     public static string ChipOf(Server s) => s is Hysteria2Server ? "HY2" : s.Type;
 
-    public static ServerDto ToDto(Server s, IdRegistry<Server> ids) =>
-        new(ids.IdOf(s), KindOf(s), ChipOf(s), s.Remark, s.Hostname, s.Port, s.Group, s.Delay);
+    public static ServerDto ToDto(Server s, string id) =>
+        new(id, KindOf(s), ChipOf(s), s.Remark, s.Hostname, s.Port, s.Group, s.Delay);
 
     public static GameDto ToDto(Game g) =>
         new(g.Id, g.Name, g.Icon, g.Accent, g.RegionText, g.RuleCount,
@@ -94,8 +98,8 @@ internal static class Mapping
         return cats.ToArray();
     }
 
-    public static SubscriptionDto ToDto(Subscription s, IdRegistry<Subscription> ids) =>
-        new(ids.IdOf(s), s.Remark, s.Link, s.ServerCount, s.LastUpdated?.ToString("o"));
+    public static SubscriptionDto ToDto(Subscription s) =>
+        new(s.Id, s.Remark, s.Link, s.ServerCount, s.LastUpdated?.ToString("o"));
 
     public static string StateName(AccelerationState state) => state switch
     {
@@ -105,9 +109,19 @@ internal static class Mapping
         _ => "idle"
     };
 
-    public static AccelStatusDto StatusDto(Netch.Core.Abstractions.IAcceleratorService a, IdRegistry<Server> ids)
+    public static AccelStatusDto StatusDto(Netch.Core.Abstractions.IAcceleratorService a, IReadOnlyList<Server> pool)
     {
         var st = a.Status;
+        string? nodeId = null;
+        if (a.CurrentNode is { } n)
+        {
+            var map = ServerIds.Assign(pool);
+            if (map.TryGetValue(n, out var id))
+                nodeId = id;
+            else
+                nodeId = ServerIds.Fingerprint(n);
+        }
+
         return new AccelStatusDto(
             StateName(a.State),
             st.Latency,
@@ -117,7 +131,7 @@ internal static class Mapping
             st.DownloadRate,
             st.UploadRate,
             a.CurrentGame?.Id,
-            a.CurrentNode is { } n ? ids.IdOf(n) : null,
+            nodeId,
             st.CaptureMode);
     }
 

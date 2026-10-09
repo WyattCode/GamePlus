@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
@@ -11,6 +11,13 @@ import { fmtDelay, fmtDuration, fmtLatency, fmtRate } from '@/utils/format'
 const accel = useAccelStore()
 const library = useLibraryStore()
 const router = useRouter()
+
+// If the selected node id disappears from the list (e.g. after a subscription refresh), clear the
+// selection and fall back to smart node rather than silently showing a blank select.
+watch(
+  () => library.servers,
+  () => accel.reconcileSelection()
+)
 
 const running = computed(
   () => accel.status.state === 'accelerating' || accel.status.state === 'connecting'
@@ -98,14 +105,20 @@ const metrics = computed(() => [
 
         <select
           v-if="!accel.smartNode"
-          v-model="accel.selectedNode"
+          :value="accel.selectedNodeId"
           class="input select"
+          @change="accel.setSelectedNodeId(($event.target as HTMLSelectElement).value || null)"
         >
-          <option :value="null" disabled>选择线路…</option>
-          <option v-for="s in library.servers" :key="s.id" :value="s">
+          <option :value="''" disabled>选择线路…</option>
+          <option v-for="s in library.servers" :key="s.id" :value="s.id">
             [{{ s.type }}] {{ s.remark }} · {{ fmtDelay(s.delay) }}
           </option>
         </select>
+
+        <div v-if="accel.nodeUnavailable" class="capture-hint warn">
+          <AppIcon name="info" :size="14" />
+          之前选择的线路已不存在，已切换为智能选路
+        </div>
 
         <button class="action" :class="{ stop: running }" @click="accel.toggle()">
           <AppIcon name="bolt" :size="22" />

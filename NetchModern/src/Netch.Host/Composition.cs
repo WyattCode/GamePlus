@@ -1,5 +1,6 @@
 using System.Net.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Netch.Core;
 using Netch.Core.Abstractions;
 using Netch.Core.Controllers;
 using Netch.Core.Models.Servers;
@@ -24,7 +25,8 @@ internal static class Composition
         services.AddSingleton<ILogService, LogService>();
         services.AddSingleton<ISettingsService, JsonSettingsService>();
         services.AddSingleton<IServerRepository, ServerRepository>();
-        services.AddSingleton<IGameRepository, GameRepository>();
+        services.AddSingleton<IGameRepository>(sp =>
+            new GameRepository(sp.GetRequiredService<ISettingsService>(), Path.Combine(AppPaths.DataDirectory, "custom-games.json"), sp.GetRequiredService<ILogService>()));
         services.AddSingleton<IModeRepository, ModeRepository>();
         services.AddSingleton<ISubscriptionRepository, SubscriptionRepository>();
         services.AddSingleton<IPersistenceService, JsonPersistenceService>();

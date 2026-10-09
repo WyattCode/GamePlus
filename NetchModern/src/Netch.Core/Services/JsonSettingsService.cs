@@ -16,9 +16,19 @@ public sealed class JsonSettingsService : ISettingsService
 
     private readonly string _path;
 
+    // Serializes concurrent SaveAsync calls: two overlapping saves (e.g. a fire-and-forget from one
+    // caller racing an awaited one from another) would otherwise interleave their File.Move swaps.
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
+
     public JsonSettingsService()
+        : this(Path.Combine(AppPaths.DataDirectory, "settings.json"))
     {
-        _path = Path.Combine(AppPaths.DataDirectory, "settings.json");
+    }
+
+    /// <summary>Test-friendly constructor: lets callers point the service at a temp file.</summary>
+    public JsonSettingsService(string path)
+    {
+        _path = path;
     }
 
     public AppSettings Settings { get; private set; } = new();
@@ -44,20 +54,28 @@ public sealed class JsonSettingsService : ISettingsService
 
     public async Task SaveAsync()
     {
-        // Atomic write with a UNIQUE temp name so an interrupted save can't corrupt the file and two
-        // overlapping (fire-and-forget) saves can't collide on the same temp path.
-        var tmp = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        await _saveGate.WaitAsync();
         try
         {
-            await using (var stream = File.Create(tmp))
-                await JsonSerializer.SerializeAsync(stream, Settings, Options);
+            // Atomic write with a UNIQUE temp name so an interrupted save can't corrupt the file and two
+            // overlapping (fire-and-forget) saves can't collide on the same temp path.
+            var tmp = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                await using (var stream = File.Create(tmp))
+                    await JsonSerializer.SerializeAsync(stream, Settings, Options);
 
-            File.Move(tmp, _path, overwrite: true);
+                File.Move(tmp, _path, overwrite: true);
+            }
+            catch
+            {
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* ignored */ }
+                throw;
+            }
         }
-        catch
+        finally
         {
-            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* ignored */ }
-            throw;
+            _saveGate.Release();
         }
     }
 }

@@ -80,6 +80,13 @@ native cores (`xray.exe`, `sing-box.exe`, `wintun.dll`, … from `NetchModern/na
 `resources/backend/bin`, and clears the staging dir first so no stale binaries leak into the package.
 It reads the version from `electron-app/package.json`, the single source of truth.
 
+After copying, `build.ps1` **verifies** the native components: a missing required component fails the
+build, and a missing optional one (process mode) only warns. Pass `-AllowMissingNative` to downgrade
+the required-component failure to a warning for dev/CI packaging tests. The expected components,
+their licences and download URLs are documented in
+[`NetchModern/native/README.md`](../NetchModern/native/README.md); the staged
+`bin/NATIVE_COMPONENTS.txt` records the presence, size and SHA-256 of each file.
+
 ### Code signing
 
 Also in `electron-builder.yml` (`win` section): signing is wired to the standard electron-builder

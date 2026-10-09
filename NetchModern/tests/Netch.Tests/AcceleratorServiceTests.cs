@@ -38,6 +38,7 @@ public class AcceleratorServiceTests
         public int Port { get; private set; }
         public void Enable(string host, int port) { IsEnabled = true; Host = host; Port = port; }
         public void Disable() => IsEnabled = false;
+        public void RecoverFromCrash() { /* no-op for tests */ }
     }
 
     /// <summary>Mode controller whose StartAsync can be made to fail (simulates a missing driver / no admin).</summary>

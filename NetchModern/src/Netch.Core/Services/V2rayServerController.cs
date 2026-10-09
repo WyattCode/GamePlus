@@ -89,6 +89,9 @@ public sealed class V2rayServerController : ProcessGuard, IServerController
             if (proc == null)
                 return (0, 0);
 
+            // Bind the short-lived helper to the host's job object too, so a host crash doesn't leave it behind.
+            AssignToJobObject(proc);
+
             try
             {
                 var json = await proc.StandardOutput.ReadToEndAsync(cts.Token);

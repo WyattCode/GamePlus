@@ -54,9 +54,16 @@ public abstract class ProcessGuard : IAsyncDisposable
         _process.ErrorDataReceived += OnOutput;
 
         _process.Start(); // throws Win32Exception if the executable is missing
+        AssignToJobObject(_process);
         _process.BeginOutputReadLine();
         _process.BeginErrorReadLine();
     }
+
+    /// <summary>
+    ///     Assigns a freshly started child to the process-wide job object so it dies with the host.
+    ///     Exposed for controllers that spawn short-lived helper processes (e.g. <c>xray api statsquery</c>).
+    /// </summary>
+    protected internal static void AssignToJobObject(Process process) => JobObject.Assign(process);
 
     /// <summary>Waits until <paramref name="port" /> on loopback accepts a connection, or the process dies.</summary>
     protected async Task<bool> WaitForPortAsync(int port, TimeSpan timeout, CancellationToken ct = default)

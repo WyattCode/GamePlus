@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Netch.Core.Abstractions;
+using Netch.Core.Services;
 using Netch.Host;
 
 // Headless Game+ backend. Electron spawns this, reads the "GAMEPLUS_READY {port,token}" line from
@@ -21,6 +22,26 @@ var services = Composition.Build();
 // Load persisted settings + servers/subscriptions before serving.
 await services.GetRequiredService<ISettingsService>().LoadAsync();
 await services.GetRequiredService<IPersistenceService>().LoadAsync();
+
+// Recover from a previous crashed run: restore the user's system proxy if we left it pointing at a dead
+// local port, and kill any orphaned proxy cores still running from that run.
+try
+{
+    services.GetRequiredService<ISystemProxyService>().RecoverFromCrash();
+}
+catch (Exception e)
+{
+    Console.Error.WriteLine("proxy recovery failed: " + e.Message);
+}
+
+try
+{
+    OrphanCleanup.KillStaleCores(AppContext.BaseDirectory);
+}
+catch (Exception e)
+{
+    Console.Error.WriteLine("orphan cleanup failed: " + e.Message);
+}
 
 // When elevated via UAC we lose the stdin/stdout pipe to the parent, so the handshake goes through a
 // file (--conn-file) and lifecycle is bound to the parent's PID (--parent-pid) instead of stdin EOF.

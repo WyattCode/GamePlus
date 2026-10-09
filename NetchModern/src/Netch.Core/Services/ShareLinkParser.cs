@@ -137,7 +137,9 @@ public static partial class ShareLinkParser
         if (atIndex < 0)
             throw new FormatException("Invalid wireguard link");
 
-        data.PrivateKey = ShareLinkUtils.UrlDecode(body[..atIndex]);
+        // WireGuard keys are standard base64 and many share links leave '+' unescaped. UrlDecode turns a
+        // literal '+' into a space, which is never valid base64 — restore it.
+        data.PrivateKey = ShareLinkUtils.UrlDecode(body[..atIndex]).Replace(' ', '+');
 
         var hostPort = body[(atIndex + 1)..];
         var colon = hostPort.LastIndexOf(':');
@@ -147,16 +149,17 @@ public static partial class ShareLinkParser
         data.Hostname = hostPort[..colon];
         data.Port = ushort.Parse(hostPort[(colon + 1)..]);
 
-        data.PublicKey = query.GetValueOrDefault("publickey")
-                         ?? query.GetValueOrDefault("public_key")
-                         ?? query.GetValueOrDefault("pk")
-                         ?? string.Empty;
+        data.PublicKey = (query.GetValueOrDefault("publickey")
+                          ?? query.GetValueOrDefault("public_key")
+                          ?? query.GetValueOrDefault("pk")
+                          ?? string.Empty).Replace(' ', '+');
         data.LocalAddresses = query.GetValueOrDefault("address")
                               ?? query.GetValueOrDefault("ip")
                               ?? string.Empty;
-        data.PreSharedKey = query.GetValueOrDefault("presharedkey")
-                            ?? query.GetValueOrDefault("preshared_key")
-                            ?? query.GetValueOrDefault("psk");
+        var psk = query.GetValueOrDefault("presharedkey")
+                  ?? query.GetValueOrDefault("preshared_key")
+                  ?? query.GetValueOrDefault("psk");
+        data.PreSharedKey = psk?.Replace(' ', '+');
         data.Reserved = query.GetValueOrDefault("reserved");
         if (int.TryParse(query.GetValueOrDefault("mtu"), out var mtu) && mtu > 0)
             data.Mtu = mtu;

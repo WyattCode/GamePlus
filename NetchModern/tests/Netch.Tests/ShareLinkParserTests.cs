@@ -108,6 +108,17 @@ public class ShareLinkParserTests
     }
 
     [Fact]
+    public void ParseWireGuard_UnescapedPlusInKeys_Preserved()
+    {
+        var link = "wireguard://ab+cd/ef+gh=@1.2.3.4:51820?publickey=PK+x/y=&address=10.0.0.2/32#wg";
+
+        var server = Assert.IsType<WireGuardServer>(ShareLinkParser.ParseUri(link));
+
+        Assert.Equal("ab+cd/ef+gh=", server.PrivateKey);
+        Assert.Equal("PK+x/y=", server.PublicKey);
+    }
+
+    [Fact]
     public void RoundTrip_Vmess_PreservesKeyFields()
     {
         var original = new VMessServer

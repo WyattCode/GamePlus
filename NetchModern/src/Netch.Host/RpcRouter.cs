@@ -26,6 +26,11 @@ internal sealed class RpcRouter
     private readonly SemaphoreSlim _accelLock = new(1, 1);
     private CancellationTokenSource? _startCts;
 
+    // Bumped by every accel.stop. A start captures it before resolving the node (which may ping for
+    // seconds) and aborts if a stop happened in the meantime — otherwise the stop would be a no-op
+    // because _startCts isn't set yet.
+    private int _stopGeneration;
+
     private IServerRepository Servers => _sp.GetRequiredService<IServerRepository>();
     private IGameRepository Games => _sp.GetRequiredService<IGameRepository>();
     private ISubscriptionRepository Subs => _sp.GetRequiredService<ISubscriptionRepository>();
@@ -166,6 +171,11 @@ internal sealed class RpcRouter
 
                 return await WithStateValueAsync(async () =>
                 {
+                    // The subscription may have been removed while we were fetching — re-adding its servers
+                    // now would leave orphans behind.
+                    if (!Subs.Subscriptions.Contains(sub))
+                        throw new InvalidOperationException("订阅不存在");
+
                     Subs.Apply(sub, servers);
                     await Persistence.SaveAsync();
                     return new { subscriptions = SubList(), servers = ServerList() };
@@ -215,7 +225,16 @@ internal sealed class RpcRouter
                     if (index >= 0)
                     {
                         Games.Games[index] = updated;
-                        Games.UpdateCustomGame(updated);
+                        try
+                        {
+                            Games.UpdateCustomGame(updated);
+                        }
+                        catch
+                        {
+                            // Roll back the in-memory swap so the list stays consistent with the store.
+                            Games.Games[index] = existing;
+                            throw;
+                        }
                     }
                     return Games.Games.Select(Mapping.ToDto).ToArray();
                 }, ct);
@@ -257,8 +276,8 @@ internal sealed class RpcRouter
                         UpdateCheckStatus.NotConfigured => "notConfigured",
                         _ => "failed"
                     },
-                    current = result.Current.ToString(),
-                    latest = result.Latest?.ToString(),
+                    current = FormatVersion(result.Current),
+                    latest = result.Latest is null ? null : FormatVersion(result.Latest),
                     tag = result.TagName,
                     url = result.Url,
                     error = result.Error
@@ -322,8 +341,16 @@ internal sealed class RpcRouter
             s.MinimizeToTray = minimizeToTray;
     }
 
+    /// <summary>Formats a version as Major.Minor.Build (Build clamped to &gt;= 0), e.g. "3.0.0".</summary>
+    private static string FormatVersion(Version v) =>
+        $"{v.Major}.{v.Minor}.{Math.Max(v.Build, 0)}";
+
     private async Task StartAccelAsync(string gameId, string? nodeId, CancellationToken ct)
     {
+        // Capture the stop generation before any long-running work: if accel.stop arrives while we're
+        // resolving/pinging the node, we must not proceed to start afterwards.
+        var gen = Volatile.Read(ref _stopGeneration);
+
         // Resolve game under the lock (brief repository read), then resolve the node OUTSIDE it — picking a
         // node may ping (network I/O, seconds) and must not hold the state lock.
         var game = await WithStateValue(
@@ -347,6 +374,10 @@ internal sealed class RpcRouter
         await _accelLock.WaitAsync(ct);
         try
         {
+            // A stop was issued while we were resolving the node — abort before touching the accelerator.
+            if (Volatile.Read(ref _stopGeneration) != gen)
+                throw new OperationCanceledException("加速已被取消");
+
             // Register a CTS so accel.stop can cancel this start instead of queueing behind it.
             using var startCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             _startCts = startCts;
@@ -368,6 +399,9 @@ internal sealed class RpcRouter
 
     private async Task StopAccelAsync(CancellationToken ct)
     {
+        // Bump the generation first so a start that is still resolving its node sees the stop.
+        Interlocked.Increment(ref _stopGeneration);
+
         // Cancel an in-flight start first so it unwinds (AcceleratorService.StartAsync cleans up on
         // cancellation) instead of us queueing behind it on _accelLock for up to ~12s.
         try

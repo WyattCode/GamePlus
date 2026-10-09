@@ -199,18 +199,28 @@ public static class V2rayConfigGenerator
 
     private static JsonObject Trojan(TrojanServer s)
     {
+        // SNI fallback: explicit sni → host header → hostname.
+        var serverName = !string.IsNullOrEmpty(s.Sni) ? s.Sni
+            : !string.IsNullOrEmpty(s.Host) ? s.Host
+            : s.Hostname;
+
+        var tlsSettings = new JsonObject
+        {
+            ["serverName"] = serverName,
+            ["allowInsecure"] = s.AllowInsecure
+        };
+        AddAlpn(tlsSettings, s.Alpn);
+        if (!string.IsNullOrEmpty(s.Fingerprint))
+            tlsSettings["fingerprint"] = s.Fingerprint;
+
         var streamSettings = new JsonObject
         {
             ["network"] = string.IsNullOrEmpty(s.Network) ? "tcp" : s.Network,
             ["security"] = "tls",
-            ["tlsSettings"] = new JsonObject
-            {
-                ["serverName"] = string.IsNullOrEmpty(s.Sni) ? s.Hostname : s.Sni,
-                ["allowInsecure"] = s.AllowInsecure
-            }
+            ["tlsSettings"] = tlsSettings
         };
 
-        ApplyTransport(streamSettings, s.Network, s.Host, s.Path, s.ServiceName, s.Mode, s.Alpn, s.Fingerprint);
+        ApplyTransport(streamSettings, s.Network, s.Host, s.Path, s.ServiceName, s.Mode);
 
         return new JsonObject
         {
@@ -285,7 +295,7 @@ public static class V2rayConfigGenerator
             streamSettings["tlsSettings"] = tlsSettings;
         }
 
-        ApplyTransport(streamSettings, s.Network, s.Host, s.Path, s.ServiceName, s.Mode, s.Alpn, s.Fingerprint);
+        ApplyTransport(streamSettings, s.Network, s.Host, s.Path, s.ServiceName, s.Mode);
 
         outbound["streamSettings"] = streamSettings;
         return outbound;
@@ -302,7 +312,6 @@ public static class V2rayConfigGenerator
             user["flow"] = s.Flow;
 
         var security = string.IsNullOrEmpty(s.Security) ? "none" : s.Security;
-        var serverName = string.IsNullOrEmpty(s.Sni) ? s.Hostname : s.Sni;
         var fingerprint = string.IsNullOrEmpty(s.Fingerprint) ? "chrome" : s.Fingerprint;
 
         var streamSettings = new JsonObject
@@ -314,6 +323,8 @@ public static class V2rayConfigGenerator
         if (security == "reality")
         {
             // REALITY: the public key + optional short id/spiderX; uTLS fingerprint is mandatory.
+            // REALITY serverName fallback: sni → hostname (never the transport host header).
+            var serverName = string.IsNullOrEmpty(s.Sni) ? s.Hostname : s.Sni;
             streamSettings["realitySettings"] = new JsonObject
             {
                 ["serverName"] = serverName,
@@ -325,6 +336,11 @@ public static class V2rayConfigGenerator
         }
         else if (security == "tls")
         {
+            // TLS serverName fallback: sni → host header → hostname.
+            var serverName = !string.IsNullOrEmpty(s.Sni) ? s.Sni
+                : !string.IsNullOrEmpty(s.Host) ? s.Host
+                : s.Hostname;
+
             var tlsSettings = new JsonObject
             {
                 ["serverName"] = serverName,
@@ -335,7 +351,7 @@ public static class V2rayConfigGenerator
             streamSettings["tlsSettings"] = tlsSettings;
         }
 
-        ApplyTransport(streamSettings, s.Network, s.Host, s.Path, s.ServiceName, s.Mode, s.Alpn, s.Fingerprint);
+        ApplyTransport(streamSettings, s.Network, s.Host, s.Path, s.ServiceName, s.Mode);
 
         return new JsonObject
         {
@@ -362,7 +378,7 @@ public static class V2rayConfigGenerator
     ///     <paramref name="streamSettings" />. "tcp" (and unknown values) emit nothing.
     /// </summary>
     private static void ApplyTransport(JsonObject streamSettings, string? network, string? host, string? path,
-        string? serviceName, string? mode, string? alpn, string? fingerprint)
+        string? serviceName, string? mode)
     {
         var net = string.IsNullOrEmpty(network) ? "tcp" : network.ToLowerInvariant();
         switch (net)

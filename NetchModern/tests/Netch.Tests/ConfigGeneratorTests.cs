@@ -84,6 +84,27 @@ public class ConfigGeneratorTests
     }
 
     [Fact]
+    public void Vless_Tls_NoSni_UsesHost()
+    {
+        var server = new VlessServer
+        {
+            Hostname = "1.2.3.4",
+            Port = 443,
+            UserId = "66666666-6666-6666-6666-666666666666",
+            Network = "ws",
+            Security = "tls",
+            Host = "cdn.example.com",
+            Path = "/ws"
+        };
+
+        var outbound = Outbound(V2rayConfigGenerator.Generate(server, 1080));
+        var stream = outbound["streamSettings"]!.AsObject();
+
+        Assert.Equal("tls", stream["security"]!.GetValue<string>());
+        Assert.Equal("cdn.example.com", stream["tlsSettings"]!["serverName"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void Trojan_Ws_EmitsWsSettings()
     {
         var server = new TrojanServer
@@ -104,6 +125,34 @@ public class ConfigGeneratorTests
         Assert.Equal("/tj", stream["wsSettings"]!["path"]!.GetValue<string>());
         Assert.Equal("cdn.example.com", stream["wsSettings"]!["host"]!.GetValue<string>());
         Assert.Equal("sni.example.com", stream["tlsSettings"]!["serverName"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Trojan_Ws_NoSni_UsesHostAsServerName_AndEmitsAlpnFp()
+    {
+        var server = new TrojanServer
+        {
+            Hostname = "1.2.3.4",
+            Port = 443,
+            Password = "p",
+            Network = "ws",
+            Host = "cdn.example.com",
+            Path = "/ws",
+            Alpn = "h2,http/1.1",
+            Fingerprint = "chrome"
+        };
+
+        var outbound = Outbound(V2rayConfigGenerator.Generate(server, 1080));
+        var stream = outbound["streamSettings"]!.AsObject();
+        var tls = stream["tlsSettings"]!.AsObject();
+
+        Assert.Equal("cdn.example.com", tls["serverName"]!.GetValue<string>());
+        Assert.Equal("chrome", tls["fingerprint"]!.GetValue<string>());
+
+        var alpn = tls["alpn"]!.AsArray();
+        Assert.Equal(2, alpn.Count);
+        Assert.Equal("h2", alpn[0]!.GetValue<string>());
+        Assert.Equal("http/1.1", alpn[1]!.GetValue<string>());
     }
 
     [Fact]

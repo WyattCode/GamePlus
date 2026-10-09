@@ -91,7 +91,6 @@ public class SubscriptionTests
         try
         {
             var servers = new ServerRepository();
-            var modes = new ModeRepository();
             var subs = new SubscriptionRepository(servers, new HttpClient());
 
             // Legacy subscription: no Id, remark blank, link used as the group key.
@@ -102,14 +101,13 @@ public class SubscriptionTests
             legacyServer.Group = legacy.Link;
             servers.Servers.Add(legacyServer);
 
-            var persistence = new JsonPersistenceService(servers, modes, subs, dir);
+            var persistence = new JsonPersistenceService(servers, subs, dir);
             await persistence.SaveAsync();
 
             // Reload from disk — migration should assign an Id and re-tag the server.
             var servers2 = new ServerRepository();
-            var modes2 = new ModeRepository();
             var subs2 = new SubscriptionRepository(servers2, new HttpClient());
-            var persistence2 = new JsonPersistenceService(servers2, modes2, subs2, dir);
+            var persistence2 = new JsonPersistenceService(servers2, subs2, dir);
             await persistence2.LoadAsync();
 
             Assert.Single(subs2.Subscriptions);
@@ -134,7 +132,6 @@ public class SubscriptionTests
         try
         {
             var servers = new ServerRepository();
-            var modes = new ModeRepository();
             var subs = new SubscriptionRepository(servers, new HttpClient());
 
             var a = new Subscription { Remark = "机场", Link = "https://a.example.com/sub" };
@@ -146,13 +143,12 @@ public class SubscriptionTests
             s1.Group = "机场";
             servers.Servers.Add(s1);
 
-            var persistence = new JsonPersistenceService(servers, modes, subs, dir);
+            var persistence = new JsonPersistenceService(servers, subs, dir);
             await persistence.SaveAsync();
 
             var servers2 = new ServerRepository();
-            var modes2 = new ModeRepository();
             var subs2 = new SubscriptionRepository(servers2, new HttpClient());
-            var persistence2 = new JsonPersistenceService(servers2, modes2, subs2, dir);
+            var persistence2 = new JsonPersistenceService(servers2, subs2, dir);
             await persistence2.LoadAsync();
 
             Assert.Equal(2, subs2.Subscriptions.Count);

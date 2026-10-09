@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using Netch.Core.Models;
-using Netch.Core.Models.Modes;
 using Netch.Core.Models.Servers;
 using Netch.Core.Models.Settings;
 
@@ -40,15 +39,6 @@ public interface IGameRepository
     void RemoveGame(Netch.Core.Models.Games.Game game);
 }
 
-public interface IModeRepository
-{
-    ObservableCollection<Mode> Modes { get; }
-
-    void Add(Mode mode);
-
-    void Remove(Mode mode);
-}
-
 public interface ISubscriptionRepository
 {
     ObservableCollection<Subscription> Subscriptions { get; }
@@ -78,10 +68,10 @@ public interface ISubscriptionRepository
 
 public interface IPersistenceService
 {
-    /// <summary>Loads persisted servers/modes/subscriptions, replacing seeded data when files exist.</summary>
+    /// <summary>Loads persisted servers/subscriptions, replacing seeded data when files exist.</summary>
     Task LoadAsync();
 
-    /// <summary>Persists the current servers/modes/subscriptions to disk.</summary>
+    /// <summary>Persists the current servers/subscriptions to disk.</summary>
     Task SaveAsync();
 }
 

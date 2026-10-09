@@ -174,15 +174,13 @@ public class GameRepositoryTests
         try
         {
             var servers = new ServerRepository();
-            var modes = new ModeRepository();
             var subs = new SubscriptionRepository(servers, new HttpClient());
-            var svc = new JsonPersistenceService(servers, modes, subs, dir);
+            var svc = new JsonPersistenceService(servers, subs, dir);
 
             var tasks = Enumerable.Range(0, 16).Select(_ => Task.Run(() => svc.SaveAsync())).ToArray();
             await Task.WhenAll(tasks);
 
             Assert.True(File.Exists(Path.Combine(dir, "servers.json")));
-            Assert.True(File.Exists(Path.Combine(dir, "modes.json")));
             Assert.True(File.Exists(Path.Combine(dir, "subscriptions.json")));
         }
         finally

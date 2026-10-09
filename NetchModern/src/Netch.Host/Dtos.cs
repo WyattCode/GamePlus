@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Netch.Core.Models;
 using Netch.Core.Models.Games;
@@ -23,26 +22,6 @@ internal record AccelStatusDto(string State, int Latency, double Loss, int Jitte
 internal record LogDto(string Ts, string Level, string Message);
 
 internal record SettingsDto(string Theme, string Language, bool MinimizeToTray);
-
-/// <summary>
-///     Assigns stable ids to reference-typed domain objects that have no id of their own. Kept for
-///     subscriptions (which now carry their own persisted <see cref="Subscription.Id" />, so this is only
-///     used as a fallback for objects created before the id was assigned).
-/// </summary>
-internal sealed class IdRegistry<T> where T : class
-{
-    private readonly ConditionalWeakTable<T, string> _ids = new();
-
-    public string IdOf(T item) => _ids.GetValue(item, static _ => Guid.NewGuid().ToString("N")[..12]);
-
-    public T? Resolve(string id, IEnumerable<T> pool)
-    {
-        foreach (var item in pool)
-            if (IdOf(item) == id)
-                return item;
-        return null;
-    }
-}
 
 internal static class Mapping
 {
@@ -93,7 +72,6 @@ internal static class Mapping
             game.ProxyDomains = new List<string>(existing.ProxyDomains);
             game.ProxyIps = new List<string>(existing.ProxyIps);
             game.ProxyProcesses = new List<string>(existing.ProxyProcesses);
-            game.OnlinePlayers = existing.OnlinePlayers;
             game.IsCustom = existing.IsCustom;
             game.IsFavorite = existing.IsFavorite;
         }

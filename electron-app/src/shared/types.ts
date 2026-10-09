@@ -24,12 +24,6 @@ export interface Server {
   delay: number
 }
 
-export interface GameServerOption {
-  id: string
-  /** Region label, e.g. "亚服", "美服". */
-  region: string
-}
-
 export interface Game {
   id: string
   name: string
@@ -92,13 +86,6 @@ export interface LogEntry {
   ts: string
   level: LogLevel
   message: string
-}
-
-export interface AppSettings {
-  language: 'zh-CN' | 'en-US'
-  theme: 'light' | 'dark' | 'system'
-  minimizeToTray: boolean
-  smartNode: boolean
 }
 
 /** Engine-side settings persisted by the C# backend (subset of the full AppSettings). */

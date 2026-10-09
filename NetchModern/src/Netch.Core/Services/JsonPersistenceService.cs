@@ -2,13 +2,12 @@ using System.Collections.ObjectModel;
 using System.Text.Json;
 using Netch.Core.Abstractions;
 using Netch.Core.Models;
-using Netch.Core.Models.Modes;
 using Netch.Core.Models.Servers;
 
 namespace Netch.Core.Services;
 
 /// <summary>
-///     Persists servers, modes and subscriptions as JSON under %AppData%\Game+\.
+///     Persists servers and subscriptions as JSON under %AppData%\Game+\.
 ///     On first run (no files) the seeded repository contents are written out as-is.
 /// </summary>
 public sealed class JsonPersistenceService : IPersistenceService
@@ -19,7 +18,6 @@ public sealed class JsonPersistenceService : IPersistenceService
     };
 
     private readonly string _dir;
-    private readonly IModeRepository _modes;
     private readonly IServerRepository _servers;
     private readonly ISubscriptionRepository _subscriptions;
 
@@ -27,30 +25,29 @@ public sealed class JsonPersistenceService : IPersistenceService
     // swaps (each write already uses a unique temp name, but the final File.Move ordering still matters).
     private readonly SemaphoreSlim _saveGate = new(1, 1);
 
-    public JsonPersistenceService(IServerRepository servers, IModeRepository modes, ISubscriptionRepository subscriptions)
-        : this(servers, modes, subscriptions, AppPaths.DataDirectory)
+    public JsonPersistenceService(IServerRepository servers, ISubscriptionRepository subscriptions)
+        : this(servers, subscriptions, AppPaths.DataDirectory)
     {
     }
 
     /// <summary>Test-friendly constructor: lets callers point the service at a temp directory.</summary>
-    public JsonPersistenceService(IServerRepository servers, IModeRepository modes, ISubscriptionRepository subscriptions, string directory)
+    public JsonPersistenceService(IServerRepository servers, ISubscriptionRepository subscriptions, string directory)
     {
         _servers = servers;
-        _modes = modes;
         _subscriptions = subscriptions;
 
         _dir = directory;
     }
 
     private string ServersPath => Path.Combine(_dir, "servers.json");
-    private string ModesPath => Path.Combine(_dir, "modes.json");
     private string SubscriptionsPath => Path.Combine(_dir, "subscriptions.json");
+
+    // NOTE: modes.json is no longer read or written. Any existing file on disk is left untouched.
 
     public async Task LoadAsync()
     {
         var loadedAny = false;
         loadedAny |= await LoadInto(ServersPath, _servers.Servers);
-        loadedAny |= await LoadInto(ModesPath, _modes.Modes);
         loadedAny |= await LoadInto(SubscriptionsPath, _subscriptions.Subscriptions);
 
         // Migrate BEFORE the orphan purge: legacy servers still carry the old group key (remark/link) and
@@ -136,14 +133,12 @@ public sealed class JsonPersistenceService : IPersistenceService
         // Snapshot on the calling thread before any await: the source ObservableCollections can be mutated
         // (subscription import / ping) on the UI thread, and enumerating one mid-write would throw.
         var servers = _servers.Servers.ToList();
-        var modes = _modes.Modes.ToList();
         var subscriptions = _subscriptions.Subscriptions.ToList();
 
         await _saveGate.WaitAsync();
         try
         {
             await WriteList(ServersPath, servers);
-            await WriteList(ModesPath, modes);
             await WriteList(SubscriptionsPath, subscriptions);
         }
         finally

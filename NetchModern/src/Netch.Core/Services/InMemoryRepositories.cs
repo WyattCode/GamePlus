@@ -3,19 +3,12 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using Netch.Core.Abstractions;
 using Netch.Core.Models;
-using Netch.Core.Models.Modes;
 using Netch.Core.Models.Servers;
 
 namespace Netch.Core.Services;
 
 public sealed class ServerRepository : IServerRepository
 {
-    public ServerRepository()
-    {
-        foreach (var s in SampleData.CreateServers())
-            Servers.Add(s);
-    }
-
     public ObservableCollection<Server> Servers { get; } = new();
 
     public void Add(Server server) => Servers.Add(server);
@@ -46,21 +39,6 @@ public sealed class ServerRepository : IServerRepository
     }
 }
 
-public sealed class ModeRepository : IModeRepository
-{
-    public ModeRepository()
-    {
-        foreach (var m in SampleData.CreateModes())
-            Modes.Add(m);
-    }
-
-    public ObservableCollection<Mode> Modes { get; } = new();
-
-    public void Add(Mode mode) => Modes.Add(mode);
-
-    public void Remove(Mode mode) => Modes.Remove(mode);
-}
-
 public sealed class SubscriptionRepository : ISubscriptionRepository
 {
     private readonly HttpClient _http;
@@ -70,9 +48,6 @@ public sealed class SubscriptionRepository : ISubscriptionRepository
     {
         _servers = servers;
         _http = http;
-
-        foreach (var s in SampleData.CreateSubscriptions())
-            Subscriptions.Add(s);
     }
 
     public ObservableCollection<Subscription> Subscriptions { get; } = new();

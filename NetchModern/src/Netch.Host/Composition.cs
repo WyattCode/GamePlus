@@ -27,7 +27,6 @@ internal static class Composition
         services.AddSingleton<IServerRepository, ServerRepository>();
         services.AddSingleton<IGameRepository>(sp =>
             new GameRepository(sp.GetRequiredService<ISettingsService>(), Path.Combine(AppPaths.DataDirectory, "custom-games.json"), sp.GetRequiredService<ILogService>()));
-        services.AddSingleton<IModeRepository, ModeRepository>();
         services.AddSingleton<ISubscriptionRepository, SubscriptionRepository>();
         services.AddSingleton<IPersistenceService, JsonPersistenceService>();
         services.AddSingleton<ISystemProxyService, SystemProxyService>();

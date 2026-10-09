@@ -9,6 +9,8 @@ namespace Netch.Core.Services;
 /// </summary>
 public sealed class JsonSettingsService : ISettingsService
 {
+    // Unknown properties (e.g. keys removed from AppSettings in newer builds) are ignored on load:
+    // System.Text.Json skips unmapped members by default and UnmappedMemberHandling is not set to Disallow.
     private static readonly JsonSerializerOptions Options = new()
     {
         WriteIndented = true

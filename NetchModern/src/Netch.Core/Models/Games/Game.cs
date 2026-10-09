@@ -57,9 +57,6 @@ public partial class Game : ObservableObject
     [JsonIgnore]
     public int RuleCount => ProxyDomains.Count + ProxyIps.Count;
 
-    /// <summary>Fake "N players accelerating now" number for the card.</summary>
-    public int OnlinePlayers { get; set; }
-
     /// <summary>User-added game (persisted, editable, deletable). Seed games are false.</summary>
     public bool IsCustom { get; set; }
 

@@ -1,15 +1,16 @@
 using System.Net;
-using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Netch.Core.Abstractions;
 using Netch.Core.Services;
 using Netch.Host;
 
-// Headless Game+ backend. Electron spawns this, reads the "GAMEPLUS_READY {port,token}" line from
-// stdout, then drives the engine over ws://127.0.0.1:<port>/ws?token=<token>.
+// Headless Game+ backend. Electron spawns this, reads the "GAMEPLUS_READY {port,pid}" line from stdout,
+// then drives the engine over ws://127.0.0.1:<port>/ws?token=<token>.
 
 // Native capture libraries (Redirector.bin, nfapi.dll, tun2socks.bin, RouteHelper.bin) live in ".\bin";
 // add it to the DLL search path so their P/Invokes resolve — same as the WPF app did in App.OnStartup.
@@ -46,44 +47,69 @@ catch (Exception e)
 // When elevated via UAC we lose the stdin/stdout pipe to the parent, so the handshake goes through a
 // file (--conn-file) and lifecycle is bound to the parent's PID (--parent-pid) instead of stdin EOF.
 string? connFile = null;
+string? tokenSha256 = null;
 var parentPid = 0;
 for (var i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--conn-file") connFile = args[i + 1];
     else if (args[i] == "--parent-pid") int.TryParse(args[i + 1], out parentPid);
+    else if (args[i] == "--token-sha256") tokenSha256 = args[i + 1];
 }
 
 var router = new RpcRouter(services);
-var token = Guid.NewGuid().ToString("N");
 
-// Pick a free port and bind, retrying if another process grabs it in the gap between choosing and binding.
-HttpListener? listener = null;
-var port = 0;
-for (var attempt = 0; attempt < 12 && listener is null; attempt++)
+// Security: the elevated host must not hand its bearer token to any same-user process via a world-readable
+// temp file. When the launcher supplies --token-sha256 we never know the token at all — we only verify the
+// SHA-256 of whatever the client presents. Fall back to a self-generated token (old launcher) for compat.
+string? generatedToken = null;
+byte[]? expectedTokenHash = null;
+if (!string.IsNullOrWhiteSpace(tokenSha256))
 {
-    port = FreeTcpPort();
-    var candidate = new HttpListener();
-    candidate.Prefixes.Add($"http://127.0.0.1:{port}/");
     try
     {
-        candidate.Start();
-        listener = candidate;
+        expectedTokenHash = Convert.FromHexString(tokenSha256.Trim());
     }
     catch
     {
-        candidate.Close();
+        Console.Error.WriteLine("host: invalid --token-sha256 value");
+        return;
     }
 }
-
-if (listener is null)
+else
 {
-    Console.Error.WriteLine("host: could not bind a loopback port");
+    generatedToken = Guid.NewGuid().ToString("N");
+}
+
+bool ValidateToken(string? presented)
+{
+    if (expectedTokenHash is not null)
+    {
+        if (string.IsNullOrEmpty(presented))
+            return false;
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(presented));
+        return CryptographicOperations.FixedTimeEquals(hash, expectedTokenHash);
+    }
+
+    return string.Equals(presented, generatedToken, StringComparison.Ordinal);
+}
+
+using var server = new LoopbackWebSocketServer(ValidateToken);
+int port;
+try
+{
+    port = server.Start();
+}
+catch (Exception e)
+{
+    Console.Error.WriteLine("host: could not bind a loopback port: " + e.Message);
     return;
 }
 
 // Include our PID so the (non-elevated) parent can poll our liveness — it has no child handle when we're
-// launched elevated via UAC.
-var conn = JsonSerializer.Serialize(new { port, token, pid = Environment.ProcessId });
+// launched elevated via UAC. The token is never written to disk: the launcher already knows it.
+var conn = generatedToken is null
+    ? JsonSerializer.Serialize(new { port, pid = Environment.ProcessId })
+    : JsonSerializer.Serialize(new { port, token = generatedToken, pid = Environment.ProcessId });
 
 // The line the parent waits for when we share a console (dev / non-elevated).
 Console.WriteLine("GAMEPLUS_READY " + conn);
@@ -114,39 +140,12 @@ if (parentPid > 0)
 else
     _ = WatchParentAsync(services);
 
+using var acceptCts = new CancellationTokenSource();
 try
 {
-    while (true)
-    {
-        var ctx = await listener.GetContextAsync();
-
-        if (!ctx.Request.IsWebSocketRequest || ctx.Request.Url?.AbsolutePath != "/ws")
-        {
-            ctx.Response.StatusCode = 404;
-            ctx.Response.Close();
-            continue;
-        }
-
-        // Localhost-only already, but require the one-time token as defence in depth.
-        if (ctx.Request.QueryString["token"] != token)
-        {
-            ctx.Response.StatusCode = 403;
-            ctx.Response.Close();
-            continue;
-        }
-
-        HttpListenerWebSocketContext wsCtx;
-        try
-        {
-            wsCtx = await ctx.AcceptWebSocketAsync(null);
-        }
-        catch
-        {
-            continue;
-        }
-
-        _ = new ClientSession(wsCtx.WebSocket, router, services).RunAsync();
-    }
+    await server.AcceptLoopAsync(
+        ws => new ClientSession(ws, router, services).RunAsync(),
+        acceptCts.Token);
 }
 catch (Exception e)
 {
@@ -156,15 +155,6 @@ catch (Exception e)
 [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
 [return: MarshalAs(UnmanagedType.Bool)]
 static extern bool SetDllDirectory(string lpPathName);
-
-static int FreeTcpPort()
-{
-    var l = new TcpListener(IPAddress.Loopback, 0);
-    l.Start();
-    var p = ((IPEndPoint)l.LocalEndpoint).Port;
-    l.Stop();
-    return p;
-}
 
 // If stdin closes, Electron (our parent) has exited — tear down and quit.
 static async Task WatchParentAsync(IServiceProvider sp)

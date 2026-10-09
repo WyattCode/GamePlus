@@ -7,7 +7,17 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()]
   },
   preload: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
+    // Sandboxed preloads must be CommonJS; package.json has "type": "module", so force CJS output and a
+    // .js extension (main/index.ts points at ../preload/index.js).
+    build: {
+      rollupOptions: {
+        output: {
+          format: 'cjs',
+          entryFileNames: '[name].js'
+        }
+      }
+    }
   },
   renderer: {
     resolve: {

@@ -50,6 +50,18 @@ function createTray(): void {
   tray.on('double-click', showMainWindow)
 }
 
+/** Open an http(s) URL externally; ignore anything else (file:, javascript:, custom schemes). */
+function openExternalIfAllowed(url: string): void {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      shell.openExternal(url)
+    }
+  } catch {
+    // not a valid URL — ignore
+  }
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1120,
@@ -63,8 +75,8 @@ function createWindow(): void {
     // Dev taskbar icon; the packaged build uses the exe's embedded icon.
     ...(is.dev ? { icon: join(app.getAppPath(), 'build', 'icon.png') } : {}),
     webPreferences: {
-      preload: join(__dirname, '../preload/index.mjs'),
-      sandbox: false,
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: true,
       contextIsolation: true
     }
   })
@@ -81,8 +93,25 @@ function createWindow(): void {
   mainWindow.on('closed', () => (mainWindow = null))
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    openExternalIfAllowed(details.url)
     return { action: 'deny' }
+  })
+
+  // Block in-app navigation away from our own renderer; open allowed http(s) links externally instead.
+  mainWindow.webContents.on('will-navigate', (e, url) => {
+    const current = mainWindow?.webContents.getURL() ?? ''
+    if (url === current) return
+    // Allow navigation within the dev server / packaged renderer origin.
+    try {
+      const target = new URL(url)
+      const base = new URL(current)
+      if (target.origin === base.origin && target.protocol !== 'file:') return
+      if (target.protocol === 'file:' && base.protocol === 'file:') return
+    } catch {
+      // fall through to deny
+    }
+    e.preventDefault()
+    openExternalIfAllowed(url)
   })
 
   // Reflect the OS theme so the renderer can honour "system". Remove the listener when the window closes

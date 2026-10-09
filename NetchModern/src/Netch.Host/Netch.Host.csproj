@@ -23,4 +23,8 @@
     <ProjectReference Include="..\Netch.Core\Netch.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Netch.Tests" />
+  </ItemGroup>
+
 </Project>

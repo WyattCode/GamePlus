@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Netch.Core\Netch.Core.csproj" />
+    <ProjectReference Include="..\..\src\Netch.Host\Netch.Host.csproj" />
   </ItemGroup>
 
 </Project>

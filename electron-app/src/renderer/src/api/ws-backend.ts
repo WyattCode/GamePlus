@@ -9,6 +9,15 @@ import type {
 } from '@shared/types'
 import type { Backend, SubMutation } from './backend'
 
+// Per-method call timeouts (ms). Long-running backend operations get a larger budget; everything else
+// uses the default. Without this a hung backend would leave the UI waiting forever.
+const DEFAULT_TIMEOUT_MS = 30_000
+const METHOD_TIMEOUTS: Record<string, number> = {
+  'subs.update': 90_000,
+  'servers.ping': 60_000,
+  'accel.start': 60_000
+}
+
 // Speaks the JSON-RPC/WebSocket protocol of the headless C# sidecar (see Netch.Host).
 // Requests: {id, method, params} -> {id, result|error}. Events: {event, data}.
 export class WebSocketBackend implements Backend {
@@ -134,8 +143,23 @@ export class WebSocketBackend implements Backend {
   private async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     await this.ensure()
     const id = String(++this.seq)
+    const timeoutMs = METHOD_TIMEOUTS[method] ?? DEFAULT_TIMEOUT_MS
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject })
+      const timer = setTimeout(() => {
+        if (this.pending.delete(id)) {
+          reject(new Error(`请求超时：${method}`))
+        }
+      }, timeoutMs)
+      this.pending.set(id, {
+        resolve: (v: unknown) => {
+          clearTimeout(timer)
+          resolve(v as T)
+        },
+        reject: (e: Error) => {
+          clearTimeout(timer)
+          reject(e)
+        }
+      })
       this.ws!.send(JSON.stringify({ id, method, params }))
     })
   }

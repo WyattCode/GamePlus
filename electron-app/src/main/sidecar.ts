@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'child_process'
+import { randomBytes, createHash } from 'crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs'
 import { connect } from 'net'
 import { join } from 'path'
@@ -128,9 +129,14 @@ export function startSidecar(): Promise<BackendConnection> {
 /** Non-elevated spawn with a stdout handshake (dev, and the fallback when UAC is declined). */
 function spawnDirect(): Promise<BackendConnection> {
   return new Promise<BackendConnection>((resolve, reject) => {
+    // Generate the bearer token here and hand the host only its SHA-256 digest, so the token never
+    // touches disk (the elevated path writes a conn file any same-user process could read).
+    const secret = randomBytes(32).toString('hex')
+    const digest = createHash('sha256').update(secret).digest('hex')
+
     let proc: ChildProcess
     try {
-      proc = spawn(sidecarPath(), [], { stdio: ['pipe', 'pipe', 'pipe'] })
+      proc = spawn(sidecarPath(), ['--token-sha256', digest], { stdio: ['pipe', 'pipe', 'pipe'] })
     } catch (e) {
       reject(e as Error)
       return
@@ -145,7 +151,8 @@ function spawnDirect(): Promise<BackendConnection> {
       if (line && !settled) {
         settled = true
         try {
-          resolve(JSON.parse(line.slice('GAMEPLUS_READY '.length)))
+          const info = JSON.parse(line.slice('GAMEPLUS_READY '.length)) as { port: number; pid?: number }
+          resolve({ port: info.port, token: secret, pid: info.pid })
         } catch (e) {
           reject(e as Error)
         }
@@ -166,7 +173,7 @@ function spawnDirect(): Promise<BackendConnection> {
   })
 }
 
-/** Elevated spawn: UAC-launch the host, read {port,token,pid} from a file it writes. */
+/** Elevated spawn: UAC-launch the host, read {port,pid} from a file it writes. */
 async function spawnElevatedWithFallback(): Promise<BackendConnection> {
   // Throttle UAC: never prompt more than once per 8s, so a crash-looping host can't spam the dialog.
   const sinceLast = Date.now() - lastElevateAt
@@ -186,15 +193,34 @@ async function spawnElevatedWithFallback(): Promise<BackendConnection> {
     // ignore
   }
 
+  // Generate the bearer token here; the elevated host only ever sees its SHA-256 digest, so the conn file
+  // (world-readable in %TEMP%) can't be used to drive the admin process.
+  const secret = randomBytes(32).toString('hex')
+  const digest = createHash('sha256').update(secret).digest('hex')
+
   // Start-Process -Verb RunAs triggers the UAC prompt; the elevated host writes connFile then serves.
+  // Build ONE Windows command-line string for the host's arguments (each quoted per CommandLineToArgvW
+  // rules) and pass it as a single -ArgumentList value. Passing a PowerShell array would NOT quote the
+  // elements — PowerShell joins them with spaces, so a %TEMP% path containing a space would be split into
+  // two argv entries and the host would receive a wrong --conn-file.
+  const hostArgs = [
+    '--conn-file',
+    connFile,
+    '--parent-pid',
+    String(process.pid),
+    '--token-sha256',
+    digest
+  ]
+  const hostCommandLine = hostArgs.map(quoteWindowsArg).join(' ')
+
   const psCommand =
-    `Start-Process -FilePath "${exe}" -Verb RunAs -WindowStyle Hidden ` +
-    `-ArgumentList '--conn-file','${connFile}','--parent-pid','${process.pid}'`
+    `Start-Process -FilePath ${psQuote(exe)} -Verb RunAs -WindowStyle Hidden ` +
+    `-ArgumentList ${psQuote(hostCommandLine)}`
 
   let launcherExited: number | null = null
   const launcher = spawn(
     'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', psCommand],
+    ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShell(psCommand)],
     { stdio: ['ignore', 'ignore', 'pipe'] }
   )
   launcher.stderr?.on('data', (d: Buffer) => console.error('[uac]', d.toString().trimEnd()))
@@ -206,13 +232,13 @@ async function spawnElevatedWithFallback(): Promise<BackendConnection> {
   while (Date.now() < deadline) {
     if (existsSync(connFile)) {
       try {
-        const data = JSON.parse(readFileSync(connFile, 'utf8')) as BackendConnection
+        const data = JSON.parse(readFileSync(connFile, 'utf8')) as { port: number; pid?: number }
         try {
-          rmSync(connFile) // don't leave the token sitting in temp
+          rmSync(connFile) // don't leave the handshake sitting in temp
         } catch {
           // ignore
         }
-        return data
+        return { port: data.port, token: secret, pid: data.pid }
       } catch {
         // file mid-write; retry
       }
@@ -227,6 +253,48 @@ async function spawnElevatedWithFallback(): Promise<BackendConnection> {
     await new Promise((r) => setTimeout(r, 300))
   }
   throw new Error('elevated sidecar start timeout')
+}
+
+/**
+ * Quote a single argument for a Windows command line, per the MSVCRT / CommandLineToArgvW rules:
+ * wrap in double quotes; double any run of backslashes that immediately precedes a double quote or the
+ * closing quote; escape embedded double quotes as `\"`. An empty argument becomes `""`.
+ */
+export function quoteWindowsArg(arg: string): string {
+  if (arg.length === 0) return '""'
+  if (!/[\s"]/.test(arg)) return arg
+
+  let result = '"'
+  let backslashes = 0
+  for (const ch of arg) {
+    if (ch === '\\') {
+      backslashes++
+      continue
+    }
+    if (ch === '"') {
+      // Double the pending backslashes, then escape the quote.
+      result += '\\'.repeat(backslashes * 2 + 1)
+      result += '"'
+      backslashes = 0
+      continue
+    }
+    result += '\\'.repeat(backslashes) + ch
+    backslashes = 0
+  }
+  // Backslashes before the closing quote must be doubled.
+  result += '\\'.repeat(backslashes * 2)
+  result += '"'
+  return result
+}
+
+/** Single-quote a PowerShell literal, escaping embedded single quotes by doubling them. */
+function psQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+/** Encode a PowerShell command as base64(UTF-16LE) for -EncodedCommand. */
+function encodePowerShell(command: string): string {
+  return Buffer.from(command, 'utf16le').toString('base64')
 }
 
 /**

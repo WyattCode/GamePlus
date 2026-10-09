@@ -25,8 +25,8 @@ for the backend architecture and [`electron-app/README.md`](electron-app/README.
 
 ## Quick start (development)
 
-Requirements: Windows 10 build 17763+ / Windows 11, [Node.js](https://nodejs.org) (with npm) and the
-[.NET 10 SDK](https://dotnet.microsoft.com).
+Requirements: Windows 10 build 17763+ / Windows 11, [Node.js](https://nodejs.org) **22.12 or newer**
+(with npm) and the [.NET 10 SDK](https://dotnet.microsoft.com).
 
 ```powershell
 # 1) Backend

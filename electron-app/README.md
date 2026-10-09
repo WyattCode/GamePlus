@@ -17,8 +17,12 @@ electron-app/
 ## Requirements
 
 - Windows 10 build 17763+ / Windows 11
-- [Node.js](https://nodejs.org) (with npm) and the [.NET 10 SDK](https://dotnet.microsoft.com)
-  (the latter only builds the backend; the packaged app needs no .NET runtime)
+- [Node.js](https://nodejs.org) **>= 22.12** (with npm) — required by the Electron 44 tooling
+  (`electron` ^44.7.0, `@electron/get` 5, `@electron/rebuild` 4, `node-abi` 4 all declare
+  `engines.node >= 22.12.0`; older versions such as Node 20 emit `EBADENGINE` warnings during
+  `npm ci`)
+- the [.NET 10 SDK](https://dotnet.microsoft.com) (only builds the backend; the packaged app needs
+  no .NET runtime)
 - Electron 44 (`electron` ^44.7.0) and electron-builder 26 (`electron-builder` ^26.17.0) — see
   [Dev](#dev) for the first-run binary download note
 

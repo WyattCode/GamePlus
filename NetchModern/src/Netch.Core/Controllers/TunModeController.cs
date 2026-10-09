@@ -21,6 +21,13 @@ public sealed class TunModeController : IModeController
     private const string TunGateway = "10.6.7.1";
     private const string TunNetmask = "255.255.255.0";
 
+    /// <summary>
+    ///     Handle of the bundled <c>wintun.dll</c> loaded by <see cref="PreloadWintun" />. Kept for the
+    ///     life of the process on purpose: the module must stay loaded so that tun2socks' later
+    ///     <c>LoadLibraryEx("wintun.dll", …)</c> resolves to it. Never freed.
+    /// </summary>
+    private static IntPtr _wintunHandle;
+
     private readonly string _dnsServer;
 
     /// <param name="dnsServer">
@@ -45,8 +52,8 @@ public sealed class TunModeController : IModeController
         Trace($"START admin={IsAdmin()} socks={socks5.Hostname}:{socks5.Port} handle={string.Join(',', mode.Handle)}");
         Trace("EnsureNativeAvailable");
         EnsureNativeAvailable();
-        Trace("CheckDriver (install matching wintun.dll into System32)");
-        CheckDriver();
+        Trace("PreloadWintun (load bundled wintun.dll into this process)");
+        PreloadWintun();
         _mode = mode;
         Trace("GetBestRouteTemplate");
         _outbound = NetRoute.GetBestRouteTemplate();
@@ -155,47 +162,45 @@ public sealed class TunModeController : IModeController
     }
 
     /// <summary>
-    ///     tun2socks.bin loads wintun.dll from System32. Make sure the copy there is the exact version we
-    ///     ship — a mismatched wintun.dll left by another VPN (WireGuard/Tailscale/…) crashes tun_init.
+    ///     Preloads OUR bundled <c>wintun.dll</c> into this process by full path, so that the
+    ///     <c>LoadLibraryEx("wintun.dll", …)</c> performed later inside tun2socks resolves to the
+    ///     already-loaded module instead of whatever happens to be in <c>System32</c>.
+    ///     <para>
+    ///         We deliberately never write to <c>System32\wintun.dll</c> any more: WireGuard, Tailscale
+    ///         and other VPNs/accelerators ship their own copy of that file, and silently replacing it
+    ///         (or having them replace ours) breaks whoever loses the race.
+    ///     </para>
+    ///     <para>
+    ///         Note that <c>Program.cs</c> calls <c>SetDllDirectory(bin)</c>, but that does not help here:
+    ///         wintun's Go loader uses
+    ///         <c>LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32</c>, which ignores the
+    ///         DLL directory set via <c>SetDllDirectory</c>. Preloading by full path is the only reliable
+    ///         way to pin the module.
+    ///     </para>
     /// </summary>
-    private static void CheckDriver()
+    private static void PreloadWintun()
     {
+        if (_wintunHandle != IntPtr.Zero)
+        {
+            Trace("wintun.dll already preloaded");
+            return;
+        }
+
         var baseDir = AppContext.BaseDirectory;
         var src = File.Exists(Path.Combine(baseDir, "bin", "wintun.dll"))
             ? Path.Combine(baseDir, "bin", "wintun.dll")
             : Path.Combine(baseDir, "wintun.dll");
-        var sys = Path.Combine(Environment.SystemDirectory, "wintun.dll");
 
         try
         {
-            if (File.Exists(sys) && HashEquals(src, sys))
-            {
-                Trace("wintun.dll in System32 already matches");
-                return;
-            }
-
-            File.Copy(src, sys, true);
-            Trace("wintun.dll installed into System32");
+            _wintunHandle = System.Runtime.InteropServices.NativeLibrary.Load(src);
+            Trace($"wintun.dll preloaded from {src}");
         }
         catch (Exception e)
         {
-            // A different wintun.dll may be locked by another running VPN.
-            Trace($"CheckDriver copy failed: {e.Message}");
-            throw new InvalidOperationException(
-                $"无法安装 wintun.dll 到系统目录（可能被其它 VPN 占用）：{e.Message}。请先关闭其它加速器/VPN 再试。");
+            Trace($"PreloadWintun failed: {e.Message}");
+            throw new InvalidOperationException($"无法加载内置 wintun.dll：{e.Message}");
         }
-    }
-
-    private static bool HashEquals(string a, string b)
-    {
-        try
-        {
-            using var sha = System.Security.Cryptography.SHA256.Create();
-            using var fa = File.OpenRead(a);
-            using var fb = File.OpenRead(b);
-            return sha.ComputeHash(fa).AsSpan().SequenceEqual(sha.ComputeHash(fb));
-        }
-        catch { return false; }
     }
 
     private static void EnsureNativeAvailable()

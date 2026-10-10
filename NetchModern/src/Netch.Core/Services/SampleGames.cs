@@ -23,7 +23,7 @@ public static partial class SampleGames
             Id = "epic", Name = "Epic 商城", EnglishName = "Epic Games", Icon = "🎁", AccentColor = "#57606A", Category = GameCategory.Platform,
             Aliases = { "epic", "e宝" }, Regions = { "国际服" }, Platforms = { "PC" },
             ProxyProcesses = { "EpicGamesLauncher.exe" },
-            ProxyDomains = { "epicgames.com", "unrealengine.com", "helpshift.com", "akamaihd.net" }
+            ProxyDomains = { "epicgames.com", "unrealengine.com", "helpshift.com" }
         };
         yield return new Game
         {
@@ -40,12 +40,13 @@ public static partial class SampleGames
         };
 
         // ---- Hot ----
+        // Sources: official support page domains, v2fly domain-list-community "mihoyo", installed client process names; reviewed 2026-10.
         yield return new Game
         {
             Id = "genshin", Name = "原神", EnglishName = "Genshin Impact", Icon = "🌟", AccentColor = "#4A90D9", Category = GameCategory.Hot,
             Aliases = { "ys", "yuanshen", "原神" }, Regions = { "国服", "国际服" }, Platforms = { "PC", "手游", "主机" },
             ProxyProcesses = { "GenshinImpact.exe", "YuanShen.exe" },
-            ProxyDomains = { "hoyoverse.com", "mihoyo.com", "yuanshen.com", "hoyoversegdk.com" }
+            ProxyDomains = { "hoyoverse.com", "mihoyo.com", "yuanshen.com", "hoyoversegdk.com", "hoyolab.com" }
         };
         yield return new Game
         {
@@ -54,41 +55,46 @@ public static partial class SampleGames
             ProxyProcesses = { "StarRail.exe" },
             ProxyDomains = { "hoyoverse.com", "mihoyo.com", "starrails.com" }
         };
+        // Sources: official support page domains, v2fly domain-list-community "riot", installed client process names; reviewed 2026-10.
         yield return new Game
         {
             Id = "valorant", Name = "无畏契约", EnglishName = "Valorant", Icon = "🎯", AccentColor = "#FF4655", Category = GameCategory.Hot,
-            Aliases = { "valorant", "瓦", "wf" }, Regions = { "国际服", "亚服" }, Platforms = { "PC" },
-            ProxyProcesses = { "VALORANT.exe", "RiotClientServices.exe" },
-            ProxyDomains = { "riotgames.com", "playvalorant.com", "riotcdn.net" }
+            Aliases = { "valorant", "瓦", "wf" }, Regions = { "国际服", "国服", "亚服" }, Platforms = { "PC" },
+            ProxyProcesses = { "VALORANT-Win64-Shipping.exe", "VALORANT.exe", "RiotClientServices.exe" },
+            ProxyDomains = { "riotgames.com", "playvalorant.com", "riotcdn.net", "pvp.net" }
         };
+        // Sources: official support page domains, v2fly domain-list-community "riot", installed client process names; reviewed 2026-10.
         yield return new Game
         {
             Id = "lol-global", Name = "英雄联盟（国际服）", EnglishName = "League of Legends", Icon = "⚔️", AccentColor = "#C89B3C", Category = GameCategory.Hot,
             Aliases = { "lol", "英雄联盟", "yxlm" }, Regions = { "国际服", "亚服" }, Platforms = { "PC" },
-            ProxyProcesses = { "LeagueofLegends.exe", "RiotClientServices.exe" },
-            ProxyDomains = { "riotgames.com", "leagueoflegends.com", "riotcdn.net" }
+            ProxyProcesses = { "League of Legends.exe", "LeagueClient.exe", "LeagueClientUx.exe", "RiotClientServices.exe" },
+            ProxyDomains = { "riotgames.com", "leagueoflegends.com", "riotcdn.net", "pvp.net", "lolstatic.com" }
         };
+        // Sources: official support page domains, v2fly domain-list-community "steam"/"valve", installed client process names; reviewed 2026-10.
         yield return new Game
         {
             Id = "cs2", Name = "反恐精英 2", EnglishName = "Counter-Strike 2", Icon = "💣", AccentColor = "#F0A500", Category = GameCategory.Hot,
             Aliases = { "cs2", "csgo", "cs" }, Regions = { "国际服", "国服" }, Platforms = { "PC" },
             ProxyProcesses = { "cs2.exe" },
-            ProxyDomains = { "steampowered.com", "steamserver.net", "valvesoftware.com", "steamcontent.com" }
+            ProxyDomains = { "steampowered.com", "steamserver.net", "valvesoftware.com", "steamcontent.com", "steamstatic.com" }
         };
+        // Sources: official support page domains, v2fly domain-list-community "ea", installed client process names; reviewed 2026-10.
         yield return new Game
         {
             Id = "apex", Name = "Apex 英雄", EnglishName = "Apex Legends", Icon = "🔺", AccentColor = "#DA292A", Category = GameCategory.Hot,
             Aliases = { "apex", "阿佩克斯" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
-            ProxyProcesses = { "r5apex.exe" },
-            ProxyDomains = { "ea.com", "easports.com", "respawn.com" }
+            ProxyProcesses = { "r5apex.exe", "r5apex_dx12.exe" },
+            ProxyDomains = { "ea.com", "easports.com", "respawn.com", "origin.com" }
         };
 
         // ---- PC ----
+        // Sources: official support page domains, v2fly domain-list-community "krafton", installed client process names; reviewed 2026-10.
         yield return new Game
         {
             Id = "pubg", Name = "绝地求生", EnglishName = "PUBG: Battlegrounds", Icon = "🪂", AccentColor = "#F2A900", Category = GameCategory.Pc,
             Aliases = { "pubg", "吃鸡", "chiji" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
-            ProxyProcesses = { "TslGame.exe" },
+            ProxyProcesses = { "TslGame.exe", "TslGame_BE.exe" },
             ProxyDomains = { "pubg.com", "krafton.com", "playbattlegrounds.com" }
         };
         yield return new Game
@@ -105,12 +111,13 @@ public static partial class SampleGames
             ProxyProcesses = { "Diablo IV.exe" },
             ProxyDomains = { "blizzard.com", "battle.net" }
         };
+        // Sources: official support page domains, v2fly domain-list-community "valve", installed client process names; reviewed 2026-10.
         yield return new Game
         {
             Id = "dota2", Name = "DOTA 2", EnglishName = "Dota 2", Icon = "🐉", AccentColor = "#C23C2A", Category = GameCategory.Pc,
-            Aliases = { "dota", "刀塔", "dt2" }, Regions = { "国际服" }, Platforms = { "PC" },
+            Aliases = { "dota", "刀塔", "dt2" }, Regions = { "国际服", "国服" }, Platforms = { "PC" },
             ProxyProcesses = { "dota2.exe" },
-            ProxyDomains = { "steampowered.com", "dota2.com", "steamserver.net" }
+            ProxyDomains = { "steampowered.com", "dota2.com", "steamserver.net", "valvesoftware.com", "steamcontent.com" }
         };
         yield return new Game
         {
@@ -223,12 +230,13 @@ public static partial class SampleGames
             ProxyProcesses = { "DeltaForceClient.exe", "DeltaForce.exe" },
             ProxyDomains = { "playdeltaforce.com", "tencentgames.com", "levelinfinite.com" }
         };
+        // Sources: official support page domains, v2fly domain-list-community "blizzard", installed client process names; reviewed 2026-10.
         yield return new Game
         {
             Id = "ow2", Name = "守望先锋 2", EnglishName = "Overwatch 2", Icon = "🧡", AccentColor = "#F99E1A", Category = GameCategory.Hot,
-            Aliases = { "ow", "守望先锋", "swxf" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
+            Aliases = { "ow", "守望先锋", "swxf" }, Regions = { "国际服", "国服", "亚服" }, Platforms = { "PC", "主机" },
             ProxyProcesses = { "Overwatch.exe" },
-            ProxyDomains = { "blizzard.com", "battle.net", "playoverwatch.com" }
+            ProxyDomains = { "blizzard.com", "battle.net", "playoverwatch.com", "battlenet.com.cn", "blzstatic.cn" }
         };
         yield return new Game
         {
@@ -246,12 +254,13 @@ public static partial class SampleGames
             ProxyProcesses = { "BF2042.exe" },
             ProxyDomains = { "ea.com", "easports.com", "battlefield.com" }
         };
+        // Sources: official support page domains, v2fly domain-list-community "square-enix", installed client process names; reviewed 2026-10.
         yield return new Game
         {
             Id = "ffxiv", Name = "最终幻想 14", EnglishName = "Final Fantasy XIV", Icon = "💠", AccentColor = "#3F6FB0", Category = GameCategory.Pc,
             Aliases = { "ff14", "ffxiv", "最终幻想" }, Regions = { "国际服", "国服" }, Platforms = { "PC", "主机" },
-            ProxyProcesses = { "ffxiv_dx11.exe" },
-            ProxyDomains = { "finalfantasyxiv.com", "square-enix.com", "ffxiv.com" }
+            ProxyProcesses = { "ffxiv_dx11.exe", "ffxiv.exe", "ffxivboot.exe", "ffxivboot64.exe", "ffxivlauncher.exe", "ffxivlauncher64.exe" },
+            ProxyDomains = { "finalfantasyxiv.com", "square-enix.com", "ffxiv.com", "sdo.com" }
         };
         yield return new Game
         {
@@ -556,6 +565,7 @@ public static partial class SampleGames
         };
 
         // ---- Monster Hunter / big 2024-2025 online titles ----
+        // Sources: official support page domains, v2fly domain-list-community "capcom", installed client process names; reviewed 2026-10.
         yield return new Game
         {
             Id = "mhwilds", Name = "怪物猎人：荒野", EnglishName = "Monster Hunter Wilds", Icon = "🦕", AccentColor = "#C77B3B", Category = GameCategory.Hot,

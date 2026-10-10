@@ -12,6 +12,7 @@ public sealed class GameRepository : IGameRepository
     private readonly string _customPath;
     private readonly ISettingsService _settings;
     private readonly ILogService? _log;
+    private readonly Func<IEnumerable<Game>> _seedGames;
 
     public GameRepository(ISettingsService settings)
         : this(settings, Path.Combine(AppPaths.DataDirectory, "custom-games.json"), null)
@@ -20,12 +21,22 @@ public sealed class GameRepository : IGameRepository
 
     /// <summary>Test-friendly constructor: lets callers point the repository at a temp file.</summary>
     public GameRepository(ISettingsService settings, string customPath, ILogService? log = null)
+        : this(settings, customPath, log, SampleGames.Create)
+    {
+    }
+
+    /// <summary>
+    ///     Test-friendly constructor with an injectable seed source (used by the remote rule library).
+    /// </summary>
+    public GameRepository(ISettingsService settings, string customPath, ILogService? log,
+        Func<IEnumerable<Game>> seedGames)
     {
         _settings = settings;
         _customPath = customPath;
         _log = log;
+        _seedGames = seedGames;
 
-        foreach (var game in SampleGames.Create())
+        foreach (var game in _seedGames())
             Games.Add(game);
 
         foreach (var game in LoadCustom())
@@ -40,6 +51,36 @@ public sealed class GameRepository : IGameRepository
     }
 
     public ObservableCollection<Game> Games { get; } = new();
+
+    /// <summary>
+    ///     Replaces every non-custom game with <paramref name="games" />, keeping custom games after the
+    ///     seeds (as at construction) and re-applying favourites from settings. Incoming games whose id
+    ///     collides with an existing custom game are skipped.
+    /// </summary>
+    public void ReplaceSeedGames(IEnumerable<Game> games)
+    {
+        var customs = Games.Where(g => g.IsCustom).ToList();
+        var customIds = new HashSet<string>(customs.Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
+
+        var seeds = new List<Game>();
+        foreach (var game in games)
+        {
+            if (string.IsNullOrEmpty(game.Id) || customIds.Contains(game.Id))
+                continue;
+            game.IsCustom = false;
+            seeds.Add(game);
+        }
+
+        Games.Clear();
+        foreach (var game in seeds)
+            Games.Add(game);
+        foreach (var game in customs)
+            Games.Add(game);
+
+        var favorites = _settings.Settings.FavoriteGames;
+        foreach (var game in Games)
+            game.IsFavorite = favorites.Contains(game.Id);
+    }
 
     public void ToggleFavorite(Game game)
     {

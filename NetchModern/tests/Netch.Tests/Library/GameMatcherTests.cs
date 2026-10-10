@@ -102,4 +102,31 @@ public class GameMatcherTests
         Assert.Single(result);
         Assert.Equal("steam:730", result[0].Installed.SourceId);
     }
+
+    [Fact]
+    public void IgnoresShortAliases()
+    {
+        // "ys" normalizes to a 2-char key — too generic to match by name.
+        var ys = MakeGame("ys", "伊苏", "Ys", GameCategory.Pc);
+        ys.Aliases = new List<string> { "ys" };
+        var library = new[] { ys };
+        var installed = new[] { Installed("Steam", "steam:1", "Ys") };
+
+        var result = GameMatcher.Match(installed, library);
+
+        Assert.Single(result);
+        Assert.Null(result[0].GameId);
+    }
+
+    [Fact]
+    public void IgnoresShortInstalledNames()
+    {
+        var library = new[] { MakeGame("wf", "战甲", "Warframe", GameCategory.Pc) };
+        var installed = new[] { Installed("Steam", "steam:2", "wf") };
+
+        var result = GameMatcher.Match(installed, library);
+
+        Assert.Single(result);
+        Assert.Null(result[0].GameId);
+    }
 }

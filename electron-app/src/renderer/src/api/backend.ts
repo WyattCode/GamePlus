@@ -343,7 +343,8 @@ class MockBackend implements Backend {
   private mockSettings: EngineSettings = {
     theme: 'light',
     language: 'System',
-    minimizeToTray: true
+    minimizeToTray: true,
+    rulesUrl: ''
   }
 
   async addServerFromLink(link: string): Promise<Server[]> {

@@ -58,6 +58,33 @@ for (var i = 0; i < args.Length - 1; i++)
 
 var router = new RpcRouter(services);
 
+// Remote game rules: refresh in the background shortly after startup when a URL is configured. Failures
+// are logged and swallowed — the bundled/cached rules stay active.
+var rulesUrl = services.GetRequiredService<ISettingsService>().Settings.RulesUrl;
+if (!string.IsNullOrWhiteSpace(rulesUrl))
+{
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(10));
+            await router.RefreshRulesAsync(CancellationToken.None);
+        }
+        catch (Exception e)
+        {
+            try
+            {
+                services.GetRequiredService<ILogService>()
+                    .Log(Netch.Core.Enums.LogLevel.Warning, $"后台更新游戏规则失败：{e.Message}");
+            }
+            catch
+            {
+                // best effort
+            }
+        }
+    });
+}
+
 // Security: the elevated host must not hand its bearer token to any same-user process via a world-readable
 // temp file. When the launcher supplies --token-sha256 we never know the token at all — we only verify the
 // SHA-256 of whatever the client presents. Fall back to a self-generated token (old launcher) for compat.

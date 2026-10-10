@@ -7,6 +7,7 @@ using Netch.Core.Models.Servers;
 using Netch.Core.Services;
 using Netch.Core.Services.Diagnostics;
 using Netch.Core.Services.Library;
+using Netch.Core.Services.Rules;
 
 namespace Netch.Host;
 
@@ -26,9 +27,25 @@ internal static class Composition
 
         services.AddSingleton<ILogService, LogService>();
         services.AddSingleton<ISettingsService, JsonSettingsService>();
+
+        // Remote-updatable game rules: the cache lives next to the other data files. LoadInitial() runs
+        // once when the singleton is first resolved (before the repository reads its seeds).
+        services.AddSingleton(sp =>
+        {
+            var svc = new GameRulesService(
+                sp.GetRequiredService<HttpClient>(),
+                Path.Combine(AppPaths.DataDirectory, "game-rules.json"),
+                sp.GetRequiredService<ILogService>());
+            svc.LoadInitial();
+            return svc;
+        });
+
         services.AddSingleton<IServerRepository, ServerRepository>();
         services.AddSingleton<IGameRepository>(sp =>
-            new GameRepository(sp.GetRequiredService<ISettingsService>(), Path.Combine(AppPaths.DataDirectory, "custom-games.json"), sp.GetRequiredService<ILogService>()));
+            new GameRepository(sp.GetRequiredService<ISettingsService>(),
+                Path.Combine(AppPaths.DataDirectory, "custom-games.json"),
+                sp.GetRequiredService<ILogService>(),
+                sp.GetRequiredService<GameRulesService>().CreateGames));
         services.AddSingleton<ISubscriptionRepository, SubscriptionRepository>();
         services.AddSingleton<IPersistenceService, JsonPersistenceService>();
         services.AddSingleton<ISystemProxyService, SystemProxyService>();

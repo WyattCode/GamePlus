@@ -24,7 +24,7 @@ internal record AccelStatusDto(string State, int Latency, double Loss, int Jitte
 
 internal record LogDto(string Ts, string Level, string Message);
 
-internal record SettingsDto(string Theme, string Language, bool MinimizeToTray);
+internal record SettingsDto(string Theme, string Language, bool MinimizeToTray, string RulesUrl);
 
 internal record EffectSnapshotDto(int Latency, double Loss, int Jitter, int Samples);
 
@@ -49,6 +49,11 @@ internal record DetectedGameDto(string Source, string SourceId, string Name, str
     string[] Executables, string? GameId, string? GameName, string? MatchedBy);
 
 internal record LibraryScanDto(DetectedGameDto[] Games, string[] Errors, string ScannedAt);
+
+internal record RulesStatusDto(int Version, string Source, int GameCount, string? LastCheck,
+    string? LastError, string? LastResult, string Url);
+
+internal record RulesUpdateDto(string Status, string Message, int Version, GameDto[] Games);
 
 internal static class Mapping
 {
@@ -189,7 +194,7 @@ internal static class Mapping
         new(e.Timestamp.ToString("o"), e.Level.ToString().ToLowerInvariant(), e.Message);
 
     public static SettingsDto ToDto(Netch.Core.Models.Settings.AppSettings s) =>
-        new(s.Theme.ToString().ToLowerInvariant(), s.Language, s.MinimizeToTray);
+        new(s.Theme.ToString().ToLowerInvariant(), s.Language, s.MinimizeToTray, s.RulesUrl);
 
     public static EffectSnapshotDto? ToDto(EffectSnapshot? s) =>
         s is null ? null : new EffectSnapshotDto(s.Latency, s.Loss, s.Jitter, s.Samples);

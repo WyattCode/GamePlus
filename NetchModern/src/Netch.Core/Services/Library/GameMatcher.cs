@@ -15,6 +15,12 @@ public record DetectedGame(
 /// </summary>
 public static class GameMatcher
 {
+    /// <summary>
+    ///     Minimum length of a normalized name key. Shorter keys (e.g. "ys", "瓦", "wf") are too generic and
+    ///     cause false positives, so they are never indexed nor looked up.
+    /// </summary>
+    private const int MinNameKeyLength = 3;
+
     /// <summary>Source preference when deduping multiple installed entries for the same library game.</summary>
     private static int SourceRank(string source) => source switch
     {
@@ -47,7 +53,7 @@ public static class GameMatcher
             foreach (var candidate in NameCandidates(game))
             {
                 var key = Normalize(candidate);
-                if (key.Length > 0 && !byName.ContainsKey(key))
+                if (key.Length >= MinNameKeyLength && !byName.ContainsKey(key))
                     byName[key] = game;
             }
         }
@@ -78,7 +84,7 @@ public static class GameMatcher
             if (matched is null)
             {
                 var key = Normalize(item.Name);
-                if (key.Length > 0 && byName.TryGetValue(key, out var g))
+                if (key.Length >= MinNameKeyLength && byName.TryGetValue(key, out var g))
                 {
                     matched = g;
                     matchedBy = "名称";

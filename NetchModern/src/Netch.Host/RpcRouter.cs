@@ -7,6 +7,7 @@ using Netch.Core.Models.Servers;
 using Netch.Core.Services;
 using Netch.Core.Services.Diagnostics;
 using Netch.Core.Services.Library;
+using Netch.Core.Services.Rules;
 
 namespace Netch.Host;
 
@@ -43,6 +44,7 @@ internal sealed class RpcRouter
     private ILogService Logs => _sp.GetRequiredService<ILogService>();
     private DiagnosticsService Diagnostics => _sp.GetRequiredService<DiagnosticsService>();
     private GameLibraryScanner LibraryScanner => _sp.GetRequiredService<GameLibraryScanner>();
+    private GameRulesService Rules => _sp.GetRequiredService<GameRulesService>();
 
     public Task<object?> DispatchAsync(string method, JsonElement @params, CancellationToken ct) =>
         DispatchCoreAsync(method, @params, ct);
@@ -381,6 +383,18 @@ internal sealed class RpcRouter
                     return Mapping.ToDto(SettingsSvc.Settings);
                 }, ct);
 
+            case "rules.status":
+                return await WithStateValue(() =>
+                {
+                    var st = Rules.Status;
+                    return new RulesStatusDto(st.Version, st.Source, st.GameCount,
+                        st.LastCheckUtc?.ToString("o"), st.LastError, st.LastResult,
+                        SettingsSvc.Settings.RulesUrl ?? "");
+                }, ct);
+
+            case "rules.update":
+                return await RefreshRulesAsync(ct);
+
             case "update.check":
             {
                 // Pure network I/O — no shared state, so no lock.
@@ -405,6 +419,36 @@ internal sealed class RpcRouter
             default:
                 throw new InvalidOperationException($"unknown method: {method}");
         }
+    }
+
+    /// <summary>
+    ///     Downloads the configured rules file and, when it is newer, swaps the seed games. Network I/O
+    ///     happens outside the state lock; only the swap is done under it. Also used by the startup
+    ///     background refresh in Program.cs.
+    /// </summary>
+    internal async Task<RulesUpdateDto> RefreshRulesAsync(CancellationToken ct)
+    {
+        var url = SettingsSvc.Settings.RulesUrl ?? "";
+        if (string.IsNullOrWhiteSpace(url))
+            throw new InvalidOperationException("未配置规则更新地址");
+
+        var result = await Rules.UpdateAsync(url.Trim(), ct);
+
+        if (result.Status == RulesUpdateStatus.Updated)
+        {
+            return await WithStateValue(() =>
+            {
+                Games.ReplaceSeedGames(Rules.CreateGames());
+                return new RulesUpdateDto("updated", result.Message, result.Version,
+                    Games.Games.Select(Mapping.ToDto).ToArray());
+            }, ct);
+        }
+
+        var status = result.Status == RulesUpdateStatus.UpToDate ? "upToDate" : "failed";
+        return await WithStateValue(
+            () => new RulesUpdateDto(status, result.Message, result.Version,
+                Games.Games.Select(Mapping.ToDto).ToArray()),
+            ct);
     }
 
     /// <summary>Builds the effect report DTO, or an empty "not started" report when no monitor is wired up.</summary>
@@ -467,6 +511,24 @@ internal sealed class RpcRouter
             s.Language = language;
         if (JsonParams.OptionalBool(p, "minimizeToTray") is { } minimizeToTray)
             s.MinimizeToTray = minimizeToTray;
+        if (JsonParams.OptionalString(p, "rulesUrl") is { } rulesUrl)
+        {
+            // Validate BEFORE mutating anything so a bad value can't leave settings half-applied.
+            var trimmed = rulesUrl.Trim();
+            if (trimmed.Length > 0 && !IsValidRulesUrl(trimmed))
+                throw new InvalidOperationException("规则更新地址必须是 https:// 开头的网址");
+            s.RulesUrl = trimmed;
+        }
+    }
+
+    /// <summary>https:// anywhere; plain http:// only for loopback hosts (local testing).</summary>
+    private static bool IsValidRulesUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return false;
+        if (uri.Scheme == Uri.UriSchemeHttps)
+            return true;
+        return uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback;
     }
 
     /// <summary>Formats a version as Major.Minor.Build (Build clamped to &gt;= 0), e.g. "3.0.0".</summary>

@@ -93,6 +93,8 @@ export interface EngineSettings {
   theme: 'light' | 'dark' | 'system'
   language: string
   minimizeToTray: boolean
+  /** Remote game-rules URL; empty = the feature is disabled (no network traffic). */
+  rulesUrl: string
 }
 
 /** Connection state of the C# backend sidecar. */

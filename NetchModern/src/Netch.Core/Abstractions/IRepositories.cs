@@ -37,6 +37,12 @@ public interface IGameRepository
     void UpdateCustomGame(Netch.Core.Models.Games.Game game);
 
     void RemoveGame(Netch.Core.Models.Games.Game game);
+
+    /// <summary>
+    ///     Replaces all non-custom (seed) games with <paramref name="games" />, keeping custom games and
+    ///     re-applying favourites. Used when the remote rule library is refreshed.
+    /// </summary>
+    void ReplaceSeedGames(IEnumerable<Netch.Core.Models.Games.Game> games);
 }
 
 public interface ISubscriptionRepository

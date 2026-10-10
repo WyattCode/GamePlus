@@ -181,6 +181,20 @@ internal sealed class RpcRouter
             case "effect.get":
                 return EffectDto();
 
+            case "effect.baseline":
+            {
+                var gameId = JsonParams.RequiredString(@params, "gameId");
+                if (string.IsNullOrWhiteSpace(gameId))
+                    throw new InvalidOperationException("游戏 id 不能为空");
+                // The store owns its own lock (like effect.remeasure), so no state lock is needed here.
+                var stored = Baselines.Get(gameId);
+                return new BaselineInfoDto(
+                    stored is null
+                        ? null
+                        : new EffectSnapshotDto(stored.Latency, stored.Loss, stored.Jitter, stored.Samples),
+                    stored?.MeasuredUtc.ToString("o"));
+            }
+
             case "effect.remeasure":
             {
                 var gameId = JsonParams.RequiredString(@params, "gameId");
@@ -1333,8 +1347,8 @@ internal sealed class RpcRouter
         }
 
         // Read the penalty + per-game server choice under the state lock. GameServerChoice is a
-        // ConcurrentDictionary (written by games.setServer under the same lock, read lock-free by the
-        // accelerator's history recorder), so reads here are safe either way. No network I/O inside
+        // ConcurrentDictionary (written by games.setServer under the same lock, read lock-free by
+        // the accelerator's history recorder), so reads here are safe either way. No network I/O inside
         // this block.
         var (penalty, choice) = await WithStateValue(() =>
         {

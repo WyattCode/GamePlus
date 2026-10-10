@@ -44,6 +44,9 @@ internal record EffectReportDto(bool HasTarget, string? Target, EffectSnapshotDt
     EffectSnapshotDto? Current, int? LatencyPct, string Summary, EffectPointDto[] Series, bool Measuring,
     string? BaselineMeasuredAt, bool BaselineFromCache);
 
+/// <summary>Response of effect.baseline: the stored direct baseline for one game, or nulls when never measured.</summary>
+internal record BaselineInfoDto(EffectSnapshotDto? Baseline, string? MeasuredAt);
+
 internal record RankedNodeDto(string Id, string Remark, string Type, int Delay, string? Region,
     string? RegionName, bool RegionMatch, int Score, string Note);
 

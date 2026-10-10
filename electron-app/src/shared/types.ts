@@ -233,6 +233,13 @@ export interface EffectReport {
   baselineFromCache?: boolean
 }
 
+/** Stored direct-connection baseline for one game (effect.baseline RPC); both fields null when never measured. */
+export interface BaselineInfo {
+  baseline: EffectSnapshot | null
+  /** ISO timestamp of when the baseline was measured; null when unknown. */
+  measuredAt: string | null
+}
+
 /** One ranked candidate node from the smart-routing ranker. */
 export interface RankedNode {
   id: string
@@ -498,7 +505,7 @@ export interface AccelSession {
   nodeName: string | null
   /** Capture mode used, e.g. "process" / "tun" / "proxy". */
   mode: string | null
-  /** Per-game server choice ("cn" | "intl"); null when the game has no choice. */
+  /** Per-game server choice ("cn" | "intl"); null for games without a 国服/国际服 choice. */
   serverChoice: string | null
   /** ISO timestamp of when acceleration started. */
   startedAt: string

@@ -7,12 +7,13 @@ import EffectChart from '@/components/EffectChart.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
 import { gameColor } from '@/utils/gameIcon'
 import { backend } from '@/api/backend'
+import { adviseBeforeAccel, adviseDuringAccel, type EffectAdvice } from '@/utils/effectAdvice'
 import { useAccelStore } from '@/stores/accel'
 import { useDiagnosticsStore } from '@/stores/diagnostics'
 import { useLibraryStore } from '@/stores/library'
 import { errorMessage, useToastStore } from '@/stores/toast'
 import { fmtDelay, fmtDuration, fmtLatency, fmtRate } from '@/utils/format'
-import type { CaptureMode, CaptureModeKind } from '@shared/types'
+import type { BaselineInfo, CaptureMode, CaptureModeKind } from '@shared/types'
 
 const accel = useAccelStore()
 const diagnostics = useDiagnosticsStore()
@@ -128,6 +129,49 @@ async function remeasure(): Promise<void> {
     remeasuring.value = false
   }
 }
+
+// --- direct baseline hint (网络良好，可不加速) ---
+
+// Stored direct baseline for the selected game, fetched while idle; null while loading/unknown.
+const baselineInfo = ref<BaselineInfo | null>(null)
+// Game id for which the user dismissed the hint; switching games shows it again.
+const baselineDismissedFor = ref<string | null>(null)
+// Guards against out-of-order getBaseline responses when switching games quickly.
+let baselineSeq = 0
+
+watch(
+  [() => accel.selectedGame?.id, running],
+  async ([gameId, isRunning]) => {
+    baselineInfo.value = null
+    if (!gameId || isRunning) return
+    const seq = ++baselineSeq
+    try {
+      const info = await backend.getBaseline(gameId)
+      if (seq === baselineSeq) baselineInfo.value = info
+    } catch {
+      // Advisory only: silently ignore fetch failures.
+    }
+  },
+  { immediate: true }
+)
+
+const beforeAdvice = computed<EffectAdvice | null>(() => {
+  if (running.value || !baselineInfo.value) return null
+  if (baselineDismissedFor.value === accel.selectedGame?.id) return null
+  return adviseBeforeAccel(baselineInfo.value.baseline)
+})
+
+function dismissBaselineHint(): void {
+  baselineDismissedFor.value = accel.selectedGame?.id ?? null
+}
+
+// Live "加速效果不明显" hint while accelerating, from the effect report's before/after snapshots.
+const duringAdvice = computed<EffectAdvice | null>(() => {
+  if (accel.status.state !== 'accelerating') return null
+  const e = effect.value
+  if (!e) return null
+  return adviseDuringAccel(e.baseline, e.current)
+})
 
 // --- smart routing (P2) ---
 
@@ -530,6 +574,18 @@ watch(
           </label>
         </div>
 
+        <!-- Direct baseline hint: 网络良好，可不加速 (advisory only, dismissible per game) -->
+        <div v-if="beforeAdvice" class="advice-banner">
+          <AppIcon name="check" :size="14" />
+          <div class="advice-text">
+            <div class="advice-title">{{ beforeAdvice.title }}</div>
+            <div class="advice-detail">{{ beforeAdvice.detail }}</div>
+          </div>
+          <button class="advice-close" title="关闭" @click="dismissBaselineHint">
+            <AppIcon name="close" :size="12" />
+          </button>
+        </div>
+
         <button class="action" :class="{ stop: running }" :disabled="busy" @click="toggle">
           <AppIcon name="bolt" :size="22" />
           {{ buttonText }}
@@ -565,6 +621,13 @@ watch(
           基于应用内对游戏域名的 TLS 握手延迟测得，仅供参考，不等同于游戏内显示的延迟。
         </div>
         <div v-if="effectCompare" class="effect-compare muted small">{{ effectCompare }}</div>
+        <div v-if="duringAdvice" class="effect-advice">
+          <AppIcon name="warning" :size="14" />
+          <div class="advice-text">
+            <div class="advice-title">{{ duringAdvice.title }}</div>
+            <div class="advice-detail">{{ duringAdvice.detail }}</div>
+          </div>
+        </div>
         <div v-if="effect.baselineFromCache && baselineMeasuredText" class="muted small effect-baseline">
           直连基线测于 {{ baselineMeasuredText }}
         </div>
@@ -796,6 +859,57 @@ watch(
 }
 .capture-hint.warn {
   color: var(--warn);
+}
+
+/* advisory hints (网络良好，可不加速 / 加速效果不明显) */
+.advice-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  background: rgba(23, 178, 106, 0.12);
+  font-size: 12px;
+  color: var(--ok);
+}
+.advice-banner .advice-close {
+  color: var(--ok);
+}
+.effect-advice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  background: rgba(255, 193, 7, 0.12);
+  font-size: 12px;
+  color: var(--warn);
+}
+.advice-text {
+  flex: 1;
+  min-width: 0;
+}
+.advice-title {
+  font-weight: 600;
+}
+.advice-detail {
+  margin-top: 2px;
+  color: var(--text-2);
+  word-break: break-word;
+}
+.advice-close {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.advice-close:hover {
+  opacity: 1;
 }
 
 /* per-game server choice */

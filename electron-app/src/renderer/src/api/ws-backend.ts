@@ -4,6 +4,7 @@ import type {
   AutoAccelEvent,
   AutoStartState,
   AutoSwitchEvent,
+  BaselineInfo,
   CaptureMode,
   DiagnosticBundle,
   DiagnosticReport,
@@ -263,6 +264,10 @@ export class WebSocketBackend implements Backend {
 
   remeasureEffect(gameId: string): Promise<{ ok: boolean }> {
     return this.call('effect.remeasure', { gameId })
+  }
+
+  getBaseline(gameId: string): Promise<BaselineInfo> {
+    return this.call('effect.baseline', { gameId })
   }
 
   onAutoAccel(cb: (e: AutoAccelEvent) => void): () => void {

@@ -5,6 +5,7 @@ import type {
   AutoAccelEvent,
   AutoStartState,
   AutoSwitchEvent,
+  BaselineInfo,
   CaptureMode,
   CaptureModeKind,
   DetectedGame,
@@ -76,6 +77,8 @@ export interface Backend {
   onEffect(cb: (r: EffectReport) => void): () => void
   /** Marks the game to re-measure its direct baseline on the next acceleration. */
   remeasureEffect(gameId: string): Promise<{ ok: boolean }>
+  /** Returns the stored direct-connection baseline for a game (null when never measured). */
+  getBaseline(gameId: string): Promise<BaselineInfo>
   runDiagnostics(opts: {
     gameId?: string | null
     nodeId?: string | null
@@ -470,6 +473,25 @@ class MockBackend implements Backend {
     return { ok: true }
   }
 
+  async getBaseline(gameId: string): Promise<BaselineInfo> {
+    // Deterministic per-game mock: 'valorant' has a good direct baseline (the "可不加速" path);
+    // every other odd-indexed game has a poor one; the rest were never measured.
+    if (gameId === 'valorant') {
+      return {
+        baseline: { latency: 28, loss: 0, jitter: 3, samples: 5 },
+        measuredAt: new Date(Date.now() - 2 * 24 * 3_600_000).toISOString()
+      }
+    }
+    const idx = this.mockGames.findIndex((g) => g.id === gameId)
+    if (idx > 0 && idx % 2 === 1) {
+      return {
+        baseline: { latency: 140, loss: 3.2, jitter: 18, samples: 6 },
+        measuredAt: new Date(Date.now() - 5 * 24 * 3_600_000).toISOString()
+      }
+    }
+    return { baseline: null, measuredAt: null }
+  }
+
   private mockServers: Server[] = structuredClone(sampleServers)
   private mockSubs: Subscription[] = structuredClone(sampleSubscriptions)
   private mockGames: Game[] = structuredClone(sampleGames)
@@ -569,7 +591,7 @@ class MockBackend implements Backend {
     return structuredClone(this.mockSubs)
   }
   async removeSubscription(id: string): Promise<{ subscriptions: Subscription[]; servers: Server[] }> {
-    this.mockSubs = this.mockSubs.filter((s) => s.id !== id)
+    this.mockSubs = this.mockSubs.filter((x) => x.id !== id)
     return { subscriptions: structuredClone(this.mockSubs), servers: structuredClone(this.mockServers) }
   }
   async updateSubscription(id: string): Promise<{ subscriptions: Subscription[]; servers: Server[] }> {

@@ -12,6 +12,7 @@ import { useOnboardingStore } from '@/stores/onboarding'
 import { useToastStore, errorMessage } from '@/stores/toast'
 import { backend } from '@/api/backend'
 import { getPrefs, setPrefs } from '@/api/prefs'
+import { DEFAULT_RELEASE_CHANNEL } from '@shared/release-channel'
 import type { AutoStartState, EngineSettings } from '@shared/types'
 
 const app = useAppStore()
@@ -67,6 +68,14 @@ const rulesLastCheck = computed<string | null>(() => {
   const d = new Date(t)
   return Number.isNaN(d.getTime()) ? t : d.toLocaleString()
 })
+
+const rulesDefaultApplied = computed(
+  () => rulesUrl.value.trim() === DEFAULT_RELEASE_CHANNEL.rulesUrl
+)
+
+function useDefaultRulesSource(): void {
+  rulesUrl.value = DEFAULT_RELEASE_CHANNEL.rulesUrl
+}
 
 onMounted(async () => {
   try {
@@ -287,6 +296,13 @@ async function toggleStartHidden(v: boolean): Promise<void> {
           />
         </div>
         <div class="rules-actions">
+          <button
+            class="btn diag-btn"
+            :disabled="rulesDefaultApplied"
+            @click="useDefaultRulesSource"
+          >
+            使用默认发布源
+          </button>
           <button class="btn diag-btn" :disabled="rulesSaving" @click="saveRulesUrl">保存</button>
           <button
             class="btn btn-primary diag-btn"

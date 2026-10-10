@@ -71,22 +71,24 @@ licences and download URLs.
 ## 更新与规则源 / Update & rules sources
 
 自动更新和游戏规则库默认都是**空的**，对应功能处于关闭状态；两者都在 **设置 → 软件更新** 和
-**设置 → 游戏规则库** 中配置，URL 完全由用户决定。
+**设置 → 游戏规则库** 中配置，URL 完全由用户决定。公开发布通道（更新清单与规则库的托管方式、
+发布流程、信任模型）见 [`docs/RELEASE_CHANNEL.md`](docs/RELEASE_CHANNEL.md)；在设置中点击
+「使用默认发布源」按钮可以一键填入默认地址（只填入输入框，仍需点击保存）。
 
 - **自动更新 / Auto update**：支持两种来源 —— 更新清单 JSON，或 GitHub Releases。清单格式为
   `{ "version", "url", "sha256", "notes" }`，其中 `sha256` 为必填（用于校验下载的安装包）。
 - **游戏规则库 / Game rules**：规则库 URL 指向一份规则文件，格式见
   [`NetchModern/docs/game-rules.md`](NetchModern/docs/game-rules.md)。
 
-本项目计划后续把更新清单和规则库托管在公开的 release 仓库或对象存储（OSS）上；在此之前请自行
-填写可访问的地址。
-
 Auto update and the game rules library are **empty by default** (the features are disabled). Both are
 configured in **Settings → Software update** and **Settings → Game rules**; the URLs are entirely
-user-supplied. Auto update accepts either a manifest JSON or GitHub Releases; the manifest format is
+user-supplied. The public release channel (how the manifest and rules are hosted, the release
+procedure and the trust model) is documented in
+[`docs/RELEASE_CHANNEL.md`](docs/RELEASE_CHANNEL.md); the 「使用默认发布源」 button in Settings fills
+in the default URLs (it only fills the input — the save button still has to be clicked). Auto update
+accepts either a manifest JSON or GitHub Releases; the manifest format is
 `{ "version", "url", "sha256", "notes" }` with `sha256` required. The rules file format is documented
-in [`NetchModern/docs/game-rules.md`](NetchModern/docs/game-rules.md). The project plans to host the
-manifest and rules on a public release repo or OSS later.
+in [`NetchModern/docs/game-rules.md`](NetchModern/docs/game-rules.md).
 
 ## 安装位置与开机启动 / Install location & launch at login
 

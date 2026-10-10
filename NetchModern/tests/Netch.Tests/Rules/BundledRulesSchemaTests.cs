@@ -29,6 +29,9 @@ public class BundledRulesSchemaTests
         "googleapis.com", "azureedge.net", "cloudfront.net"
     };
 
+    /// <summary>Allowed values of compat.recommendedMode.</summary>
+    private static readonly string[] CompatModes = { "auto", "process", "tun", "proxy" };
+
     private static List<Game> Games() => SampleGames.Create().ToList();
 
     [Fact]
@@ -126,9 +129,9 @@ public class BundledRulesSchemaTests
     }
 
     [Fact]
-    public void RulesVersion_IsAtLeastThree()
+    public void RulesVersion_IsAtLeastFour()
     {
-        Assert.True(SampleGames.RulesVersion >= 3, "RulesVersion must be >= 3 after the download-domain split");
+        Assert.True(SampleGames.RulesVersion >= 4, "RulesVersion must be >= 4 after the compat notes were added");
     }
 
     [Fact]
@@ -150,5 +153,45 @@ public class BundledRulesSchemaTests
             .ToList();
 
         Assert.Empty(offenders);
+    }
+
+    [Fact]
+    public void CompatEntries_AreValidAndUnverified()
+    {
+        var offenders = Games()
+            .Where(g => g.Compat is not null)
+            .Select(g => (g.Id, g.Compat!))
+            .Where(x => x.Item2.Verified
+                        || (x.Item2.RecommendedMode is not null && !CompatModes.Contains(x.Item2.RecommendedMode))
+                        || string.IsNullOrEmpty(x.Item2.Note)
+                        || x.Item2.Note.Length > 200)
+            .Select(x => x.Id)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    [Fact]
+    public void CompatEntries_ExportRoundTrip()
+    {
+        var now = new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero);
+        var json = RulesExporter.Export(SampleGames.Create(), SampleGames.RulesVersion, now);
+        var file = GameRulesFile.Parse(json, out var error);
+
+        Assert.Null(error);
+        Assert.NotNull(file);
+
+        var expected = Games().Where(g => g.Compat is not null)
+            .ToDictionary(g => g.Id, g => g.Compat);
+        var actual = file!.Games.Where(g => g.Compat is not null)
+            .ToDictionary(g => g.Id, g => g.Compat);
+
+        Assert.Equal(expected.Keys, actual.Keys);
+        foreach (var (id, compat) in expected)
+        {
+            Assert.Equal(compat!.RecommendedMode, actual[id]!.RecommendedMode);
+            Assert.Equal(compat.Note, actual[id]!.Note);
+            Assert.Equal(compat.Verified, actual[id]!.Verified);
+        }
     }
 }

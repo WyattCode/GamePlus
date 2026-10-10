@@ -15,6 +15,7 @@ import type {
   EngineSettings,
   ExtraApp,
   Game,
+  GameCompat,
   ImportResult,
   LibraryScanResult,
   LogEntry,
@@ -234,6 +235,25 @@ const RULE_SHARE_PREFIX = 'gameplus-rule:v1:'
 const RULE_MAX_BYTES = 64 * 1024
 const RULE_UNRECOGNIZED = '无法识别的规则内容（需要 Game+ 规则 JSON 或 gameplus-rule: 分享串）'
 
+// Per-game compatibility notes (mirrors the backend's GameDto.Compat); applied to seed games only.
+const MOCK_COMPAT: Record<string, GameCompat> = {
+  valorant: {
+    recommendedMode: null,
+    note: 'Riot Vanguard 为内核级反作弊，开机即加载；如进程模式驱动加载失败，可尝试 TUN 模式（需该游戏有 IP 规则）。',
+    verified: false
+  },
+  steam: {
+    recommendedMode: 'auto',
+    note: '商店/社区/登录在自动模式下即可加速；游戏下载默认直连，可在加速页「游戏下载」开关中改为走代理。',
+    verified: false
+  },
+  apex: {
+    recommendedMode: null,
+    note: '使用 Easy Anti-Cheat 反作弊。加速器只转发网络流量、不修改游戏，但无法保证不被误判，风险自负。',
+    verified: false
+  }
+}
+
 /** UTF-8 safe base64url (no padding) of a string. */
 function toBase64Url(s: string): string {
   return btoa(unescape(encodeURIComponent(s)))
@@ -321,6 +341,11 @@ class MockBackend implements Backend {
       if (steam.proxyDomains) {
         steam.proxyDomains = steam.proxyDomains.filter((d) => !d.includes('steamcontent.com'))
       }
+    }
+    // Seed per-game compatibility notes (only for seed games that actually exist).
+    for (const [id, compat] of Object.entries(MOCK_COMPAT)) {
+      const g = this.mockGames.find((x) => x.id === id)
+      if (g) g.compat = structuredClone(compat)
     }
   }
 

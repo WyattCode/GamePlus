@@ -7,5 +7,5 @@ namespace Netch.Core.Services;
 /// </summary>
 public static partial class SampleGames
 {
-    public const int RulesVersion = 3;
+    public const int RulesVersion = 4;
 }

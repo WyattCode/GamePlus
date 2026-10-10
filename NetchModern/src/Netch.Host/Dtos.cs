@@ -14,12 +14,14 @@ namespace Netch.Host;
 internal record ServerDto(string Id, string Kind, string Type, string Remark, string Hostname,
     int Port, string Group, int Delay);
 
+internal record GameCompatDto(string? RecommendedMode, string Note, bool Verified);
+
 internal record GameDto(string Id, string Name, string Icon, string Accent, string RegionText,
     int RuleCount, string[] Categories, bool Favorite, bool Custom,
     string EnglishName, string[] Aliases, string Category, string[] Regions, string[] Platforms,
     string[] ProxyDomains, string[] ProxyIps, string[] ProxyProcesses, bool AutoAccelerate,
     bool HasServerChoice, string? ServerChoice, string? CaptureMode, string[] AvailableModes,
-    string[] DownloadDomains, bool DownloadViaProxy, string? LaunchTarget);
+    string[] DownloadDomains, bool DownloadViaProxy, string? LaunchTarget, GameCompatDto? Compat);
 
 internal record SubscriptionDto(string Id, string Remark, string Link, int ServerCount, string? LastUpdated);
 
@@ -137,6 +139,10 @@ internal static class Mapping
         if (g.ProxyIps.Count > 0) available.Add("tun");
         if (g.ProxyDomains.Count > 0) available.Add("proxy");
 
+        var compat = g.Compat is null
+            ? null
+            : new GameCompatDto(g.Compat.RecommendedMode, g.Compat.Note, g.Compat.Verified);
+
         return new GameDto(g.Id, g.Name, g.Icon, g.Accent, g.RegionText, g.RuleCount,
             BuildCategories(g), g.IsFavorite, g.IsCustom,
             g.EnglishName, g.Aliases.ToArray(), g.Category.ToString(), g.Regions.ToArray(),
@@ -144,7 +150,7 @@ internal static class Mapping
             g.ProxyProcesses.ToArray(),
             autoAccelerateIds is not null && autoAccelerateIds.Contains(g.Id),
             hasChoice, choice, captureMode, available.ToArray(),
-            g.DownloadDomains.ToArray(), downloadProxy, launchTarget);
+            g.DownloadDomains.ToArray(), downloadProxy, launchTarget, compat);
     }
 
     /// <summary>
@@ -208,6 +214,7 @@ internal static class Mapping
         if (JsonParams.HasProperty(p, "proxyIps")) game.ProxyIps = JsonParams.StringList(p, "proxyIps");
         if (JsonParams.HasProperty(p, "proxyProcesses")) game.ProxyProcesses = JsonParams.StringList(p, "proxyProcesses");
         if (JsonParams.HasProperty(p, "downloadDomains")) game.DownloadDomains = JsonParams.StringList(p, "downloadDomains");
+        // compat is intentionally ignored: custom games never carry compatibility notes.
         return game;
     }
 

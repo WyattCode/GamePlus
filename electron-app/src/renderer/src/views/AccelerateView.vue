@@ -310,7 +310,6 @@ const dialogGame = computed(() => {
   if (!id) return null
   return library.games.find((g) => g.id === id) ?? null
 })
-
 // --- per-game server choice (Q1) ---
 
 const hasServerChoice = computed(() => selectedGame.value?.hasServerChoice === true)
@@ -379,14 +378,21 @@ const availableModes = computed<CaptureModeKind[]>(
   () => (selectedGame.value?.availableModes as CaptureModeKind[] | undefined) ?? []
 )
 
-const modeOptions = computed<{ value: CaptureMode | 'default'; label: string; disabled: boolean; title: string }[]>(() => {
+// Per-game compatibility note from the backend (anti-cheat / recommended mode hints); null when none.
+const gameCompat = computed(() => selectedGame.value?.compat ?? null)
+
+const modeOptions = computed<
+  { value: CaptureMode | 'default'; label: string; disabled: boolean; title: string; recommended: boolean }[]
+>(() => {
   const avail = availableModes.value
-  const opts: { value: CaptureMode | 'default'; label: string; disabled: boolean; title: string }[] = [
+  const rec = gameCompat.value?.recommendedMode ?? null
+  const opts: { value: CaptureMode | 'default'; label: string; disabled: boolean; title: string; recommended: boolean }[] = [
     {
       value: 'default',
       label: `跟随默认 · ${MODE_LABELS[globalDefaultMode.value]}`,
       disabled: false,
-      title: ''
+      title: '',
+      recommended: false
     }
   ]
   const kinds: CaptureMode[] = ['auto', 'process', 'tun', 'proxy']
@@ -397,7 +403,9 @@ const modeOptions = computed<{ value: CaptureMode | 'default'; label: string; di
       value: k,
       label: MODE_LABELS[k],
       disabled,
-      title: disabled ? MODE_UNAVAILABLE_HINT[k as CaptureModeKind] : ''
+      title: disabled ? MODE_UNAVAILABLE_HINT[k as CaptureModeKind] : '',
+      // 'auto' is already labelled 自动（推荐）, so only badge an explicit non-auto recommendation.
+      recommended: rec !== null && rec !== 'auto' && k === rec
     })
   }
   return opts
@@ -516,9 +524,22 @@ watch(
               @click="setCaptureMode(opt.value)"
             >
               {{ opt.label }}
+              <span v-if="opt.recommended" class="mode-rec">推荐</span>
             </button>
           </div>
           <span class="muted small server-hint">手动指定后失败不会自动降级</span>
+        </div>
+
+        <!-- Per-game compatibility note (anti-cheat / recommended mode hints) -->
+        <div v-if="gameCompat" class="compat-note">
+          <div class="compat-head">
+            <AppIcon name="info" :size="13" />
+            <span class="compat-label">兼容性提示</span>
+            <span class="compat-tag" :class="{ unverified: !gameCompat.verified }">
+              {{ gameCompat.verified ? '已验证' : '未验证' }}
+            </span>
+          </div>
+          <div class="compat-text">{{ gameCompat.note }}</div>
         </div>
 
         <!-- Per-game download split: CDN downloads go DIRECT unless the toggle is on -->
@@ -1057,6 +1078,7 @@ watch(
 .server-label {
   font-weight: 600;
   font-size: 14px;
+  white-space: nowrap;
 }
 .server-hint {
   margin-left: auto;
@@ -1071,6 +1093,7 @@ watch(
   opacity: 0.6;
 }
 .seg-btn {
+  white-space: nowrap;
   padding: 4px 14px;
   border-radius: calc(var(--radius-sm) - 2px);
   font-size: 13px;
@@ -1087,6 +1110,55 @@ watch(
 }
 .seg-btn:disabled {
   cursor: not-allowed;
+}
+
+/* per-game compatibility note */
+.compat-note {
+  margin: -6px 0 14px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.compat-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+}
+.compat-label {
+  font-weight: 600;
+  font-size: 12px;
+}
+.compat-tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  background: var(--brand-soft);
+  color: var(--brand-600);
+}
+.compat-tag.unverified {
+  background: rgba(255, 193, 7, 0.15);
+  color: var(--warn);
+}
+.compat-text {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  word-break: break-word;
+}
+.mode-rec {
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--brand-soft);
+  color: var(--brand-600);
+}
+.seg-btn.active .mode-rec {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
 }
 
 /* per-game download split */

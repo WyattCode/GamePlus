@@ -90,6 +90,12 @@ async function onToggleServer(g: Game): Promise<void> {
   }
 }
 
+/** Tooltip text for the per-game compatibility marker (ⓘ). */
+function compatTitle(g: Game): string {
+  if (!g.compat) return ''
+  return g.compat.verified ? g.compat.note : `${g.compat.note}（未验证）`
+}
+
 const categories = computed(() => {
   const set = new Set<string>()
   library.games.forEach((g) => g.categories.forEach((c) => set.add(c)))
@@ -161,7 +167,17 @@ function pick(g: Game): void {
         <div class="tile-glyph" :style="{ '--a': gameColor(g.id) }">
           <GameGlyph :id="g.id" :name="g.name" :size="34" />
         </div>
-        <div class="tile-name">{{ g.name }}</div>
+        <div class="tile-name">
+          {{ g.name }}
+          <span
+            v-if="g.compat"
+            class="compat-ico"
+            :title="compatTitle(g)"
+            @click.stop
+          >
+            <AppIcon name="info" :size="13" />
+          </span>
+        </div>
         <div class="tile-region">{{ g.regionText }}</div>
         <div class="tile-tags">
           <span v-if="g.custom" class="tag custom">自定义</span>
@@ -329,6 +345,14 @@ function pick(g: Game): void {
   font-weight: 600;
   font-size: 15px;
   margin-top: 14px;
+}
+.compat-ico {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: -2px;
+  margin-left: 4px;
+  color: var(--text-3);
+  cursor: help;
 }
 .tile-region {
   color: var(--text-3);

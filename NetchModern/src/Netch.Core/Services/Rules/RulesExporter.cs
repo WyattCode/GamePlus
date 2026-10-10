@@ -70,6 +70,23 @@ public static class RulesExporter
             // Serialize a copy so the caller's object is never mutated.
             var copy = CopyForExport(game);
             var node = JsonSerializer.SerializeToNode(copy, GameOptions);
+            if (node is JsonObject gameNode)
+            {
+                // compat is written camelCase (recommendedMode / note / verified) and omitted entirely
+                // when the game has none; the PascalCase "Compat" STJ produced is replaced.
+                gameNode.Remove(nameof(Game.Compat));
+                if (game.Compat is not null)
+                {
+                    var compat = new JsonObject
+                    {
+                        ["recommendedMode"] = game.Compat.RecommendedMode,
+                        ["note"] = game.Compat.Note,
+                        ["verified"] = game.Compat.Verified
+                    };
+                    gameNode["compat"] = compat;
+                }
+            }
+
             gamesArray.Add(node);
         }
 
@@ -118,6 +135,14 @@ public static class RulesExporter
             ProxyIps = new List<string>(source.ProxyIps),
             ProxyProcesses = new List<string>(source.ProxyProcesses),
             DownloadDomains = new List<string>(source.DownloadDomains),
+            Compat = source.Compat is null
+                ? null
+                : new GameCompat
+                {
+                    RecommendedMode = source.Compat.RecommendedMode,
+                    Note = source.Compat.Note,
+                    Verified = source.Compat.Verified
+                },
             IsCustom = false,
             IsFavorite = false
         };

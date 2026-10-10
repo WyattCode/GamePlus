@@ -17,14 +17,24 @@ public static partial class SampleGames
             Aliases = { "steam", "蒸汽", "zhengqi" }, Regions = { "国际服" }, Platforms = { "PC" },
             ProxyProcesses = { "steam.exe", "steamwebhelper.exe" },
             ProxyDomains = { "steampowered.com", "steamcommunity.com", "steamstatic.com", "steamserver.net", "steam-chat.com", "valvesoftware.com" },
-            DownloadDomains = { "steamcontent.com", "steampipe.akamaized.net" }
+            DownloadDomains = { "steamcontent.com", "steampipe.akamaized.net" },
+            Compat = new GameCompat
+            {
+                RecommendedMode = "auto",
+                Note = "商店/社区/登录在自动模式下即可加速；游戏下载默认直连，可在加速页「游戏下载」开关中改为走代理。"
+            }
         };
         yield return new Game
         {
             Id = "epic", Name = "Epic 商城", EnglishName = "Epic Games", Icon = "🎁", AccentColor = "#57606A", Category = GameCategory.Platform,
             Aliases = { "epic", "e宝" }, Regions = { "国际服" }, Platforms = { "PC" },
             ProxyProcesses = { "EpicGamesLauncher.exe" },
-            ProxyDomains = { "epicgames.com", "unrealengine.com", "helpshift.com" }
+            ProxyDomains = { "epicgames.com", "unrealengine.com", "helpshift.com" },
+            Compat = new GameCompat
+            {
+                RecommendedMode = "auto",
+                Note = "Epic 启动器用自动模式即可；游戏本体请单独选择对应游戏加速。"
+            }
         };
         yield return new Game
         {
@@ -62,7 +72,11 @@ public static partial class SampleGames
             Id = "valorant", Name = "无畏契约", EnglishName = "Valorant", Icon = "🎯", AccentColor = "#FF4655", Category = GameCategory.Hot,
             Aliases = { "valorant", "瓦", "wf" }, Regions = { "国际服", "国服", "亚服" }, Platforms = { "PC" },
             ProxyProcesses = { "VALORANT-Win64-Shipping.exe", "VALORANT.exe", "RiotClientServices.exe" },
-            ProxyDomains = { "riotgames.com", "playvalorant.com", "riotcdn.net", "pvp.net" }
+            ProxyDomains = { "riotgames.com", "playvalorant.com", "riotcdn.net", "pvp.net" },
+            Compat = new GameCompat
+            {
+                Note = "Riot Vanguard 为内核级反作弊，开机即加载；如进程模式驱动加载失败，可尝试 TUN 模式（需该游戏有 IP 规则）。"
+            }
         };
         // Sources: official support page domains, v2fly domain-list-community "riot", installed client process names; reviewed 2026-10.
         yield return new Game
@@ -70,7 +84,11 @@ public static partial class SampleGames
             Id = "lol-global", Name = "英雄联盟（国际服）", EnglishName = "League of Legends", Icon = "⚔️", AccentColor = "#C89B3C", Category = GameCategory.Hot,
             Aliases = { "lol", "英雄联盟", "yxlm" }, Regions = { "国际服", "亚服" }, Platforms = { "PC" },
             ProxyProcesses = { "League of Legends.exe", "LeagueClient.exe", "LeagueClientUx.exe", "RiotClientServices.exe" },
-            ProxyDomains = { "riotgames.com", "leagueoflegends.com", "riotcdn.net", "pvp.net", "lolstatic.com" }
+            ProxyDomains = { "riotgames.com", "leagueoflegends.com", "riotcdn.net", "pvp.net", "lolstatic.com" },
+            Compat = new GameCompat
+            {
+                Note = "Riot Vanguard 为内核级反作弊，开机即加载；如进程模式驱动加载失败，可尝试 TUN 模式（需该游戏有 IP 规则）。"
+            }
         };
         // Sources: official support page domains, v2fly domain-list-community "steam"/"valve", installed client process names; reviewed 2026-10.
         yield return new Game
@@ -86,7 +104,11 @@ public static partial class SampleGames
             Id = "apex", Name = "Apex 英雄", EnglishName = "Apex Legends", Icon = "🔺", AccentColor = "#DA292A", Category = GameCategory.Hot,
             Aliases = { "apex", "阿佩克斯" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
             ProxyProcesses = { "r5apex.exe", "r5apex_dx12.exe" },
-            ProxyDomains = { "ea.com", "easports.com", "respawn.com", "origin.com" }
+            ProxyDomains = { "ea.com", "easports.com", "respawn.com", "origin.com" },
+            Compat = new GameCompat
+            {
+                Note = "使用 Easy Anti-Cheat 反作弊。加速器只转发网络流量、不修改游戏，但无法保证不被误判，风险自负。"
+            }
         };
 
         // ---- PC ----
@@ -96,7 +118,11 @@ public static partial class SampleGames
             Id = "pubg", Name = "绝地求生", EnglishName = "PUBG: Battlegrounds", Icon = "🪂", AccentColor = "#F2A900", Category = GameCategory.Pc,
             Aliases = { "pubg", "吃鸡", "chiji" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
             ProxyProcesses = { "TslGame.exe", "TslGame_BE.exe" },
-            ProxyDomains = { "pubg.com", "krafton.com", "playbattlegrounds.com" }
+            ProxyDomains = { "pubg.com", "krafton.com", "playbattlegrounds.com" },
+            Compat = new GameCompat
+            {
+                Note = "使用 BattlEye 反作弊。加速器只转发网络流量、不修改游戏，但无法保证不被误判，风险自负。"
+            }
         };
         yield return new Game
         {
@@ -132,7 +158,11 @@ public static partial class SampleGames
             Id = "r6", Name = "彩虹六号：围攻", EnglishName = "Rainbow Six Siege", Icon = "🌈", AccentColor = "#0098DB", Category = GameCategory.Pc,
             Aliases = { "r6", "彩六", "cl" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
             ProxyProcesses = { "RainbowSix.exe" },
-            ProxyDomains = { "ubisoft.com", "ubi.com", "ubisoftconnect.com" }
+            ProxyDomains = { "ubisoft.com", "ubi.com", "ubisoftconnect.com" },
+            Compat = new GameCompat
+            {
+                Note = "使用 BattlEye 反作弊。加速器只转发网络流量、不修改游戏，但无法保证不被误判，风险自负。"
+            }
         };
         yield return new Game
         {
@@ -146,12 +176,16 @@ public static partial class SampleGames
             Id = "eft", Name = "逃离塔科夫", EnglishName = "Escape from Tarkov", Icon = "🔫", AccentColor = "#7A7A52", Category = GameCategory.Pc,
             Aliases = { "eft", "塔科夫", "tkf" }, Regions = { "国际服" }, Platforms = { "PC" },
             ProxyProcesses = { "EscapeFromTarkov.exe" },
-            ProxyDomains = { "escapefromtarkov.com", "battlestate.com" }
+            ProxyDomains = { "escapefromtarkov.com", "battlestate.com" },
+            Compat = new GameCompat
+            {
+                Note = "使用 BattlEye 反作弊。加速器只转发网络流量、不修改游戏，但无法保证不被误判，风险自负。"
+            }
         };
         yield return new Game
         {
             Id = "destiny2", Name = "命运 2", EnglishName = "Destiny 2", Icon = "🌌", AccentColor = "#6C5CE7", Category = GameCategory.Pc,
-            Aliases = { "destiny", "命运", "my2" }, Regions = { "国际服" }, Platforms = { "PC", "主机" },
+            Aliases = { "destiny", "命运", "my2" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
             ProxyProcesses = { "destiny2.exe" },
             ProxyDomains = { "bungie.net" }
         };
@@ -287,14 +321,14 @@ public static partial class SampleGames
         yield return new Game
         {
             Id = "warframe", Name = "星际战甲", EnglishName = "Warframe", Icon = "🛸", AccentColor = "#5C6BC0", Category = GameCategory.Pc,
-            Aliases = { "warframe", "战甲", "xjzj" }, Regions = { "国际服" }, Platforms = { "PC", "主机" },
+            Aliases = { "warframe", "战甲", "xjzj" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
             ProxyProcesses = { "Warframe.x64.exe" },
             ProxyDomains = { "warframe.com", "digitalextremes.com" }
         };
         yield return new Game
         {
             Id = "dbd", Name = "黎明杀机", EnglishName = "Dead by Daylight", Icon = "🔪", AccentColor = "#8E2B2B", Category = GameCategory.Pc,
-            Aliases = { "dbd", "黎明杀机", "lmsj" }, Regions = { "国际服" }, Platforms = { "PC", "主机" },
+            Aliases = { "dbd", "黎明杀机", "lmsj" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
             ProxyProcesses = { "DeadByDaylight-Win64-Shipping.exe" },
             ProxyDomains = { "deadbydaylight.com", "bhvr.com" }
         };
@@ -308,7 +342,7 @@ public static partial class SampleGames
         yield return new Game
         {
             Id = "rocketleague", Name = "火箭联盟", EnglishName = "Rocket League", Icon = "🚀", AccentColor = "#1E88E5", Category = GameCategory.Pc,
-            Aliases = { "rl", "火箭联盟", "hjlm" }, Regions = { "国际服" }, Platforms = { "PC", "主机" },
+            Aliases = { "rl", "火箭联盟", "hjlm" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
             ProxyProcesses = { "RocketLeague.exe" },
             ProxyDomains = { "rocketleague.com", "psyonix.com", "epicgames.com" }
         };
@@ -368,21 +402,21 @@ public static partial class SampleGames
         yield return new Game
         {
             Id = "darktide", Name = "战锤 40K：暗潮", EnglishName = "Warhammer 40,000: Darktide", Icon = "🩸", AccentColor = "#9B2D2D", Category = GameCategory.Pc,
-            Aliases = { "darktide", "暗潮", "40k" }, Regions = { "国际服" }, Platforms = { "PC", "主机" },
+            Aliases = { "darktide", "暗潮", "40k" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
             ProxyProcesses = { "darktide.exe" },
             ProxyDomains = { "fatshark.se", "playdarktide.com" }
         };
         yield return new Game
         {
             Id = "titanfall2", Name = "泰坦陨落 2", EnglishName = "Titanfall 2", Icon = "🤖", AccentColor = "#3A6EA5", Category = GameCategory.Pc,
-            Aliases = { "titanfall", "泰坦陨落", "ttyl", "tf2" }, Regions = { "国际服" }, Platforms = { "PC", "主机" },
+            Aliases = { "titanfall", "泰坦陨落", "ttyl", "tf2" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
             ProxyProcesses = { "Titanfall2.exe" },
             ProxyDomains = { "ea.com", "respawn.com" }
         };
         yield return new Game
         {
             Id = "deeprock", Name = "深岩银河", EnglishName = "Deep Rock Galactic", Icon = "⛏️", AccentColor = "#C98A2B", Category = GameCategory.Pc,
-            Aliases = { "drg", "深岩银河", "sy" }, Regions = { "国际服" }, Platforms = { "PC", "主机" },
+            Aliases = { "drg", "深岩银河", "sy" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
             ProxyProcesses = { "FSD-Win64-Shipping.exe" },
             ProxyDomains = { "steampowered.com", "ghostship.dk" }
         };
@@ -477,7 +511,7 @@ public static partial class SampleGames
         yield return new Game
         {
             Id = "eso", Name = "上古卷轴 OL", EnglishName = "The Elder Scrolls Online", Icon = "📜", AccentColor = "#6B8E23", Category = GameCategory.Pc,
-            Aliases = { "eso", "上古卷轴", "sgjz" }, Regions = { "国际服" }, Platforms = { "PC", "主机" },
+            Aliases = { "eso", "上古卷轴", "sgjz" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
             ProxyProcesses = { "eso64.exe" },
             ProxyDomains = { "elderscrollsonline.com", "zenimax.com" }
         };
@@ -491,7 +525,7 @@ public static partial class SampleGames
         yield return new Game
         {
             Id = "nomanssky", Name = "无人深空", EnglishName = "No Man's Sky", Icon = "🪐", AccentColor = "#5C6BC0", Category = GameCategory.Pc,
-            Aliases = { "nms", "无人深空", "wrsk" }, Regions = { "国际服" }, Platforms = { "PC", "主机" },
+            Aliases = { "nms", "无人深空", "wrsk" }, Regions = { "国际服", "亚服" }, Platforms = { "PC", "主机" },
             ProxyProcesses = { "NMS.exe" },
             ProxyDomains = { "nomanssky.com", "hellogames.co.uk", "steampowered.com" }
         };

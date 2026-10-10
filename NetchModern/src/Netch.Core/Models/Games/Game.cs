@@ -59,6 +59,9 @@ public partial class Game : ObservableObject
     /// </summary>
     public List<string> DownloadDomains { get; set; } = new();
 
+    /// <summary>Optional per-game compatibility notes (Game+). Null when the game has none.</summary>
+    public GameCompat? Compat { get; set; }
+
     /// <summary>Total routing rules (domains + IPs) — what actually gets accelerated.</summary>
     [JsonIgnore]
     public int RuleCount => ProxyDomains.Count + ProxyIps.Count;

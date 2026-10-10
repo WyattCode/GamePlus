@@ -30,6 +30,15 @@ export type CaptureModeKind = 'process' | 'tun' | 'proxy'
 /** User-selectable acceleration mode: "auto" plus the three concrete capture methods. */
 export type CaptureMode = 'auto' | CaptureModeKind
 
+/** Per-game compatibility note (anti-cheat / recommended mode hints) from the backend. */
+export interface GameCompat {
+  /** Mode the backend recommends for this game; null = no recommendation. */
+  recommendedMode: CaptureMode | null
+  note: string
+  /** True when the note has been verified against the actual game. */
+  verified: boolean
+}
+
 export interface Game {
   id: string
   name: string
@@ -68,6 +77,8 @@ export interface Game {
   availableModes?: CaptureModeKind[]
   /** Per-game launch target (steam://rungameid, epic:// or a local .exe path); null/undefined = not set. */
   launchTarget?: string | null
+  /** Per-game compatibility note; null/undefined = none. */
+  compat?: GameCompat | null
 }
 
 export type AccelState =

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Netch.Core.Models.Games;
@@ -22,6 +23,9 @@ public sealed class GameRulesFile
     /// <summary>Upper bound on the number of entries in any single list field.</summary>
     public const int MaxListEntries = 500;
 
+    /// <summary>Maximum length of a per-game compat note (compat.note).</summary>
+    public const int MaxCompatNoteLength = 200;
+
     private static readonly JsonSerializerOptions Options = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -31,6 +35,12 @@ public sealed class GameRulesFile
     };
 
     private static readonly Regex IdPattern = new("^[a-z0-9][a-z0-9._-]{0,63}$", RegexOptions.Compiled);
+
+    /// <summary>Allowed values of compat.recommendedMode.</summary>
+    private static readonly HashSet<string> CompatModes = new(StringComparer.Ordinal)
+    {
+        "auto", "process", "tun", "proxy"
+    };
 
     public int Schema { get; set; }
 
@@ -53,10 +63,23 @@ public sealed class GameRulesFile
             return null;
         }
 
+        JsonNode? root;
+        try
+        {
+            root = JsonNode.Parse(json,
+                new JsonNodeOptions { PropertyNameCaseInsensitive = true },
+                new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+        }
+        catch (JsonException e)
+        {
+            error = $"规则文件不是有效的 JSON：{e.Message}";
+            return null;
+        }
+
         GameRulesFile? file;
         try
         {
-            file = JsonSerializer.Deserialize<GameRulesFile>(json, Options);
+            file = root.Deserialize<GameRulesFile>(Options);
         }
         catch (JsonException e)
         {
@@ -204,6 +227,83 @@ public sealed class GameRulesFile
                     error = $"第 {index} 个游戏的域名不能包含空白字符：{domain}";
                     return null;
                 }
+            }
+
+            // compat is validated field-by-field from the raw JSON node so errors can reference the
+            // game index; the validated instance replaces whatever STJ bound onto the Game.
+            var gameNode = (root as JsonObject)?["games"] is JsonArray gamesArray ? gamesArray[i] as JsonObject : null;
+            var compatNode = gameNode?["compat"];
+            if (compatNode is not null)
+            {
+                if (compatNode is not JsonObject compatObject)
+                {
+                    error = $"第 {index} 个游戏的 compat 必须是对象";
+                    return null;
+                }
+
+                var compat = new GameCompat();
+
+                if (compatObject.TryGetPropertyValue("recommendedMode", out var modeNode) && modeNode is not null)
+                {
+                    if (modeNode is not JsonValue modeValue || !modeValue.TryGetValue<string>(out var mode))
+                    {
+                        error = $"第 {index} 个游戏的 compat.recommendedMode 必须是字符串";
+                        return null;
+                    }
+
+                    if (!CompatModes.Contains(mode))
+                    {
+                        error = $"第 {index} 个游戏的 compat.recommendedMode 无效：{mode}（可选：auto / process / tun / proxy）";
+                        return null;
+                    }
+
+                    compat.RecommendedMode = mode;
+                }
+
+                if (compatObject.TryGetPropertyValue("note", out var noteNode) && noteNode is not null)
+                {
+                    if (noteNode is not JsonValue noteValue || !noteValue.TryGetValue<string>(out var note))
+                    {
+                        error = $"第 {index} 个游戏的 compat.note 必须是字符串";
+                        return null;
+                    }
+
+                    if (string.IsNullOrEmpty(note))
+                    {
+                        error = $"第 {index} 个游戏的 compat.note 不能为空";
+                        return null;
+                    }
+
+                    if (note.Length > MaxCompatNoteLength)
+                    {
+                        error = $"第 {index} 个游戏的 compat.note 过长（最多 {MaxCompatNoteLength} 个字符）";
+                        return null;
+                    }
+
+                    compat.Note = note;
+                }
+                else
+                {
+                    error = $"第 {index} 个游戏的 compat 缺少 note";
+                    return null;
+                }
+
+                if (compatObject.TryGetPropertyValue("verified", out var verifiedNode) && verifiedNode is not null)
+                {
+                    if (verifiedNode is not JsonValue verifiedValue || !verifiedValue.TryGetValue<bool>(out var verified))
+                    {
+                        error = $"第 {index} 个游戏的 compat.verified 必须是布尔值";
+                        return null;
+                    }
+
+                    compat.Verified = verified;
+                }
+
+                game.Compat = compat;
+            }
+            else
+            {
+                game.Compat = null;
             }
         }
 

@@ -1,6 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  CrashFileInfo,
   LoginItemState,
+  TelemetryConfig,
+  TelemetryEvent,
   TrayAction,
   TrayInfo,
   UiPrefs,
@@ -74,6 +77,17 @@ const api = {
       ipcRenderer.on('update:state', listener)
       return () => ipcRenderer.removeListener('update:state', listener)
     }
+  },
+  telemetry: {
+    getConfig: (): Promise<TelemetryConfig> => ipcRenderer.invoke('telemetry:get-config'),
+    setConfig: (patch: Partial<TelemetryConfig>): Promise<TelemetryConfig> =>
+      ipcRenderer.invoke('telemetry:set-config', patch),
+    record: (event: TelemetryEvent): Promise<void> => ipcRenderer.invoke('telemetry:record', event),
+    getRecent: (limit: number): Promise<TelemetryEvent[]> =>
+      ipcRenderer.invoke('telemetry:get-recent', limit),
+    clear: (): Promise<void> => ipcRenderer.invoke('telemetry:clear'),
+    listCrashes: (): Promise<CrashFileInfo[]> => ipcRenderer.invoke('telemetry:list-crashes'),
+    openCrashFolder: (): Promise<void> => ipcRenderer.invoke('telemetry:open-crash-folder')
   }
 }
 

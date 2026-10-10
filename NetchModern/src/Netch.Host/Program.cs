@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Netch.Core;
 using Netch.Core.Abstractions;
 using Netch.Core.Services;
 using Netch.Host;
@@ -19,6 +20,16 @@ if (Directory.Exists(nativeDir))
     SetDllDirectory(nativeDir);
 
 var services = Composition.Build();
+
+// Local crash reporting: always on, never uploaded unless the user opts in (handled by Electron).
+var crash = new CrashReporter(Path.Combine(AppPaths.DataDirectory, "crashes"));
+AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+    crash.Write("AppDomain.UnhandledException", e.ExceptionObject as Exception, $"terminating={e.IsTerminating}");
+TaskScheduler.UnobservedTaskException += (_, e) =>
+{
+    crash.Write("TaskScheduler.UnobservedTaskException", e.Exception);
+    e.SetObserved();
+};
 
 // Load persisted settings + servers/subscriptions before serving.
 await services.GetRequiredService<ISettingsService>().LoadAsync();

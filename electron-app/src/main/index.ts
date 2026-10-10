@@ -7,12 +7,21 @@ import { getPrefs, setPrefs } from './prefs'
 import { trayIcon32 } from './trayIcon'
 import { Updater } from './updater'
 import { setToken } from './updater/token'
+import {
+  installCrashHandlers,
+  registerTelemetryIpc,
+  startTelemetry,
+  stopTelemetry
+} from './telemetry'
 import type { TrayInfo, UpdateConfig } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
 let updater: Updater | null = null
+
+// Crash handlers must be installed before app.whenReady() so early failures are captured.
+installCrashHandlers()
 
 /** Honour the backend's MinimizeToTray setting (default on) so the close button hides to tray. */
 function minimizeToTrayEnabled(): boolean {
@@ -283,6 +292,9 @@ function registerWindowControls(): void {
       return false
     }
   })
+
+  // --- Telemetry ---
+  registerTelemetryIpc()
 }
 
 // Single-instance: a second launch must not spawn another sidecar / proxy chain. Focus the running
@@ -319,6 +331,9 @@ if (!gotSingleInstanceLock) {
     updater = new Updater()
     updater.armAutoCheck()
 
+    // Telemetry: records app_start when enabled and schedules periodic flushes.
+    startTelemetry()
+
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
@@ -329,6 +344,7 @@ if (!gotSingleInstanceLock) {
   app.on('before-quit', () => {
     isQuitting = true
     updater?.dispose()
+    stopTelemetry()
   })
 
   // Hold the quit until the backend has gracefully torn down (restore system proxy, stop cores), then exit.

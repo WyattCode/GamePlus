@@ -297,6 +297,34 @@ export interface UpdateState {
   lastCheck?: string
 }
 
+/** Telemetry configuration (persisted in UiPrefs). */
+export interface TelemetryConfig {
+  /** Master switch. Off by default; nothing is collected or uploaded when false. */
+  enabled: boolean
+  /** Upload endpoint; empty = never send. */
+  endpoint: string
+  /** Random install id, only present when telemetry is enabled. */
+  installId: string | null
+}
+
+/** One whitelisted telemetry event (as stored locally / uploaded). */
+export type TelemetryEvent =
+  | { type: 'accel_start'; ok: boolean; mode?: 'process' | 'tun' | 'proxy'; reason?: string; durationMs?: number }
+  | { type: 'accel_stop'; durationSec?: number }
+  | { type: 'auto_accel'; kind: 'started' | 'stopped' | 'failed' | 'skipped' }
+  | { type: 'diagnostics'; failed: number; warned: number }
+  | { type: 'app_start'; version: string }
+  | { type: 'crash'; where: 'main' | 'renderer' | 'child'; reason?: string }
+  | { type: string; ts?: string; v?: string; [k: string]: unknown }
+
+/** One local crash report file. */
+export interface CrashFileInfo {
+  name: string
+  where: 'main' | 'host'
+  size: number
+  mtime: number
+}
+
 /** UI preferences persisted by the Electron main process (userData/prefs.json). */
 export interface UiPrefs {
   /** True once the user has completed (or skipped) the first-run onboarding. */
@@ -305,6 +333,8 @@ export interface UiPrefs {
   startHidden: boolean
   /** Client auto-update configuration. */
   update: UpdateConfig
+  /** Telemetry configuration. */
+  telemetry: TelemetryConfig
 }
 
 /** One game found by scanning the local machine's launchers/registries. */

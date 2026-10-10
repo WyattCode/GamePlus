@@ -85,10 +85,46 @@ const effectCompare = computed(() => {
   if (!e || !e.baseline) return null
   const b = e.baseline
   const c = e.current
-  const base = `直连 ${b.latency >= 0 ? b.latency + ' ms' : '—'} · 丢包 ${b.loss}%`
+  const base = `直连（参考） ${b.latency >= 0 ? b.latency + ' ms' : '—'} · 丢包 ${b.loss}%`
   if (!c) return base
   return `${base} → 加速 ${c.latency >= 0 ? c.latency + ' ms' : '—'} · 丢包 ${c.loss}%`
 })
+
+// Local date-time of the cached baseline, e.g. "2025/06/01 14:32".
+const baselineMeasuredText = computed(() => {
+  const iso = effect.value?.baselineMeasuredAt
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+})
+
+const remeasuring = ref(false)
+
+async function remeasure(): Promise<void> {
+  const gameId = accel.selectedGame?.id
+  if (!gameId || remeasuring.value) return
+  if (running.value) {
+    if (!window.confirm('重新测量需要先暂停加速约 3 秒，是否继续？')) return
+  }
+  remeasuring.value = true
+  error.value = null
+  try {
+    await accel.remeasure()
+    if (running.value) {
+      // Restart so the new baseline is measured immediately (same flow as switching nodes).
+      await accel.stop()
+      await accel.start()
+    } else {
+      toast.info('下次加速时将重新测量直连基线')
+    }
+  } catch (e) {
+    error.value = errorMessage(e)
+  } finally {
+    remeasuring.value = false
+  }
+}
 
 // --- smart routing (P2) ---
 
@@ -412,14 +448,26 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
       <div v-if="effectVisible && effect" class="card effect">
         <div class="effect-head">
           <div class="effect-title">
-            加速效果
+            加速效果（参考）
             <span v-if="effectIsLast" class="muted small">上次加速</span>
           </div>
           <div class="effect-summary" :style="{ color: effectColor }">{{ effect.summary }}</div>
         </div>
+        <div class="muted small effect-note">
+          基于应用内对游戏域名的 TLS 握手延迟测得，仅供参考，不等同于游戏内显示的延迟。
+        </div>
         <div v-if="effectCompare" class="effect-compare muted small">{{ effectCompare }}</div>
+        <div v-if="effect.baselineFromCache && baselineMeasuredText" class="muted small effect-baseline">
+          直连基线测于 {{ baselineMeasuredText }}
+        </div>
         <div v-if="effect.target" class="effect-target muted small">目标 {{ effect.target }}</div>
         <EffectChart :series="effect.series" :baseline="effect.baseline?.latency ?? null" />
+        <div class="effect-actions">
+          <button class="btn ghost-btn" :disabled="remeasuring" @click="remeasure">
+            <AppIcon name="refresh" :size="13" />
+            {{ remeasuring ? '处理中…' : '重新测量' }}
+          </button>
+        </div>
       </div>
 
       <!-- Traffic -->
@@ -858,11 +906,41 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
   font-size: 14px;
   font-weight: 600;
 }
+.effect-note {
+  margin-top: 6px;
+}
 .effect-compare {
   margin-top: 8px;
 }
+.effect-baseline {
+  margin-top: 2px;
+}
 .effect-target {
   margin-top: 2px;
+}
+.effect-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+.ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--brand);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ghost-btn:hover:not(:disabled) {
+  background: var(--brand-soft);
+}
+.ghost-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .traffic {

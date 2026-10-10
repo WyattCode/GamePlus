@@ -133,6 +133,17 @@ export const useAccelStore = defineStore('accel', () => {
     }
   }
 
+  /**
+   * Marks the selected game to re-measure its direct baseline on the next acceleration. When the game
+   * is currently accelerating the caller must restart acceleration (stop + start) for it to take
+   * effect immediately. Errors propagate to the caller.
+   */
+  async function remeasure(): Promise<void> {
+    const gameId = selectedGame.value?.id
+    if (!gameId) return
+    await backend.remeasureEffect(gameId)
+  }
+
   return {
     status,
     effect,
@@ -147,6 +158,7 @@ export const useAccelStore = defineStore('accel', () => {
     reconcileSelection,
     refreshRanking,
     switchNode,
+    remeasure,
     start,
     stop,
     toggle

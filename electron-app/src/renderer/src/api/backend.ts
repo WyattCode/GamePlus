@@ -62,6 +62,8 @@ export interface Backend {
   checkUpdate(): Promise<UpdateInfo>
   getEffect(): Promise<EffectReport>
   onEffect(cb: (r: EffectReport) => void): () => void
+  /** Marks the game to re-measure its direct baseline on the next acceleration. */
+  remeasureEffect(gameId: string): Promise<{ ok: boolean }>
   runDiagnostics(opts: {
     gameId?: string | null
     nodeId?: string | null
@@ -217,7 +219,9 @@ class MockBackend implements Backend {
     latencyPct: null,
     summary: '该游戏未配置可测量的域名/IP，仅显示线路延迟',
     series: [],
-    measuring: false
+    measuring: false,
+    baselineMeasuredAt: null,
+    baselineFromCache: false
   }
 
   async listGames(): Promise<Game[]> {
@@ -357,7 +361,9 @@ class MockBackend implements Backend {
       latencyPct: null,
       summary: '正在测量…',
       series: [],
-      measuring: true
+      measuring: true,
+      baselineMeasuredAt: new Date().toISOString(),
+      baselineFromCache: false
     }
     this.emitEffect()
     this.timer = setInterval(() => this.tick(), 1000)
@@ -405,6 +411,13 @@ class MockBackend implements Backend {
     this.effectCbs.add(cb)
     cb(structuredClone(this.effect))
     return () => this.effectCbs.delete(cb)
+  }
+
+  async remeasureEffect(_gameId: string): Promise<{ ok: boolean }> {
+    // The mock has no persistent per-game baseline cache, so just clear the cached flag.
+    this.effect = { ...this.effect, baselineFromCache: false }
+    this.emitEffect()
+    return { ok: true }
   }
 
   private mockServers: Server[] = structuredClone(sampleServers)

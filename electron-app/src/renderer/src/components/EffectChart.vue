@@ -115,7 +115,7 @@ const baselineY = computed(() => (props.baseline != null && props.baseline >= 0 
       </div>
       <div class="x-labels muted">
         <span>3 分钟前</span>
-        <span v-if="baseline != null" class="baseline-label">直连 {{ baseline }} ms</span>
+        <span v-if="baseline != null" class="baseline-label">直连（参考） {{ baseline }} ms</span>
         <span>现在</span>
       </div>
     </template>

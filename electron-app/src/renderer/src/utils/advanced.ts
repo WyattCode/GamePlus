@@ -5,7 +5,7 @@
 /** Defaults used by the mock backend and the "restore defaults" action. */
 export const ADVANCED_DEFAULTS = {
   tunDns: '1.1.1.1',
-  measureEffect: true,
+  measureEffect: false,
   regionPenaltyMs: 60,
   localSocksPort: 0
 } as const

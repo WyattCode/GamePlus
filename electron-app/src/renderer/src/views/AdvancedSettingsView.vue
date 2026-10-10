@@ -16,7 +16,7 @@ const saving = ref(false)
 // Local editable copies (kept in sync with the backend response after every save).
 const dns = ref('')
 const socksPort = ref(0)
-const measureEffect = ref(true)
+const measureEffect = ref(false)
 const regionPenalty = ref(60)
 
 const loaded = ref(false)
@@ -175,9 +175,9 @@ async function resetDefaults(): Promise<void> {
 
       <div class="setting">
         <div>
-          <div class="s-name">测量加速效果</div>
+          <div class="s-name">每次加速前测量直连基线</div>
           <div class="muted small">
-            开始加速前会先测量直连基线（约 3 秒）。关闭后启动更快，但不再显示加速效果对比。
+            默认仅在每个游戏首次加速时测量一次（约 3 秒），之后复用该结果；开启后每次加速前都会重新测量。
           </div>
         </div>
         <label class="switch" :class="{ disabled: !loaded || saving }">

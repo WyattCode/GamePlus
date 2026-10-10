@@ -250,6 +250,10 @@ export class WebSocketBackend implements Backend {
     return () => this.effectCbs.delete(cb)
   }
 
+  remeasureEffect(gameId: string): Promise<{ ok: boolean }> {
+    return this.call('effect.remeasure', { gameId })
+  }
+
   onAutoAccel(cb: (e: AutoAccelEvent) => void): () => void {
     this.autoAccelCbs.add(cb)
     // Make sure we're connected so events start flowing even before the first RPC.

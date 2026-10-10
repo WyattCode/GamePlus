@@ -110,7 +110,7 @@ export interface ExtraApp {
 export interface AdvancedSettings {
   /** DNS server used in TUN mode; IP, optionally with a port. */
   tunDns: string
-  /** Measure the direct-connection baseline before accelerating. */
+  /** Measure the direct-connection baseline before every acceleration. */
   measureEffect: boolean
   /** Latency penalty (ms) applied to nodes outside the game's region. */
   regionPenaltyMs: number
@@ -190,6 +190,10 @@ export interface EffectReport {
   summary: string
   series: EffectPoint[]
   measuring: boolean
+  /** ISO timestamp of when the direct baseline was measured; null when unknown. */
+  baselineMeasuredAt?: string | null
+  /** True when the baseline was reused from a previous measurement instead of measured now. */
+  baselineFromCache?: boolean
 }
 
 /** One ranked candidate node from the smart-routing ranker. */

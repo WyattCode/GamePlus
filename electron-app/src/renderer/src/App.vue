@@ -14,6 +14,8 @@ import { useUpdateStore } from './stores/update'
 import { useToastStore, errorMessage } from './stores/toast'
 import { allowBackendConnection } from './api/backend'
 import { getPrefs, setPrefs } from './api/prefs'
+import { onLaunchRequest } from './utils/launchApi'
+import { useAccelerateAndLaunch } from './composables/useAccelerateAndLaunch'
 
 const app = useAppStore()
 const auto = useAutoStore()
@@ -22,6 +24,8 @@ const logs = useLogsStore()
 const onboarding = useOnboardingStore()
 const update = useUpdateStore()
 const toast = useToastStore()
+
+const { handleLaunchRequest } = useAccelerateAndLaunch()
 
 let started = false
 
@@ -52,6 +56,11 @@ async function showLoginItemMigrationToast(): Promise<void> {
 }
 
 onMounted(async () => {
+  // Desktop-shortcut launches (--launch <gameId>) can arrive before data is loaded; the composable
+  // loads the library on demand, so subscribe right away.
+  onLaunchRequest((gameId) => {
+    void handleLaunchRequest(gameId)
+  })
   app.init()
   // Read prefs first: if onboarding is shown we must NOT touch the backend yet, because the
   // backend start triggers the UAC prompt and the user hasn't read the explanation.

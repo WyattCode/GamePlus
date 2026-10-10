@@ -66,6 +66,8 @@ export interface Game {
   captureMode?: CaptureMode | null
   /** Capture methods available for this game's rules (subset of process/tun/proxy). */
   availableModes?: CaptureModeKind[]
+  /** Per-game launch target (steam://rungameid, epic:// or a local .exe path); null/undefined = not set. */
+  launchTarget?: string | null
 }
 
 export type AccelState =

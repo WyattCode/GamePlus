@@ -1,7 +1,8 @@
 import { app, shell, BrowserWindow, ipcMain, nativeTheme, Tray, Menu, nativeImage, Notification, screen, dialog } from 'electron'
-import { readFileSync, writeFileSync } from 'fs'
+import { spawn } from 'child_process'
+import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { release as osRelease } from 'os'
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { startSidecar, stopSidecar } from './sidecar'
 import { getPrefs, setPrefs } from './prefs'
@@ -15,6 +16,13 @@ import {
   stopTelemetry,
   getRecentEvents
 } from './telemetry'
+import {
+  INVALID_TARGET_MESSAGE,
+  isValidGameId,
+  parseLaunchArg,
+  sanitizeShortcutName,
+  validateLaunchTarget
+} from './launch'
 import type { TrayAction, TrayInfo, UpdateConfig } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
@@ -25,6 +33,10 @@ let isQuitting = false
 let updater: Updater | null = null
 // Last status snapshot received from the renderer via `tray:update`; replayed to the mini window on load.
 let lastTrayInfo: TrayInfo | null = null
+// Game id from `--launch <gameId>` (startup or second instance), queued until the renderer can receive it.
+let pendingLaunchId: string | null = null
+// Parsed once at startup: `Game+.exe --launch <gameId>` (null when absent/invalid).
+const cliLaunchId = parseLaunchArg(process.argv)
 
 // Crash handlers must be installed before app.whenReady() so early failures are captured.
 installCrashHandlers()
@@ -47,6 +59,19 @@ function showMainWindow(): void {
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
+}
+
+/**
+ * Sends 'launch:request' to the main renderer. If the window doesn't exist yet
+ * or hasn't finished loading, the id is queued and flushed on did-finish-load.
+ */
+function sendLaunchRequest(gameId: string): void {
+  const win = mainWindow
+  if (!win || win.isDestroyed() || win.webContents.isLoading()) {
+    pendingLaunchId = gameId
+    return
+  }
+  win.webContents.send('launch:request', gameId)
 }
 
 /** Sends a tray quick action to the renderer (which owns the accel/diagnostics stores). */
@@ -280,7 +305,8 @@ function createWindow(): void {
   mainWindow = win
 
   // When launched at login with "start hidden" enabled, keep the window in the tray only.
-  const startHidden = process.argv.includes('--hidden') && getPrefs().startHidden
+  // A --launch start must always show the window (the user explicitly launched a game).
+  const startHidden = process.argv.includes('--hidden') && getPrefs().startHidden && !cliLaunchId
   win.on('ready-to-show', () => {
     if (!startHidden) win.show()
   })
@@ -316,6 +342,14 @@ function createWindow(): void {
     }
     e.preventDefault()
     openExternalIfAllowed(url)
+  })
+
+  // Flush a queued --launch request once the renderer is able to receive it.
+  win.webContents.on('did-finish-load', () => {
+    if (pendingLaunchId && mainWindow === win) {
+      win.webContents.send('launch:request', pendingLaunchId)
+      pendingLaunchId = null
+    }
   })
 
   // Reflect the OS theme so the renderer can honour "system". Remove the listener when the window closes
@@ -354,6 +388,70 @@ function registerWindowControls(): void {
   // Renderer-only UI prefs (onboarding etc.).
   ipcMain.handle('prefs:get', () => getPrefs())
   ipcMain.handle('prefs:set', (_e, patch) => setPrefs(patch ?? {}))
+
+  // --- 「加速并启动」: execute a validated launch target ---
+  ipcMain.handle('launch:game', async (_e, target: unknown) => {
+    if (typeof target !== 'string' || target.length === 0) {
+      return { ok: false, error: INVALID_TARGET_MESSAGE }
+    }
+    // Validate again in main — the renderer value is never trusted.
+    const v = validateLaunchTarget(target, (p) => existsSync(p))
+    if (!v.ok) return { ok: false, error: v.error }
+    try {
+      if (v.kind === 'exe') {
+        // Launch the exe directly: no extra arguments, no shell (no cmd.exe, no shell:true).
+        const child = spawn(target, [], {
+          cwd: dirname(target),
+          detached: true,
+          stdio: 'ignore',
+          shell: false,
+          windowsHide: false
+        })
+        child.on('error', (err) => console.error('launch failed:', err))
+        child.unref()
+      } else {
+        await shell.openExternal(target)
+      }
+      return { ok: true }
+    } catch (err) {
+      console.error('launch failed:', err)
+      return { ok: false, error: '启动失败，请稍后重试' }
+    }
+  })
+
+  // --- 「加速并启动」: create the desktop shortcut pointing back at Game+ ---
+  ipcMain.handle('launch:create-shortcut', (_e, gameId: unknown, gameName: unknown) => {
+    if (typeof gameId !== 'string' || !isValidGameId(gameId)) {
+      return { ok: false, error: '无效的游戏 ID' }
+    }
+    const name = sanitizeShortcutName(typeof gameName === 'string' ? gameName : '', gameId)
+    const path = join(app.getPath('desktop'), `${name} - Game+ 加速.lnk`)
+    try {
+      const ok = shell.writeShortcutLink(path, 'create', {
+        target: process.execPath,
+        args: `--launch ${gameId}`,
+        icon: process.execPath,
+        iconIndex: 0,
+        description: `用 Game+ 加速并启动 ${name}`
+      })
+      return ok ? { ok: true, path } : { ok: false, error: '创建快捷方式失败' }
+    } catch (err) {
+      console.error('create shortcut failed:', err)
+      return { ok: false, error: '创建快捷方式失败' }
+    }
+  })
+
+  // --- 「加速并启动」: file picker for the .exe launch target ---
+  ipcMain.handle('launch:pick-exe', async () => {
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+    const result = await dialog.showOpenDialog(win as BrowserWindow, {
+      title: '选择游戏启动程序',
+      filters: [{ name: '可执行文件', extensions: ['exe'] }],
+      properties: ['openFile']
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  })
 
   // --- Desktop notifications (only when the window isn't visible/focused) ---
   ipcMain.handle('app:notify', (_e, title: unknown, body: unknown) => {
@@ -470,8 +568,11 @@ if (!gotSingleInstanceLock) {
   // Nothing has started yet (no sidecar, no window, no tray), so exit synchronously.
   app.exit(0)
 } else {
-  app.on('second-instance', () => {
+  // A second `Game+.exe --launch <gameId>` hands the id to the running instance's renderer.
+  app.on('second-instance', (_e, argv) => {
     showMainWindow()
+    const launchId = parseLaunchArg(argv)
+    if (launchId) sendLaunchRequest(launchId)
   })
 
   app.whenReady().then(() => {
@@ -490,6 +591,10 @@ if (!gotSingleInstanceLock) {
     }
     createWindow()
     createTray()
+
+    // `Game+.exe --launch <gameId>`: the window is forced visible (see createWindow); queue the
+    // request until the renderer has finished loading, then hand it the game id.
+    if (cliLaunchId) sendLaunchRequest(cliLaunchId)
 
     // Client auto-update: disabled unless the user configured a source. Never auto-downloads.
     updater = new Updater()

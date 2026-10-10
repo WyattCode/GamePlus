@@ -100,6 +100,26 @@ const api = {
     collectClient: (): Promise<unknown> => ipcRenderer.invoke('diag:collect-client'),
     saveBundle: (fileName: string, base64: string): Promise<string | null> =>
       ipcRenderer.invoke('diag:save-bundle', fileName, base64)
+  },
+  launch: {
+    // Executes a validated launch target (steam/epic URL or local .exe path).
+    launchGame: (target: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('launch:game', target),
+    // Creates the "<name> - Game+ 加速.lnk" desktop shortcut for --launch <gameId>.
+    createShortcut: (
+      gameId: string,
+      gameName: string
+    ): Promise<{ ok: boolean; path?: string; error?: string }> =>
+      ipcRenderer.invoke('launch:create-shortcut', gameId, gameName),
+    // Opens a file dialog restricted to .exe files; null when cancelled.
+    pickExe: (): Promise<string | null> => ipcRenderer.invoke('launch:pick-exe'),
+    // Main asks the renderer to accelerate + launch the given game (from --launch).
+    // Returns an unsubscribe function so callers can detach the listener.
+    onLaunchRequest: (cb: (gameId: string) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, gameId: string): void => cb(gameId)
+      ipcRenderer.on('launch:request', listener)
+      return () => ipcRenderer.removeListener('launch:request', listener)
+    }
   }
 }
 

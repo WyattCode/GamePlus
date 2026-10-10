@@ -15,6 +15,7 @@ using Netch.Core.Services.AutoSwitch;
 using Netch.Core.Services.Diagnostics;
 using Netch.Core.Services.History;
 using Netch.Core.Services.Import;
+using Netch.Core.Services.Launch;
 using Netch.Core.Services.Library;
 using Netch.Core.Services.Rules;
 using Netch.Core.Utils;
@@ -411,6 +412,53 @@ internal sealed class RpcRouter
                     await SettingsSvc.SaveAsync();
                     return GameList();
                 }, ct);
+            }
+
+            case "games.setLaunch":
+            {
+                var id = JsonParams.RequiredString(@params, "id");
+                var raw = JsonParams.OptionalString(@params, "target");
+
+                // Validate OUTSIDE the state lock (File.Exists I/O) and BEFORE mutating anything, so a
+                // bad target can't leave settings half-applied. Empty/whitespace clears the target.
+                var target = LaunchTargetValidator.Normalize(raw);
+
+                return await WithStateValueAsync(async () =>
+                {
+                    _ = Games.Games.FirstOrDefault(g => g.Id == id)
+                        ?? throw new InvalidOperationException("游戏不存在");
+
+                    if (string.IsNullOrEmpty(target))
+                        SettingsSvc.Settings.GameLaunchTargets.TryRemove(id, out _);
+                    else
+                        SettingsSvc.Settings.GameLaunchTargets[id] = target;
+
+                    await SettingsSvc.SaveAsync();
+                    return GameList();
+                }, ct);
+            }
+
+            case "games.suggestLaunch":
+            {
+                var id = JsonParams.RequiredString(@params, "id");
+
+                // Snapshot the game under the lock, then run the scan OUTSIDE it (file I/O can take
+                // seconds) on a background thread — exactly like library.scan, but restricted to this
+                // single game so the matcher only reports entries for it.
+                var game = await WithStateValue(
+                    () => Games.Games.FirstOrDefault(g => g.Id == id)
+                          ?? throw new InvalidOperationException("游戏不存在"),
+                    ct);
+
+                var result = await Task.Run(
+                    () => LibraryScanner.ScanAll(new List<Game> { game }, ct), ct);
+
+                var targets = result.Games
+                    .Where(d => d.GameId == id)
+                    .SelectMany(d => LaunchTargetValidator.SuggestFrom(d.Installed))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                return new { targets };
             }
 
             case "games.add":
@@ -958,7 +1006,8 @@ internal sealed class RpcRouter
         var choices = SettingsSvc.Settings.GameServerChoice;
         var modes = SettingsSvc.Settings.GameCaptureMode;
         var downloads = SettingsSvc.Settings.GameDownloadViaProxy;
-        return Games.Games.Select(g => Mapping.ToDto(g, auto, choices, modes, downloads)).ToArray();
+        var launches = SettingsSvc.Settings.GameLaunchTargets;
+        return Games.Games.Select(g => Mapping.ToDto(g, auto, choices, modes, downloads, launches)).ToArray();
     }
 
     /// <summary>Game name for a given id, or null when unknown (used for auto-accel event payloads).</summary>

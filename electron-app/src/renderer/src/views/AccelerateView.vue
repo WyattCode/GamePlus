@@ -5,13 +5,16 @@ import AccelHistoryCard from '@/components/AccelHistoryCard.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import EffectChart from '@/components/EffectChart.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
+import LaunchTargetDialog from '@/components/LaunchTargetDialog.vue'
 import { gameColor } from '@/utils/gameIcon'
 import { backend } from '@/api/backend'
 import { adviseBeforeAccel, adviseDuringAccel, type EffectAdvice } from '@/utils/effectAdvice'
+import { createShortcut } from '@/utils/launchApi'
 import { useAccelStore } from '@/stores/accel'
 import { useDiagnosticsStore } from '@/stores/diagnostics'
 import { useLibraryStore } from '@/stores/library'
 import { errorMessage, useToastStore } from '@/stores/toast'
+import { launchDialogGameId, useAccelerateAndLaunch } from '@/composables/useAccelerateAndLaunch'
 import { fmtDelay, fmtDuration, fmtLatency, fmtRate } from '@/utils/format'
 import type { BaselineInfo, CaptureMode, CaptureModeKind } from '@shared/types'
 
@@ -273,6 +276,40 @@ async function toggleAuto(enabled: boolean): Promise<void> {
     toast.error(errorMessage(e))
   }
 }
+
+// --- 加速并启动 / launch target / desktop shortcut ---
+
+const { accelerateAndLaunch } = useAccelerateAndLaunch()
+const launchBusy = ref(false)
+
+async function onAccelAndLaunch(): Promise<void> {
+  if (launchBusy.value) return
+  launchBusy.value = true
+  try {
+    await accelerateAndLaunch()
+  } finally {
+    launchBusy.value = false
+  }
+}
+
+async function onCreateShortcut(): Promise<void> {
+  const g = selectedGame.value
+  if (!g) return
+  const res = await createShortcut(g.id, g.name)
+  if (res.ok) toast.info('已在桌面创建快捷方式')
+  else toast.error(res.error ?? '创建快捷方式失败')
+}
+
+function openLaunchDialog(): void {
+  if (!selectedGame.value) return
+  launchDialogGameId.value = selectedGame.value.id
+}
+
+const dialogGame = computed(() => {
+  const id = launchDialogGameId.value
+  if (!id) return null
+  return library.games.find((g) => g.id === id) ?? null
+})
 
 // --- per-game server choice (Q1) ---
 
@@ -619,10 +656,27 @@ watch(
           </button>
         </div>
 
-        <button class="action" :class="{ stop: running }" :disabled="busy" @click="toggle">
-          <AppIcon name="bolt" :size="22" />
-          {{ buttonText }}
-        </button>
+        <div class="action-row">
+          <button class="action" :class="{ stop: running }" :disabled="busy" @click="toggle">
+            <AppIcon name="bolt" :size="22" />
+            {{ buttonText }}
+          </button>
+          <button
+            class="action secondary"
+            :disabled="busy || launchBusy"
+            title="加速并启动游戏"
+            @click="onAccelAndLaunch"
+          >
+            <AppIcon name="bolt" :size="18" />
+            加速并启动
+          </button>
+        </div>
+
+        <div class="launch-row">
+          <button type="button" class="link-btn" @click="openLaunchDialog">启动方式</button>
+          <span class="launch-sep">·</span>
+          <button type="button" class="link-btn" @click="onCreateShortcut">创建桌面快捷方式</button>
+        </div>
 
         <div v-if="captureHint" class="capture-hint" :class="{ warn: captureHint.warn }">
           <AppIcon name="info" :size="14" />
@@ -698,6 +752,13 @@ watch(
           </div>
         </div>
       </div>
+
+      <!-- Launch-target dialog (opened by 启动方式 / 加速并启动 without a target) -->
+      <LaunchTargetDialog
+        :open="launchDialogGameId !== null"
+        :game="dialogGame"
+        @close="launchDialogGameId = null"
+      />
     </template>
   </div>
 </template>
@@ -880,6 +941,45 @@ watch(
 }
 .action.stop {
   background: var(--danger);
+}
+.action-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 18px;
+}
+.action-row .action {
+  margin-top: 0;
+  flex: 1;
+}
+.action.secondary {
+  flex: none;
+  width: auto;
+  padding: 0 24px;
+  background: transparent;
+  border: 1px solid var(--brand);
+  color: var(--brand);
+}
+.action.secondary:hover {
+  background: var(--brand-soft);
+}
+.launch-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.link-btn {
+  font-size: 12px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.link-btn:hover {
+  color: var(--brand);
+}
+.launch-sep {
+  font-size: 12px;
+  color: var(--text-3);
 }
 
 .capture-hint {

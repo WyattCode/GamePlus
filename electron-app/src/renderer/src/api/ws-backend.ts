@@ -317,6 +317,13 @@ export class WebSocketBackend implements Backend {
   setGameDownloadProxy(id: string, enabled: boolean): Promise<Game[]> {
     return this.call('games.setDownloadProxy', { id, enabled })
   }
+  setGameLaunch(id: string, target: string): Promise<Game[]> {
+    return this.call('games.setLaunch', { id, target })
+  }
+  async suggestLaunch(id: string): Promise<string[]> {
+    const res = await this.call<{ targets: string[] }>('games.suggestLaunch', { id })
+    return res.targets
+  }
   addGame(data: Partial<Game>): Promise<Game[]> {
     return this.call('games.add', data)
   }

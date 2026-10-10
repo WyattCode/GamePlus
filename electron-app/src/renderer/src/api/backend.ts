@@ -30,6 +30,7 @@ import type {
 import { sampleGames, sampleServers, sampleSubscriptions } from '@/data/sampleData'
 import { WebSocketBackend, allowBackendConnection as allowBackendConnectionImpl } from './ws-backend'
 import { ADVANCED_DEFAULTS, validateDns, validateLocalPort, validateRegionPenalty } from '@/utils/advanced'
+import { validateLaunchTarget } from '@/utils/launchApi'
 
 export interface SubMutation {
   subscriptions: Subscription[]
@@ -64,6 +65,10 @@ export interface Backend {
   setGameMode(id: string, mode: CaptureMode | 'default'): Promise<Game[]>
   /** Toggles whether the game's download (CDN) traffic also goes through the node. */
   setGameDownloadProxy(id: string, enabled: boolean): Promise<Game[]>
+  /** Sets (or clears, with an empty string) the per-game launch target (steam://, epic:// or a local .exe path). */
+  setGameLaunch(id: string, target: string): Promise<Game[]>
+  /** Returns launch-target suggestions derived from the installed-games scan (empty when none). */
+  suggestLaunch(id: string): Promise<string[]>
   onAutoAccel(cb: (e: AutoAccelEvent) => void): () => void
   /** Pushes AutoSwitchEvent when the auto node switcher reacts to sustained bad quality. */
   onAutoSwitch(cb: (e: AutoSwitchEvent) => void): () => void
@@ -273,6 +278,9 @@ class MockBackend implements Backend {
   /** Per-game download-via-proxy flags (gameId → true); missing = downloads go DIRECT. */
   private downloadProxy = new Map<string, boolean>()
 
+  /** Per-game launch targets (gameId → target); mirrors AppSettings.GameLaunchTargets. */
+  private launchTargets = new Map<string, string>()
+
   private mockServers: Server[] = structuredClone(sampleServers)
   private mockSubs: Subscription[] = structuredClone(sampleSubscriptions)
   private mockGames: Game[] = structuredClone(sampleGames)
@@ -289,12 +297,13 @@ class MockBackend implements Backend {
     }
   }
 
-  /** Returns the mock game list with captureMode/availableModes/downloadViaProxy filled in. */
+  /** Returns the mock game list with captureMode/availableModes/downloadViaProxy/launchTarget filled in. */
   private gamesWithModes(): Game[] {
     return this.mockGames.map((g) => ({
       ...g,
       captureMode: this.gameModes.get(g.id) ?? null,
       downloadViaProxy: this.downloadProxy.get(g.id) ?? false,
+      launchTarget: this.launchTargets.get(g.id) ?? null,
       availableModes: availableModesFor(g)
     }))
   }
@@ -721,6 +730,25 @@ class MockBackend implements Backend {
     else this.downloadProxy.delete(id)
     return structuredClone(this.gamesWithModes())
   }
+  async setGameLaunch(id: string, target: string): Promise<Game[]> {
+    const g = this.mockGames.find((x) => x.id === id)
+    if (!g) throw new Error('游戏不存在')
+    const t = (target ?? '').trim()
+    if (t) {
+      // Light validation only: the mock does not check .exe existence on disk.
+      const err = validateLaunchTarget(t)
+      if (err) throw new Error(err)
+      this.launchTargets.set(id, t)
+    } else {
+      this.launchTargets.delete(id)
+    }
+    return structuredClone(this.gamesWithModes())
+  }
+  async suggestLaunch(id: string): Promise<string[]> {
+    if (id === 'apex') return ['steam://rungameid/1172470']
+    if (id === 'valorant') return ['C:\\Riot Games\\VALORANT\\live\\VALORANT.exe']
+    return []
+  }
   onAutoAccel(_cb: (e: AutoAccelEvent) => void): () => void {
     // The mock never detects real game processes, so this event never fires.
     return () => {}
@@ -762,6 +790,7 @@ class MockBackend implements Backend {
     this.mockGames = this.mockGames.filter((x) => x.id !== id)
     this.gameModes.delete(id)
     this.downloadProxy.delete(id)
+    this.launchTargets.delete(id)
     return structuredClone(this.gamesWithModes())
   }
   async exportServers(): Promise<string[]> {

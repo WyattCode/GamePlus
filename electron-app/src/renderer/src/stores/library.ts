@@ -113,6 +113,20 @@ export const useLibraryStore = defineStore('library', () => {
     }
   }
 
+  /**
+   * Persists the per-game launch target (empty string clears it). Keeps the accel store's
+   * selected-game snapshot in sync so the launch dialog reflects the new value immediately.
+   */
+  async function setGameLaunch(id: string, target: string): Promise<void> {
+    games.value = await backend.setGameLaunch(id, target)
+
+    const accel = useAccelStore()
+    if (accel.selectedGame?.id === id) {
+      const updated = games.value.find((g) => g.id === id)
+      if (updated) accel.selectedGame = updated
+    }
+  }
+
   async function addGame(data: Partial<Game>): Promise<void> {
     games.value = await backend.addGame(data)
   }
@@ -235,6 +249,7 @@ export const useLibraryStore = defineStore('library', () => {
     setGameServer,
     setGameMode,
     setGameDownloadProxy,
+    setGameLaunch,
     addGame,
     updateGame,
     removeGame,

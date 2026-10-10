@@ -67,6 +67,14 @@ public partial class AppSettings : ObservableObject
     public ConcurrentDictionary<string, bool> GameDownloadViaProxy { get; set; } = new();
 
     /// <summary>
+    ///     Per-game launch target for 「加速并启动」 (gameId → target). Only three forms are allowed
+    ///     (validated by <c>LaunchTargetValidator.Normalize</c>): a <c>steam://rungameid/&lt;appid&gt;</c>
+    ///     link, an Epic launcher link, or an absolute path to an existing <c>.exe</c> file.
+    ///     Concurrent so the RPC path writes it while settings are being serialized.
+    /// </summary>
+    public ConcurrentDictionary<string, string> GameLaunchTargets { get; set; } = new();
+
+    /// <summary>
     ///     Extra applications that are additionally proxied or explicitly bypassed in process-capture
     ///     mode. Only applies when acceleration runs in process mode (netfilter Redirector).
     /// </summary>

@@ -35,6 +35,7 @@ public sealed class EffectMonitor
     private bool _hasTarget;
     private bool _measuring;
     private bool _started;
+    private bool _disabled;
     private string? _socksHost;
     private int _socksPort;
     private Timer? _timer;
@@ -66,6 +67,7 @@ public sealed class EffectMonitor
         var target = EffectProbeTarget.Resolve(game);
         lock (_lock)
         {
+            _disabled = false;
             _target = target;
             _hasTarget = target is not null;
             _baselineSamples.Clear();
@@ -158,6 +160,23 @@ public sealed class EffectMonitor
         }
     }
 
+    /// <summary>
+    ///     Disables effect measurement: <see cref="Report" /> then returns HasTarget=false with the
+    ///     "已关闭加速效果测量" summary. Reset by the next <see cref="MeasureBaselineAsync" />.
+    /// </summary>
+    public void Disable()
+    {
+        lock (_lock)
+        {
+            _timer?.Dispose();
+            _timer = null;
+            _disabled = true;
+            _hasTarget = false;
+            _measuring = false;
+        }
+        Updated?.Invoke();
+    }
+
     /// <summary>Clears all state (baseline, series, target).</summary>
     public void Reset()
     {
@@ -172,6 +191,7 @@ public sealed class EffectMonitor
             _hasTarget = false;
             _measuring = false;
             _started = false;
+            _disabled = false;
         }
         Updated?.Invoke();
     }
@@ -220,6 +240,10 @@ public sealed class EffectMonitor
     {
         lock (_lock)
         {
+            if (_disabled)
+                return new EffectReport(false, null, null, null, null, "已关闭加速效果测量",
+                    Array.Empty<EffectPoint>(), false);
+
             var baseline = _baselineSamples.Count > 0 ? EffectStats.Compute(_baselineSamples) : null;
             var currentSamples = _accelSamples.Count > CurrentWindow
                 ? _accelSamples.Skip(_accelSamples.Count - CurrentWindow).ToList()

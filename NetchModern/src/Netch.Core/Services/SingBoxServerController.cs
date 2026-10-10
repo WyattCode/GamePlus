@@ -26,6 +26,9 @@ public sealed class SingBoxServerController : ProcessGuard, IServerController
     /// <summary>Local Clash API port (for traffic stats). Valid after <see cref="StartAsync" />.</summary>
     public int ApiPort { get; private set; }
 
+    /// <summary>Fixed local SOCKS5 port (0 = automatic). Set before <see cref="StartAsync" />.</summary>
+    public int PreferredSocksPort { get; set; }
+
     public IReadOnlyCollection<string>? ProxyDomains { get; set; }
 
     public IReadOnlyCollection<string>? ProxyIps { get; set; }
@@ -35,7 +38,7 @@ public sealed class SingBoxServerController : ProcessGuard, IServerController
         if (server is not (Hysteria2Server or ShadowsocksServer))
             throw new InvalidOperationException("SingBoxServerController only handles Hysteria2 and Shadowsocks servers.");
 
-        SocksPort = GetFreeTcpPort();
+        SocksPort = ResolveSocksPort();
         HttpPort = NextDistinctPort(SocksPort);
         ApiPort = NextDistinctPort(SocksPort, HttpPort);
 
@@ -99,6 +102,19 @@ public sealed class SingBoxServerController : ProcessGuard, IServerController
         {
             return (0, 0);
         }
+    }
+
+    /// <summary>Uses the fixed port when configured (and free), otherwise picks a free one.</summary>
+    private int ResolveSocksPort()
+    {
+        if (PreferredSocksPort <= 0)
+            return GetFreeTcpPort();
+
+        if (!AdvancedSettingsValidator.IsPortFree(PreferredSocksPort))
+            throw new InvalidOperationException(
+                $"本地端口 {PreferredSocksPort} 已被占用，请在高级设置中更换端口或改为自动");
+
+        return PreferredSocksPort;
     }
 
     private static int NextDistinctPort(params int[] taken)

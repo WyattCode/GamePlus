@@ -26,9 +26,11 @@ internal record AccelStatusDto(string State, int Latency, double Loss, int Jitte
 internal record LogDto(string Ts, string Level, string Message);
 
 internal record SettingsDto(string Theme, string Language, bool MinimizeToTray, string RulesUrl,
-    bool AutoAccelerate, ExtraAppDto[] ExtraApps);
+    bool AutoAccelerate, ExtraAppDto[] ExtraApps, AdvancedSettingsDto Advanced);
 
 internal record ExtraAppDto(string Name, string Process, string Mode, bool Enabled);
+
+internal record AdvancedSettingsDto(string TunDns, bool MeasureEffect, int RegionPenaltyMs, int LocalSocksPort);
 
 internal record EffectSnapshotDto(int Latency, double Loss, int Jitter, int Samples);
 
@@ -206,7 +208,14 @@ internal static class Mapping
 
     public static SettingsDto ToDto(Netch.Core.Models.Settings.AppSettings s) =>
         new(s.Theme.ToString().ToLowerInvariant(), s.Language, s.MinimizeToTray, s.RulesUrl,
-            s.AutoAccelerate, s.ExtraApps.Select(ToDto).ToArray());
+            s.AutoAccelerate, s.ExtraApps.Select(ToDto).ToArray(), ToAdvancedDto(s));
+
+    /// <summary>
+    ///     Builds the advanced-settings DTO. <c>TunDns</c> lives on <see cref="AppSettings.Dns" />, not on
+    ///     <see cref="AdvancedSettings" />, so the whole settings object is needed here.
+    /// </summary>
+    public static AdvancedSettingsDto ToAdvancedDto(Netch.Core.Models.Settings.AppSettings s) =>
+        new(s.Dns.OtherDns, s.Advanced.MeasureEffect, s.Advanced.RegionPenaltyMs, s.Advanced.LocalSocksPort);
 
     public static ExtraAppDto ToDto(ExtraApp a) =>
         new(a.Name, a.Process, a.Mode == ExtraAppMode.Bypass ? "bypass" : "proxy", a.Enabled);

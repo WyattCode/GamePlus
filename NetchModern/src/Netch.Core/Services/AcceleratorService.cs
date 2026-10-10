@@ -33,6 +33,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     private readonly ISystemProxyService _systemProxy;
     private readonly EffectMonitor? _effect;
     private readonly Func<IReadOnlyList<ExtraApp>>? _extraApps;
+    private readonly Func<AdvancedSettings>? _advanced;
 
     private IServerController? _controller;
     private IModeController? _modeController;
@@ -56,7 +57,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
 
     public AcceleratorService(ILogService log, Func<Server, IServerController> controllerFactory,
         ISystemProxyService systemProxy, IModeControllerFactory modeControllerFactory, EffectMonitor? effect = null,
-        Func<IReadOnlyList<ExtraApp>>? extraApps = null)
+        Func<IReadOnlyList<ExtraApp>>? extraApps = null, Func<AdvancedSettings>? advanced = null)
     {
         _log = log;
         _controllerFactory = controllerFactory;
@@ -64,6 +65,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         _modeControllerFactory = modeControllerFactory;
         _effect = effect;
         _extraApps = extraApps;
+        _advanced = advanced;
     }
 
     /// <summary>Convenience overload using the default <see cref="ModeControllerFactory" /> (real drivers).</summary>
@@ -97,10 +99,17 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         {
             _log.Log(LogLevel.Info, $"Accelerating {game.Name} via {node.DisplayName}");
 
+            var adv = _advanced?.Invoke();
+
             // Take the direct baseline BEFORE any capture is active: in TUN mode the capture layer would
             // route the probe's own traffic through the tunnel, so the "direct" number would be wrong.
             if (_effect != null)
-                await _effect.MeasureBaselineAsync(game, ct);
+            {
+                if (adv is { MeasureEffect: false })
+                    _effect.Disable();
+                else
+                    await _effect.MeasureBaselineAsync(game, ct);
+            }
 
             // Games use raw sockets that ignore the Windows system proxy. To actually redirect their
             // traffic we capture it at driver level: by process (netfilter Redirector) when process names
@@ -117,6 +126,9 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             var useCapture = hasProcess || hasIp;
 
             _controller = _controllerFactory(node);
+            // Fixed local SOCKS5 port (0 = automatic). Set before StartAsync; persists across the
+            // restart in StartDomainProxyAsync because it reuses the same controller instance.
+            _controller.PreferredSocksPort = adv?.LocalSocksPort ?? 0;
             if (!useCapture)
             {
                 // Domain-only game: system proxy with xray domain/IP routing (works for apps that honour
@@ -146,7 +158,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
 
             // Start the accelerated sampling loop against the SOCKS endpoint of the controller that is
             // actually running (StartDomainProxyAsync restarts it, so _socks is re-assigned there).
-            if (_effect != null && _socks != null)
+            if (_effect != null && _socks != null && adv is not { MeasureEffect: false })
                 _effect.Begin(_socks.Hostname, _socks.Port);
         }
         catch (Exception e)
@@ -252,6 +264,9 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         try { await _controller.StopAsync(ct); }
         catch (Exception e) { _log.Log(LogLevel.Warning, $"Node stop error during fallback: {e.Message}"); }
 
+        // Re-apply the fixed local port: the controller instance is reused, but be explicit so a future
+        // refactor that swaps the instance can't silently drop the setting.
+        _controller.PreferredSocksPort = _advanced?.Invoke()?.LocalSocksPort ?? 0;
         _controller.ProxyDomains = game.ProxyDomains;
         _controller.ProxyIps = game.ProxyIps;
         _socks = await _controller.StartAsync(node, ct);

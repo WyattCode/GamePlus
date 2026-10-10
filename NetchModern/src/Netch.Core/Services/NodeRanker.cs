@@ -199,11 +199,11 @@ public sealed record NodeRanking(
 /// </summary>
 public static class NodeRanker
 {
-    /// <summary>Penalty (ms) applied to a node that is outside the game's preferred regions.</summary>
+    /// <summary>Default penalty (ms) applied to a node that is outside the game's preferred regions.</summary>
     public const int RegionPenaltyMs = 60;
 
     /// <summary>Ranks the pool best-first and picks a recommended node with a human-readable reason.</summary>
-    public static NodeRanking Rank(Game? game, IReadOnlyList<Server> servers)
+    public static NodeRanking Rank(Game? game, IReadOnlyList<Server> servers, int regionPenaltyMs = RegionPenaltyMs)
     {
         var pref = GameRegionPreference.For(game);
         var preferred = pref?.Regions ?? Array.Empty<string>();
@@ -219,7 +219,7 @@ public static class NodeRanker
 
             var tested = s.Delay >= 0;
             // Untested/failed nodes get score -1 so the UI can render them as grey/empty bars.
-            var score = tested ? s.Delay + (preferred.Count > 0 && !match ? RegionPenaltyMs : 0) : -1;
+            var score = tested ? s.Delay + (preferred.Count > 0 && !match ? regionPenaltyMs : 0) : -1;
 
             candidates.Add(new RankedNode(s, s.Delay, regionCode, regionName, match, score, string.Empty));
         }
@@ -241,7 +241,7 @@ public static class NodeRanker
             .ToList();
 
         var recommended = withNotes.FirstOrDefault();
-        var reason = BuildReason(game, withNotes, preferred, label);
+        var reason = BuildReason(game, withNotes, preferred, label, regionPenaltyMs);
 
         return new NodeRanking(withNotes, recommended, reason, label, preferred);
     }
@@ -262,7 +262,8 @@ public static class NodeRanker
         return string.Join(" · ", tags);
     }
 
-    private static string BuildReason(Game? game, IReadOnlyList<RankedNode> ordered, IReadOnlyList<string> preferred, string? label)
+    private static string BuildReason(Game? game, IReadOnlyList<RankedNode> ordered, IReadOnlyList<string> preferred,
+        string? label, int regionPenaltyMs)
     {
         var best = ordered.FirstOrDefault();
         if (best is null)
@@ -297,7 +298,7 @@ public static class NodeRanker
         // A matching node exists but the recommended (lowest-delay) node is not one of them.
         // Describe the best MATCHING node, not the recommended unmatched one.
         var m = matching.OrderBy(c => c.Delay).First();
-        return $"{label}所在地区的线路（{m.RegionName} {m.Delay} ms）比最低延迟线路慢 {RegionPenaltyMs} ms 以上，已选择延迟最低的线路（{best.Delay} ms）";
+        return $"{label}所在地区的线路（{m.RegionName} {m.Delay} ms）比最低延迟线路慢 {regionPenaltyMs} ms 以上，已选择延迟最低的线路（{best.Delay} ms）";
     }
 
     private static bool HasCnAndIntl(Game? game)

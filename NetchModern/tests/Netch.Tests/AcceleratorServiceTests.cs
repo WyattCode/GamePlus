@@ -13,6 +13,7 @@ public class AcceleratorServiceTests
     {
         public string Name => "fake";
         public int HttpPort => 2802;
+        public int PreferredSocksPort { get; set; }
         public IReadOnlyCollection<string>? ProxyDomains { get; set; }
         public IReadOnlyCollection<string>? ProxyIps { get; set; }
         public int StartCalls { get; private set; }

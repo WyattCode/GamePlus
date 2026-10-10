@@ -13,6 +13,12 @@ public interface IServerController
     /// <summary>Local HTTP inbound port (for the Windows system proxy). Valid after <see cref="StartAsync" />.</summary>
     int HttpPort { get; }
 
+    /// <summary>
+    ///     Fixed local SOCKS5 inbound port. 0 = automatic (a free port is picked at start). Set before
+    ///     <see cref="StartAsync" />; when non-zero the port must be free or the start throws.
+    /// </summary>
+    int PreferredSocksPort { get; set; }
+
     /// <summary>Game mode: only these domains route through the node; set before <see cref="StartAsync" />.</summary>
     IReadOnlyCollection<string>? ProxyDomains { get; set; }
 

@@ -26,6 +26,8 @@ public partial class AppSettings : ObservableObject
 
     public DnsSettings Dns { get; set; } = new();
 
+    public AdvancedSettings Advanced { get; set; } = new();
+
     /// <summary>Ids of games the user has favourited.</summary>
     public List<string> FavoriteGames { get; set; } = new();
 

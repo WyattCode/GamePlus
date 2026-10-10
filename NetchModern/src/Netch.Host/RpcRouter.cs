@@ -100,7 +100,8 @@ internal sealed class RpcRouter
                     ? null
                     : await WithStateValue(() => Games.Games.FirstOrDefault(g => g.Id == gameId), ct);
 
-                var ranking = NodeRanker.Rank(game, pool);
+                var penalty = SettingsSvc.Settings.Advanced.RegionPenaltyMs;
+                var ranking = NodeRanker.Rank(game, pool, penalty);
                 return Mapping.ToDto(ranking, pool);
             }
 
@@ -417,6 +418,15 @@ internal sealed class RpcRouter
                     return Mapping.ToDto(SettingsSvc.Settings);
                 }, ct);
 
+            case "settings.resetAdvanced":
+                return await WithStateValueAsync(async () =>
+                {
+                    SettingsSvc.Settings.Advanced = new AdvancedSettings();
+                    SettingsSvc.Settings.Dns.OtherDns = "1.1.1.1";
+                    await SettingsSvc.SaveAsync();
+                    return Mapping.ToDto(SettingsSvc.Settings);
+                }, ct);
+
             case "rules.status":
                 return await WithStateValue(() =>
                 {
@@ -606,6 +616,44 @@ internal sealed class RpcRouter
             var parsed = ParseExtraApps(p);
             s.ExtraApps = parsed;
         }
+        if (JsonParams.HasProperty(p, "advanced"))
+            ApplyAdvanced(p, s);
+    }
+
+    /// <summary>
+    ///     Applies the <c>advanced</c> object. Validates ALL provided fields first (throwing on the first
+    ///     error without mutating anything), then applies them.
+    /// </summary>
+    private static void ApplyAdvanced(JsonElement p, AppSettings s)
+    {
+        if (!p.TryGetProperty("advanced", out var adv) || adv.ValueKind != JsonValueKind.Object)
+            throw new InvalidOperationException("advanced 必须是对象");
+
+        string? tunDns = null;
+        bool? measureEffect = null;
+        int? regionPenalty = null;
+        int? localPort = null;
+
+        if (JsonParams.HasProperty(adv, "tunDns"))
+            tunDns = AdvancedSettingsValidator.ValidateDns(JsonParams.OptionalString(adv, "tunDns"));
+        if (JsonParams.HasProperty(adv, "measureEffect"))
+            measureEffect = JsonParams.OptionalBool(adv, "measureEffect") ?? false;
+        if (JsonParams.HasProperty(adv, "regionPenaltyMs"))
+            regionPenalty = AdvancedSettingsValidator.ValidateRegionPenalty(
+                JsonParams.OptionalInt(adv, "regionPenaltyMs") ?? 0);
+        if (JsonParams.HasProperty(adv, "localSocksPort"))
+            localPort = AdvancedSettingsValidator.ValidateLocalPort(
+                JsonParams.OptionalInt(adv, "localSocksPort") ?? 0);
+
+        // All fields validated — now apply.
+        if (tunDns is not null)
+            s.Dns.OtherDns = tunDns;
+        if (measureEffect is { } me)
+            s.Advanced.MeasureEffect = me;
+        if (regionPenalty is { } rp)
+            s.Advanced.RegionPenaltyMs = rp;
+        if (localPort is { } lp)
+            s.Advanced.LocalSocksPort = lp;
     }
 
     /// <summary>
@@ -768,7 +816,8 @@ internal sealed class RpcRouter
             pool = await WithStateValue(() => Servers.Servers.ToList(), ct);
         }
 
-        var ranking = NodeRanker.Rank(game, pool);
+        var penalty = SettingsSvc.Settings.Advanced.RegionPenaltyMs;
+        var ranking = NodeRanker.Rank(game, pool, penalty);
         var node = ranking.Recommended?.Server ?? pool[0];
         Logs.Log(Netch.Core.Enums.LogLevel.Info, $"智能选路：{node.Remark}（{ranking.Reason}）");
         return node;

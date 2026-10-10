@@ -25,6 +25,13 @@ public partial class AppSettings : ObservableObject
     [ObservableProperty]
     private bool _autoAccelerate = true;
 
+    /// <summary>
+    ///     Automatic subscription refresh interval in hours. 0 = disabled; allowed values are
+    ///     0, 6, 12, 24, 48. Defaults to 12.
+    /// </summary>
+    [ObservableProperty]
+    private int _subscriptionAutoUpdateHours = 12;
+
     public DnsSettings Dns { get; set; } = new();
 
     public AdvancedSettings Advanced { get; set; } = new();

@@ -110,6 +110,11 @@ var autoAccel = new AutoAccelHost(router, log: services.GetRequiredService<ILogS
 using var autoAccelCts = new CancellationTokenSource();
 _ = autoAccel.RunAsync(autoAccelCts.Token);
 
+// Scheduled subscription refresh: check 60 s after startup, then every 10 minutes. Fire-and-forget like
+// the other background work; cancelled on shutdown via the same token as auto-acceleration.
+var subscriptionScheduler = new SubscriptionScheduler(router, services.GetRequiredService<ILogService>());
+_ = subscriptionScheduler.RunAsync(autoAccelCts.Token);
+
 // Remote game rules: refresh in the background shortly after startup when a URL is configured. Failures
 // are logged and swallowed — the bundled/cached rules stay active.
 var rulesUrl = services.GetRequiredService<ISettingsService>().Settings.RulesUrl;

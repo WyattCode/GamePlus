@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.1",
-    "@electron-toolkit/utils": "^3.0.0"
+    "@electron-toolkit/utils": "^3.0.0",
+    "jsqr": "1.4.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.1",

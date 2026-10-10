@@ -28,7 +28,7 @@ internal record AccelStatusDto(string State, int Latency, double Loss, int Jitte
 internal record LogDto(string Ts, string Level, string Message);
 
 internal record SettingsDto(string Theme, string Language, bool MinimizeToTray, string RulesUrl,
-    bool AutoAccelerate, ExtraAppDto[] ExtraApps, AdvancedSettingsDto Advanced);
+    bool AutoAccelerate, int SubscriptionAutoUpdateHours, ExtraAppDto[] ExtraApps, AdvancedSettingsDto Advanced);
 
 internal record ExtraAppDto(string Name, string Process, string Mode, bool Enabled);
 
@@ -67,6 +67,9 @@ internal record RulesUpdateDto(string Status, string Message, int Version, GameD
 internal record AccelSessionDto(string Id, string GameId, string GameName, string? NodeName,
     string? Mode, string? ServerChoice, string StartedAt, string? EndedAt, int DurationSec,
     int? BaselineMs, int? AcceleratedMs, int? LatencyPct, string? Summary);
+
+/// <summary>Result of servers.import: how many nodes were added / skipped / rejected, plus the new list.</summary>
+internal record ImportResultDto(int Added, int Duplicates, int Invalid, string Format, ServerDto[] Servers);
 
 internal static class Mapping
 {
@@ -228,7 +231,7 @@ internal static class Mapping
 
     public static SettingsDto ToDto(Netch.Core.Models.Settings.AppSettings s) =>
         new(s.Theme.ToString().ToLowerInvariant(), s.Language, s.MinimizeToTray, s.RulesUrl,
-            s.AutoAccelerate, s.ExtraApps.Select(ToDto).ToArray(), ToAdvancedDto(s));
+            s.AutoAccelerate, s.SubscriptionAutoUpdateHours, s.ExtraApps.Select(ToDto).ToArray(), ToAdvancedDto(s));
 
     /// <summary>
     ///     Builds the advanced-settings DTO. <c>TunDns</c> lives on <see cref="AppSettings.Dns" />, not on

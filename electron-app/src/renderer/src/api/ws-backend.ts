@@ -7,6 +7,7 @@ import type {
   EffectReport,
   EngineSettings,
   Game,
+  ImportResult,
   LibraryScanResult,
   LogEntry,
   NodeRanking,
@@ -24,6 +25,7 @@ import type { Backend, SubMutation } from './backend'
 const DEFAULT_TIMEOUT_MS = 30_000
 const METHOD_TIMEOUTS: Record<string, number> = {
   'subs.update': 90_000,
+  'servers.import': 90_000,
   'servers.ping': 60_000,
   'nodes.rank': 60_000,
   'accel.start': 60_000,
@@ -276,6 +278,9 @@ export class WebSocketBackend implements Backend {
   }
   updateSubscription(id: string): Promise<SubMutation> {
     return this.call('subs.update', { id })
+  }
+  importNodes(text: string): Promise<ImportResult> {
+    return this.call('servers.import', { text })
   }
   toggleFavorite(id: string): Promise<Game[]> {
     return this.call('games.toggleFavorite', { id })

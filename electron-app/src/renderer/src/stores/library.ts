@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import type {
   DetectedGame,
   Game,
+  ImportResult,
   LibraryScanResult,
   RulesStatus,
   RulesUpdateResult,
@@ -145,6 +146,19 @@ export const useLibraryStore = defineStore('library', () => {
     return failed
   }
 
+  /**
+   * Imports nodes from pasted text (share links, subscription blob, Clash YAML or a subscription URL).
+   * Refreshes the server list and, when the backend created a subscription, reloads subscriptions too.
+   */
+  async function importNodes(text: string): Promise<ImportResult> {
+    const result = await backend.importNodes(text)
+    servers.value = result.servers
+    if (result.format === 'subscription') {
+      subscriptions.value = await backend.listSubscriptions()
+    }
+    return result
+  }
+
   /** Scans the local machine for installed games. Result is kept in `scanResult`. */
   async function scan(): Promise<LibraryScanResult> {
     scanning.value = true
@@ -200,6 +214,7 @@ export const useLibraryStore = defineStore('library', () => {
     removeSubscription,
     updateSubscription,
     updateAllSubscriptions,
+    importNodes,
     scan,
     addDetected,
     refreshRulesStatus,

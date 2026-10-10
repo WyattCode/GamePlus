@@ -10,6 +10,7 @@ import type {
   EngineSettings,
   ExtraApp,
   Game,
+  ImportResult,
   LibraryScanResult,
   LogEntry,
   NodeRanking,
@@ -49,6 +50,8 @@ export interface Backend {
   addSubscription(remark: string, link: string): Promise<Subscription[]>
   removeSubscription(id: string): Promise<SubMutation>
   updateSubscription(id: string): Promise<SubMutation>
+  /** Imports nodes from pasted text (share links, subscription blob, Clash YAML or a subscription URL). */
+  importNodes(text: string): Promise<ImportResult>
   toggleFavorite(id: string): Promise<Game[]>
   setGameAuto(id: string, enabled: boolean): Promise<Game[]>
   setGameServer(id: string, server: 'cn' | 'intl'): Promise<Game[]>
@@ -110,7 +113,7 @@ const SHORT_CODES: Array<{ code: string; name: string; re: RegExp }> = [
 const LONG_RULES: Array<{ code: string; name: string; re: RegExp }> = [
   { code: 'HK', name: '香港', re: /香港|港|🇭🇰|Hong ?Kong/i },
   { code: 'TW', name: '台湾', re: /台北|🇹🇼|Taiwan/i },
-  { code: 'JP', name: '日本', re: /日本|东京|大阪|🇯🇵|Japan|Tokyo|Osaka/i },
+  { code: 'JP', name: '日本', re: /东京|大阪|🇯🇵|Japan|Tokyo|Osaka/i },
   { code: 'KR', name: '韩国', re: /韩国|首尔|🇰🇷|Korea|Seoul/i },
   { code: 'SG', name: '新加坡', re: /新加坡|狮城|🇸🇬|Singapore/i },
   { code: 'US', name: '美国', re: /美国|洛杉矶|硅谷|圣何塞|西雅图|🇺🇸|United States|Los Angeles|San Jose/i },
@@ -196,6 +199,9 @@ export function isValidProcessName(s: string): boolean {
   if (s.includes('/') || s.includes('\\')) return false
   return PROCESS_NAME_RE.test(s)
 }
+
+// Schemes the mock recognises when pretending to import pasted share links.
+const IMPORT_SCHEMES = ['ss://', 'vmess://', 'trojan://', 'vless://', 'hysteria2://', 'socks://', 'socks5://']
 
 class MockBackend implements Backend {
   private statusCbs = new Set<(s: AccelStatus) => void>()
@@ -434,6 +440,7 @@ class MockBackend implements Backend {
     minimizeToTray: true,
     rulesUrl: '',
     autoAccelerate: true,
+    subscriptionAutoUpdateHours: 12,
     extraApps: [],
     advanced: { ...ADVANCED_DEFAULTS }
   }
@@ -522,6 +529,61 @@ class MockBackend implements Backend {
     if (s) s.lastUpdated = new Date().toISOString()
     return { subscriptions: structuredClone(this.mockSubs), servers: structuredClone(this.mockServers) }
   }
+
+  async importNodes(text: string): Promise<ImportResult> {
+    const trimmed = (text ?? '').trim()
+    if (!trimmed) throw new Error('无法识别的节点内容')
+
+    // A single http(s) URL is treated as a subscription.
+    if (/^https?:\/\/\S+$/i.test(trimmed)) {
+      this.mockSubs.push({
+        id: crypto.randomUUID(),
+        remark: '导入订阅',
+        link: trimmed,
+        serverCount: this.mockServers.length,
+        lastUpdated: new Date().toISOString()
+      })
+      return {
+        added: this.mockServers.length,
+        duplicates: 0,
+        invalid: 0,
+        format: 'subscription',
+        servers: structuredClone(this.mockServers)
+      }
+    }
+
+    const lines = trimmed
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => IMPORT_SCHEMES.some((s) => l.toLowerCase().startsWith(s)))
+
+    if (lines.length === 0) throw new Error('无法识别的节点内容')
+
+    // Pretend half are new and the rest duplicates.
+    const added = Math.ceil(lines.length / 2)
+    const duplicates = lines.length - added
+    for (let i = 0; i < added; i++) {
+      this.mockServers.push({
+        id: crypto.randomUUID(),
+        kind: 'ss',
+        type: 'SS',
+        remark: `导入节点 ${this.mockServers.length + 1}`,
+        hostname: 'mock.example.net',
+        port: 8388 + i,
+        group: 'NONE',
+        delay: -1
+      })
+    }
+
+    return {
+      added,
+      duplicates,
+      invalid: 0,
+      format: 'links',
+      servers: structuredClone(this.mockServers)
+    }
+  }
+
   async toggleFavorite(id: string): Promise<Game[]> {
     const g = this.mockGames.find((x) => x.id === id)
     if (g) g.favorite = !g.favorite
@@ -606,6 +668,12 @@ class MockBackend implements Backend {
         const key = process.toLowerCase()
         if (seen.has(key)) throw new Error(`进程 ${process} 重复`)
         seen.add(key)
+      }
+    }
+    if (patch.subscriptionAutoUpdateHours !== undefined) {
+      const hours = patch.subscriptionAutoUpdateHours
+      if (![0, 6, 12, 24, 48].includes(hours)) {
+        throw new Error('订阅自动更新间隔只能是 0、6、12、24 或 48 小时')
       }
     }
     const { advanced, ...rest } = patch

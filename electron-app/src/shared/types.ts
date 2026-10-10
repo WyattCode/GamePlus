@@ -127,6 +127,8 @@ export interface EngineSettings {
   rulesUrl: string
   /** Global master switch for auto-acceleration on game launch. */
   autoAccelerate: boolean
+  /** Automatic subscription refresh interval in hours; 0 = disabled (allowed: 0, 6, 12, 24, 48). */
+  subscriptionAutoUpdateHours: number
   /** Extra applications for per-app split routing (process mode only). */
   extraApps: ExtraApp[]
   /** Advanced engine options. */
@@ -139,6 +141,17 @@ export interface EngineSettings {
  */
 export type SettingsPatch = Partial<Omit<EngineSettings, 'advanced'>> & {
   advanced?: Partial<AdvancedSettings>
+}
+
+/** Result of importing nodes (share links, subscription blob, Clash YAML or a subscription URL). */
+export interface ImportResult {
+  added: number
+  duplicates: number
+  invalid: number
+  /** Detected payload format: "subscription" | "clash" | "links" | "base64". */
+  format: string
+  /** Full server list after the import. */
+  servers: Server[]
 }
 
 /** Connection state of the C# backend sidecar. */

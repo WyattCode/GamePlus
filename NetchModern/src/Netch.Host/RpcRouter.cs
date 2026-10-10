@@ -9,6 +9,7 @@ using Netch.Core.Services;
 using Netch.Core.Services.AutoStart;
 using Netch.Core.Services.Diagnostics;
 using Netch.Core.Services.History;
+using Netch.Core.Services.Import;
 using Netch.Core.Services.Library;
 using Netch.Core.Services.Rules;
 
@@ -149,6 +150,12 @@ internal sealed class RpcRouter
                         .ToArray(),
                     ct);
 
+            case "servers.import":
+            {
+                var text = JsonParams.RequiredString(@params, "text");
+                return await ImportNodesAsync(text, ct);
+            }
+
             case "accel.start":
             {
                 var gameId = JsonParams.RequiredString(@params, "gameId");
@@ -280,26 +287,7 @@ internal sealed class RpcRouter
             case "subs.update":
             {
                 var id = JsonParams.RequiredString(@params, "id");
-                // Resolve under the lock, then fetch+parse OUTSIDE it (network I/O can take tens of seconds),
-                // then apply the result under the lock again.
-                var sub = await WithStateValue(
-                    () => Subs.Subscriptions.FirstOrDefault(s => s.Id == id)
-                          ?? throw new InvalidOperationException("订阅不存在"),
-                    ct);
-
-                var servers = await Subs.FetchAsync(sub, ct);
-
-                return await WithStateValueAsync(async () =>
-                {
-                    // The subscription may have been removed while we were fetching — re-adding its servers
-                    // now would leave orphans behind.
-                    if (!Subs.Subscriptions.Contains(sub))
-                        throw new InvalidOperationException("订阅不存在");
-
-                    Subs.Apply(sub, servers);
-                    await Persistence.SaveAsync();
-                    return new { subscriptions = SubList(), servers = ServerList() };
-                }, ct);
+                return await RefreshSubscriptionAsync(id, ct);
             }
 
             case "games.toggleFavorite":
@@ -569,6 +557,120 @@ internal sealed class RpcRouter
             ct);
     }
 
+    /// <summary>
+    ///     Refreshes one subscription: resolves it under the state lock, fetches + parses OUTSIDE the lock
+    ///     (network I/O can take tens of seconds), then applies the result under the lock again. Used by
+    ///     subs.update and by the background SubscriptionScheduler.
+    /// </summary>
+    public async Task<object> RefreshSubscriptionAsync(string id, CancellationToken ct)
+    {
+        // Resolve under the lock, then fetch+parse OUTSIDE it (network I/O can take tens of seconds),
+        // then apply the result under the lock again.
+        var sub = await WithStateValue(
+            () => Subs.Subscriptions.FirstOrDefault(s => s.Id == id)
+                  ?? throw new InvalidOperationException("订阅不存在"),
+            ct);
+
+        var servers = await Subs.FetchAsync(sub, ct);
+
+        return await WithStateValueAsync(async () =>
+        {
+            // The subscription may have been removed while we were fetching — re-adding its servers
+            // now would leave orphans behind.
+            if (!Subs.Subscriptions.Contains(sub))
+                throw new InvalidOperationException("订阅不存在");
+
+            Subs.Apply(sub, servers);
+            await Persistence.SaveAsync();
+            return new { subscriptions = SubList(), servers = ServerList() };
+        }, ct);
+    }
+
+    /// <summary>
+    ///     Snapshot of (id, lastUpdated) for every subscription, read under the state lock. Used by the
+    ///     background SubscriptionScheduler so it never touches shared state outside the lock.
+    /// </summary>
+    public async Task<IReadOnlyList<(string Id, DateTime? LastUpdated)>> SnapshotSubscriptionsAsync(CancellationToken ct)
+    {
+        return await WithStateValue<IReadOnlyList<(string Id, DateTime? LastUpdated)>>(
+            () => Subs.Subscriptions
+                .Select(s => (s.Id, s.LastUpdated))
+                .ToList(),
+            ct);
+    }
+
+    /// <summary>Reads the configured subscription auto-update interval (hours) under the state lock.</summary>
+    public async Task<int> GetSubscriptionAutoUpdateHoursAsync(CancellationToken ct)
+    {
+        return await WithStateValue(() => SettingsSvc.Settings.SubscriptionAutoUpdateHours, ct);
+    }
+
+    /// <summary>
+    ///     Implements servers.import: a single http(s) URL becomes a subscription (created like subs.add,
+    ///     then refreshed); anything else is parsed by NodeImporter and deduped against the current pool.
+    /// </summary>
+    private async Task<object> ImportNodesAsync(string text, CancellationToken ct)
+    {
+        var trimmed = (text ?? "").Trim();
+        if (trimmed.Length == 0)
+            throw new InvalidOperationException("无法识别的节点内容");
+
+        // A single http(s) URL → treat as a subscription: create it exactly like subs.add, then refresh.
+        if (IsSingleHttpUrl(trimmed))
+        {
+            var sub = await WithStateValueAsync(async () =>
+            {
+                var s = new Netch.Core.Models.Subscription
+                {
+                    Remark = Netch.Core.Models.Subscription.DefaultRemarkFor(trimmed),
+                    Link = trimmed
+                };
+                s.EnsureId();
+                Subs.Add(s);
+                await Persistence.SaveAsync();
+                return s;
+            }, ct);
+
+            await RefreshSubscriptionAsync(sub.Id, ct);
+
+            return await WithStateValue(() =>
+            {
+                // Report only the servers this subscription added, not the whole pool. Look the
+                // subscription up again by id: it may have been removed while we were fetching.
+                var added = Subs.Subscriptions.FirstOrDefault(s => s.Id == sub.Id)?.ServerCount ?? 0;
+                var list = ServerList();
+                return (object)new ImportResultDto(added, 0, 0, "subscription", list);
+            }, ct);
+        }
+
+        var parsed = NodeImporter.Parse(trimmed);
+
+        return await WithStateValueAsync(async () =>
+        {
+            var (added, duplicates) = NodeImporter.Dedupe(Servers.Servers.ToList(), parsed.Valid);
+            if (added.Count == 0 && duplicates == 0)
+                throw new InvalidOperationException("无法识别的节点内容");
+
+            foreach (var s in added)
+                Servers.Add(s);
+            if (added.Count > 0)
+                await Persistence.SaveAsync();
+
+            var list = ServerList();
+            return (object)new ImportResultDto(added.Count, duplicates, parsed.Invalid, parsed.Format, list);
+        }, ct);
+    }
+
+    /// <summary>True when the whole (trimmed) text is a single http:// or https:// URL.</summary>
+    private static bool IsSingleHttpUrl(string text)
+    {
+        if (text.Contains('\n') || text.Contains('\r'))
+            return false;
+        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri))
+            return false;
+        return uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
+    }
+
     /// <summary>Builds the effect report DTO, or an empty "not started" report when no monitor is wired up.</summary>
     private EffectReportDto EffectDto()
     {
@@ -686,6 +788,14 @@ internal sealed class RpcRouter
             if (trimmed.Length > 0 && !IsValidRulesUrl(trimmed))
                 throw new InvalidOperationException("规则更新地址必须是 https:// 开头的网址");
             s.RulesUrl = trimmed;
+        }
+        if (JsonParams.HasProperty(p, "subscriptionAutoUpdateHours"))
+        {
+            // Validate BEFORE mutating anything (same style as rulesUrl).
+            var hours = JsonParams.OptionalInt(p, "subscriptionAutoUpdateHours") ?? 0;
+            if (hours is not (0 or 6 or 12 or 24 or 48))
+                throw new InvalidOperationException("订阅自动更新间隔只能是 0、6、12、24 或 48 小时");
+            s.SubscriptionAutoUpdateHours = hours;
         }
         if (JsonParams.HasProperty(p, "extraApps"))
         {

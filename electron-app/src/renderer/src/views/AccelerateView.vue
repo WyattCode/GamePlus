@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
+import EffectChart from '@/components/EffectChart.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
 import { gameColor } from '@/utils/gameIcon'
 import { useAccelStore } from '@/stores/accel'
@@ -59,6 +60,31 @@ const metrics = computed(() => [
   { icon: 'pulse', color: 'var(--info)', label: '抖动', value: `${accel.status.jitter} ms` },
   { icon: 'clock', color: '#9b5de5', label: '时长', value: fmtDuration(accel.status.durationSec) }
 ])
+
+// The effect card is visible while accelerating, or when a finished report is still available.
+const effect = computed(() => accel.effect)
+const effectVisible = computed(() => {
+  if (!effect.value) return false
+  if (accel.status.state === 'accelerating') return true
+  return effect.value.series.length > 0 || effect.value.baseline != null
+})
+const effectIsLast = computed(() => accel.status.state !== 'accelerating')
+const effectColor = computed(() => {
+  const pct = effect.value?.latencyPct
+  if (pct == null) return 'var(--text-3)'
+  if (pct >= 5) return 'var(--ok)'
+  if (pct <= -5) return 'var(--warn)'
+  return 'var(--text-3)'
+})
+const effectCompare = computed(() => {
+  const e = effect.value
+  if (!e || !e.baseline) return null
+  const b = e.baseline
+  const c = e.current
+  const base = `直连 ${b.latency >= 0 ? b.latency + ' ms' : '—'} · 丢包 ${b.loss}%`
+  if (!c) return base
+  return `${base} → 加速 ${c.latency >= 0 ? c.latency + ' ms' : '—'} · 丢包 ${c.loss}%`
+})
 
 async function toggle(): Promise<void> {
   if (busy.value) return
@@ -166,6 +192,20 @@ async function toggle(): Promise<void> {
           </div>
           <div class="metric-val">{{ m.value }}</div>
         </div>
+      </div>
+
+      <!-- Acceleration effect -->
+      <div v-if="effectVisible && effect" class="card effect">
+        <div class="effect-head">
+          <div class="effect-title">
+            加速效果
+            <span v-if="effectIsLast" class="muted small">上次加速</span>
+          </div>
+          <div class="effect-summary" :style="{ color: effectColor }">{{ effect.summary }}</div>
+        </div>
+        <div v-if="effectCompare" class="effect-compare muted small">{{ effectCompare }}</div>
+        <div v-if="effect.target" class="effect-target muted small">目标 {{ effect.target }}</div>
+        <EffectChart :series="effect.series" :baseline="effect.baseline?.latency ?? null" />
       </div>
 
       <!-- Traffic -->
@@ -381,6 +421,34 @@ async function toggle(): Promise<void> {
   font-size: 25px;
   font-weight: 700;
   margin-top: 8px;
+}
+
+.effect {
+  margin-top: 16px;
+  padding: 20px 22px;
+}
+.effect-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.effect-title {
+  font-weight: 600;
+  font-size: 14px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.effect-summary {
+  font-size: 14px;
+  font-weight: 600;
+}
+.effect-compare {
+  margin-top: 8px;
+}
+.effect-target {
+  margin-top: 2px;
 }
 
 .traffic {

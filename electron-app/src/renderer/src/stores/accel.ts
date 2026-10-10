@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, onScopeDispose, ref } from 'vue'
-import type { AccelStatus, Game, Server } from '@shared/types'
+import type { AccelStatus, EffectReport, Game, Server } from '@shared/types'
 import { backend } from '@/api/backend'
 import { useLibraryStore } from '@/stores/library'
 
@@ -17,6 +17,8 @@ export const useAccelStore = defineStore('accel', () => {
     nodeId: null,
     captureMode: null
   })
+
+  const effect = ref<EffectReport | null>(null)
 
   const selectedGame = ref<Game | null>(null)
   // Bind the node select by id, not by object: after servers.ping / list refresh the server objects are
@@ -51,6 +53,19 @@ export const useAccelStore = defineStore('accel', () => {
   const off = backend.onStatus((s) => (status.value = s))
   onScopeDispose(off)
 
+  const offEffect = backend.onEffect((r) => (effect.value = r))
+  onScopeDispose(offEffect)
+
+  // Fetch once on init so the card can show the last finished report even before any event arrives.
+  backend.getEffect().then(
+    (r) => {
+      effect.value = r
+    },
+    () => {
+      // ignore — the event stream will populate it
+    }
+  )
+
   async function start(): Promise<void> {
     if (!selectedGame.value) return
     const nodeId = smartNode.value ? null : selectedNodeId.value
@@ -71,6 +86,7 @@ export const useAccelStore = defineStore('accel', () => {
 
   return {
     status,
+    effect,
     selectedGame,
     selectedNodeId,
     selectedNode,

@@ -1,5 +1,6 @@
 import type {
   AccelStatus,
+  EffectReport,
   EngineSettings,
   Game,
   LogEntry,
@@ -41,6 +42,8 @@ export interface Backend {
   getSettings(): Promise<EngineSettings>
   setSettings(patch: Partial<EngineSettings>): Promise<EngineSettings>
   checkUpdate(): Promise<UpdateInfo>
+  getEffect(): Promise<EffectReport>
+  onEffect(cb: (r: EffectReport) => void): () => void
 }
 
 function jitter(base: number): number {
@@ -50,6 +53,7 @@ function jitter(base: number): number {
 class MockBackend implements Backend {
   private statusCbs = new Set<(s: AccelStatus) => void>()
   private logCbs = new Set<(l: LogEntry) => void>()
+  private effectCbs = new Set<(r: EffectReport) => void>()
   private timer: ReturnType<typeof setInterval> | null = null
   private startedAt = 0
   private status: AccelStatus = {
@@ -63,6 +67,17 @@ class MockBackend implements Backend {
     gameId: null,
     nodeId: null,
     captureMode: null
+  }
+
+  private effect: EffectReport = {
+    hasTarget: false,
+    target: null,
+    baseline: null,
+    current: null,
+    latencyPct: null,
+    summary: '该游戏未配置可测量的域名/IP，仅显示线路延迟',
+    series: [],
+    measuring: false
   }
 
   async listGames(): Promise<Game[]> {
@@ -89,6 +104,18 @@ class MockBackend implements Backend {
     // Mock always reports process capture — the real backend picks process/tun/proxy.
     this.status = { ...this.status, gameId, nodeId, state: 'accelerating', loss: 0, captureMode: 'process' }
     this.emit()
+    // Seed a plausible before/after measurement: direct ~120 ms / 2% loss, accelerated ~70 ms.
+    this.effect = {
+      hasTarget: true,
+      target: 'game.example.com:443',
+      baseline: { latency: 120, loss: 2, jitter: 6, samples: 5 },
+      current: null,
+      latencyPct: null,
+      summary: '正在测量…',
+      series: [],
+      measuring: true
+    }
+    this.emitEffect()
     this.timer = setInterval(() => this.tick(), 1000)
     this.log('info', '加速已启动')
   }
@@ -125,6 +152,15 @@ class MockBackend implements Backend {
   }
   async recentLogs(): Promise<LogEntry[]> {
     return []
+  }
+
+  getEffect(): Promise<EffectReport> {
+    return Promise.resolve(structuredClone(this.effect))
+  }
+  onEffect(cb: (r: EffectReport) => void): () => void {
+    this.effectCbs.add(cb)
+    cb(structuredClone(this.effect))
+    return () => this.effectCbs.delete(cb)
   }
 
   private mockServers: Server[] = structuredClone(sampleServers)
@@ -238,6 +274,25 @@ class MockBackend implements Backend {
     this.status.downloadBps = 40_000 + Math.random() * 120_000
     this.status.uploadBps = 8_000 + Math.random() * 30_000
     this.emit()
+
+    if (this.effect.hasTarget) {
+      const accel = Math.random() < 0.95 ? jitter(70) : -4
+      this.effect.series.push({ ts: Date.now(), accel })
+      if (this.effect.series.length > 90) this.effect.series.shift()
+      const ok = this.effect.series.filter((p) => p.accel >= 0)
+      const mean = ok.length ? Math.round(ok.reduce((a, b) => a + b.accel, 0) / ok.length) : -1
+      const loss = Math.round((100 * (this.effect.series.length - ok.length)) / this.effect.series.length * 10) / 10
+      this.effect.current = { latency: mean, loss, jitter: 4, samples: this.effect.series.length }
+      this.effect.measuring = false
+      const base = this.effect.baseline
+      if (base && base.latency >= 0 && mean >= 0) {
+        const pct = Math.round((100 * (base.latency - mean)) / base.latency)
+        this.effect.latencyPct = pct
+        this.effect.summary =
+          pct >= 5 ? `延迟降低 ${pct}%` : pct <= -5 ? `延迟升高 ${Math.abs(pct)}%，建议切换线路` : '延迟与直连相近'
+      }
+      this.emitEffect()
+    }
   }
 
   private setState(state: AccelStatus['state']): void {
@@ -247,6 +302,10 @@ class MockBackend implements Backend {
   private emit(): void {
     const snap = structuredClone(this.status)
     this.statusCbs.forEach((cb) => cb(snap))
+  }
+  private emitEffect(): void {
+    const snap = structuredClone(this.effect)
+    this.effectCbs.forEach((cb) => cb(snap))
   }
   private log(level: LogEntry['level'], message: string): void {
     const entry: LogEntry = { ts: new Date().toISOString(), level, message }

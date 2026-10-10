@@ -41,7 +41,16 @@ internal static class Composition
                 ? sp.GetRequiredService<SingBoxServerController>()
                 : sp.GetRequiredService<V2rayServerController>());
 
-        services.AddSingleton<IAcceleratorService, AcceleratorService>();
+        // Acceleration-effect measurement: a real TLS-handshake probe against the game's own target.
+        services.AddSingleton<IEffectProbe, TlsHandshakeProbe>();
+        services.AddSingleton<EffectMonitor>();
+
+        services.AddSingleton<IAcceleratorService>(sp => new AcceleratorService(
+            sp.GetRequiredService<ILogService>(),
+            sp.GetRequiredService<Func<Server, IServerController>>(),
+            sp.GetRequiredService<ISystemProxyService>(),
+            sp.GetRequiredService<IModeControllerFactory>(),
+            sp.GetRequiredService<EffectMonitor>()));
 
         // Update check. Source is resolved by UpdateSourceOptions (env vars, then update.json next to
         // the exe, then the default repo). Current version = the host assembly's.

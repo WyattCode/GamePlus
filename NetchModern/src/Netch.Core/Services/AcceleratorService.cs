@@ -30,9 +30,11 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     private readonly ILogService _log;
     private readonly Queue<int> _samples = new();
     private readonly ISystemProxyService _systemProxy;
+    private readonly EffectMonitor? _effect;
 
     private IServerController? _controller;
     private IModeController? _modeController;
+    private Socks5Server? _socks;
     private long _lastDown;
     private long _lastUp;
     private int _pinging;
@@ -51,12 +53,13 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     private AccelerationState _state = AccelerationState.Idle;
 
     public AcceleratorService(ILogService log, Func<Server, IServerController> controllerFactory,
-        ISystemProxyService systemProxy, IModeControllerFactory modeControllerFactory)
+        ISystemProxyService systemProxy, IModeControllerFactory modeControllerFactory, EffectMonitor? effect = null)
     {
         _log = log;
         _controllerFactory = controllerFactory;
         _systemProxy = systemProxy;
         _modeControllerFactory = modeControllerFactory;
+        _effect = effect;
     }
 
     /// <summary>Convenience overload using the default <see cref="ModeControllerFactory" /> (real drivers).</summary>
@@ -67,7 +70,12 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
 
     public AccelerationStatus Status { get; } = new();
 
+    /// <summary>The effect monitor, when one is wired up (null in tests / minimal hosts).</summary>
+    public EffectMonitor? Effect => _effect;
+
     public event EventHandler<AccelerationState>? StateChanged;
+
+    public EffectReport? EffectReport() => _effect?.Report();
 
     public async Task StartAsync(Game game, Server node, CancellationToken ct = default)
     {
@@ -84,6 +92,11 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         try
         {
             _log.Log(LogLevel.Info, $"Accelerating {game.Name} via {node.DisplayName}");
+
+            // Take the direct baseline BEFORE any capture is active: in TUN mode the capture layer would
+            // route the probe's own traffic through the tunnel, so the "direct" number would be wrong.
+            if (_effect != null)
+                await _effect.MeasureBaselineAsync(game, ct);
 
             // Games use raw sockets that ignore the Windows system proxy. To actually redirect their
             // traffic we capture it at driver level: by process (netfilter Redirector) when process names
@@ -108,10 +121,10 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
                 _controller.ProxyIps = game.ProxyIps;
             }
 
-            var socks5 = await _controller.StartAsync(node, ct);
+            _socks = await _controller.StartAsync(node, ct);
 
             if (useCapture)
-                await StartCaptureAsync(game, node, socks5, hasProcess, hasIp, hasDomain, ct);
+                await StartCaptureAsync(game, node, _socks, hasProcess, hasIp, hasDomain, ct);
             else if (hasDomain)
             {
                 _systemProxy.Enable("127.0.0.1", _controller.HttpPort);
@@ -126,6 +139,11 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             _pingTimer = new Timer(PollPing, null, TimeSpan.Zero, TimeSpan.FromSeconds(2));
 
             SetState(AccelerationState.Accelerating);
+
+            // Start the accelerated sampling loop against the SOCKS endpoint of the controller that is
+            // actually running (StartDomainProxyAsync restarts it, so _socks is re-assigned there).
+            if (_effect != null && _socks != null)
+                _effect.Begin(_socks.Hostname, _socks.Port);
         }
         catch (Exception e)
         {
@@ -224,7 +242,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
 
         _controller.ProxyDomains = game.ProxyDomains;
         _controller.ProxyIps = game.ProxyIps;
-        await _controller.StartAsync(node, ct);
+        _socks = await _controller.StartAsync(node, ct);
 
         _systemProxy.Enable("127.0.0.1", _controller.HttpPort);
         Status.CaptureMode = "proxy";
@@ -249,6 +267,8 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         _pingTimer?.Dispose();
         _statsTimer = _pingTimer = null;
 
+        _effect?.End();
+
         if (_modeController != null)
         {
             try { await _modeController.StopAsync(ct); }
@@ -272,6 +292,8 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             catch (Exception e) { _log.Log(LogLevel.Warning, $"Node stop error: {e.Message}"); }
             _controller = null;
         }
+
+        _socks = null;
 
         Status.Reset();
         CurrentGame = null;

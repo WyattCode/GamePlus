@@ -1,5 +1,6 @@
 import type {
   AccelStatus,
+  EffectReport,
   EngineSettings,
   Game,
   LogEntry,
@@ -28,7 +29,9 @@ export class WebSocketBackend implements Backend {
 
   private readonly statusCbs = new Set<(s: AccelStatus) => void>()
   private readonly logCbs = new Set<(l: LogEntry) => void>()
+  private readonly effectCbs = new Set<(r: EffectReport) => void>()
   private lastStatus: AccelStatus | null = null
+  private lastEffect: EffectReport | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor() {
@@ -102,7 +105,7 @@ export class WebSocketBackend implements Backend {
       this.statusCbs.forEach((cb) => cb(idle))
     }
     // A respawned sidecar comes up on a new port; ensure() re-fetches it. Retry while anyone is listening.
-    if (this.reconnectTimer || (!this.statusCbs.size && !this.logCbs.size)) return
+    if (this.reconnectTimer || (!this.statusCbs.size && !this.logCbs.size && !this.effectCbs.size)) return
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
       if (!this.ws) this.ensure().catch(() => this.onDisconnected())
@@ -129,6 +132,9 @@ export class WebSocketBackend implements Backend {
         this.statusCbs.forEach((cb) => cb(this.lastStatus!))
       } else if (msg.event === 'log') {
         this.logCbs.forEach((cb) => cb(msg.data as LogEntry))
+      } else if (msg.event === 'effect') {
+        this.lastEffect = msg.data as EffectReport
+        this.effectCbs.forEach((cb) => cb(this.lastEffect!))
       }
       return
     }
@@ -197,6 +203,16 @@ export class WebSocketBackend implements Backend {
   }
   recentLogs(): Promise<LogEntry[]> {
     return this.call('logs.recent')
+  }
+
+  getEffect(): Promise<EffectReport> {
+    return this.call('effect.get')
+  }
+  onEffect(cb: (r: EffectReport) => void): () => void {
+    this.effectCbs.add(cb)
+    if (this.lastEffect) cb(this.lastEffect)
+    this.ensure().catch(() => this.onDisconnected())
+    return () => this.effectCbs.delete(cb)
   }
 
   addServerFromLink(link: string): Promise<Server[]> {

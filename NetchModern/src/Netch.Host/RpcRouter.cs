@@ -94,6 +94,9 @@ internal sealed class RpcRouter
             case "accel.status":
                 return await WithStateValue(() => Mapping.StatusDto(Accel, Servers.Servers.ToList()), ct);
 
+            case "effect.get":
+                return EffectDto();
+
             case "servers.add":
             {
                 var link = JsonParams.RequiredString(@params, "link");
@@ -287,6 +290,16 @@ internal sealed class RpcRouter
             default:
                 throw new InvalidOperationException($"unknown method: {method}");
         }
+    }
+
+    /// <summary>Builds the effect report DTO, or an empty "not started" report when no monitor is wired up.</summary>
+    private EffectReportDto EffectDto()
+    {
+        var report = Accel.EffectReport();
+        return report is null
+            ? new EffectReportDto(false, null, null, null, null,
+                "尚未开始测量", Array.Empty<EffectPointDto>(), false)
+            : Mapping.ToDto(report);
     }
 
     // Distinct names (rather than overloads) so statement lambdas and value-returning lambdas bind

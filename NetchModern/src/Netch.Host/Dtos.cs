@@ -2,6 +2,7 @@ using System.Text.Json;
 using Netch.Core.Models;
 using Netch.Core.Models.Games;
 using Netch.Core.Models.Servers;
+using Netch.Core.Services;
 
 namespace Netch.Host;
 
@@ -22,6 +23,13 @@ internal record AccelStatusDto(string State, int Latency, double Loss, int Jitte
 internal record LogDto(string Ts, string Level, string Message);
 
 internal record SettingsDto(string Theme, string Language, bool MinimizeToTray);
+
+internal record EffectSnapshotDto(int Latency, double Loss, int Jitter, int Samples);
+
+internal record EffectPointDto(long Ts, int Accel);
+
+internal record EffectReportDto(bool HasTarget, string? Target, EffectSnapshotDto? Baseline,
+    EffectSnapshotDto? Current, int? LatencyPct, string Summary, EffectPointDto[] Series, bool Measuring);
 
 internal static class Mapping
 {
@@ -163,4 +171,11 @@ internal static class Mapping
 
     public static SettingsDto ToDto(Netch.Core.Models.Settings.AppSettings s) =>
         new(s.Theme.ToString().ToLowerInvariant(), s.Language, s.MinimizeToTray);
+
+    public static EffectSnapshotDto? ToDto(EffectSnapshot? s) =>
+        s is null ? null : new EffectSnapshotDto(s.Latency, s.Loss, s.Jitter, s.Samples);
+
+    public static EffectReportDto ToDto(EffectReport r) =>
+        new(r.HasTarget, r.Target, ToDto(r.Baseline), ToDto(r.Current), r.LatencyPct, r.Summary,
+            r.Series.Select(p => new EffectPointDto(p.TsMs, p.Accel)).ToArray(), r.Measuring);
 }

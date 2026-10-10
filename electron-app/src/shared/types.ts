@@ -113,3 +113,35 @@ export interface UpdateInfo {
   /** Short user-facing reason when status is "failed" or "notConfigured". */
   error: string | null
 }
+
+/** Aggregated latency/loss/jitter for a set of samples. */
+export interface EffectSnapshot {
+  /** Mean latency in ms; -1 when no sample succeeded. */
+  latency: number
+  /** Loss percentage (1 decimal). */
+  loss: number
+  /** Population std-dev of successful samples, ms. */
+  jitter: number
+  samples: number
+}
+
+/** One accelerated sample point. */
+export interface EffectPoint {
+  /** Unix ms timestamp. */
+  ts: number
+  /** Measured latency in ms; negative = failure. */
+  accel: number
+}
+
+/** Before/after acceleration measurement against the game's own target. */
+export interface EffectReport {
+  hasTarget: boolean
+  target: string | null
+  baseline: EffectSnapshot | null
+  current: EffectSnapshot | null
+  /** Latency improvement percentage; null when there isn't enough data. */
+  latencyPct: number | null
+  summary: string
+  series: EffectPoint[]
+  measuring: boolean
+}

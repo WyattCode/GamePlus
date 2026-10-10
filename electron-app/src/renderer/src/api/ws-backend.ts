@@ -277,6 +277,9 @@ export class WebSocketBackend implements Backend {
   setGameAuto(id: string, enabled: boolean): Promise<Game[]> {
     return this.call('games.setAuto', { id, enabled })
   }
+  setGameServer(id: string, server: 'cn' | 'intl'): Promise<Game[]> {
+    return this.call('games.setServer', { id, server })
+  }
   addGame(data: Partial<Game>): Promise<Game[]> {
     return this.call('games.add', data)
   }

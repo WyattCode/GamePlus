@@ -190,6 +190,24 @@ async function toggleAuto(enabled: boolean): Promise<void> {
     toast.error(errorMessage(e))
   }
 }
+
+// --- per-game server choice (Q1) ---
+
+const hasServerChoice = computed(() => selectedGame.value?.hasServerChoice === true)
+const serverChoice = computed<'cn' | 'intl'>(() =>
+  selectedGame.value?.serverChoice === 'cn' ? 'cn' : 'intl'
+)
+
+async function setServer(server: 'cn' | 'intl'): Promise<void> {
+  const g = selectedGame.value
+  if (!g || running.value || server === serverChoice.value) return
+  error.value = null
+  try {
+    await library.setGameServer(g.id, server)
+  } catch (e) {
+    error.value = errorMessage(e)
+  }
+}
 </script>
 
 <template>
@@ -237,6 +255,32 @@ async function toggleAuto(enabled: boolean): Promise<void> {
 
       <!-- Node + action -->
       <div class="card panel">
+        <!-- Per-game server choice (国服 / 国际服) -->
+        <div v-if="hasServerChoice" class="server-row">
+          <div class="server-label">服务器</div>
+          <div class="seg" :class="{ disabled: running }" :title="running ? '停止加速后可切换' : ''">
+            <button
+              type="button"
+              class="seg-btn"
+              :class="{ active: serverChoice === 'intl' }"
+              :disabled="running"
+              @click="setServer('intl')"
+            >
+              国际服
+            </button>
+            <button
+              type="button"
+              class="seg-btn"
+              :class="{ active: serverChoice === 'cn' }"
+              :disabled="running"
+              @click="setServer('cn')"
+            >
+              国服
+            </button>
+          </div>
+          <span class="muted small server-hint">按所选服务器挑选线路</span>
+        </div>
+
         <div class="row">
           <div>
             <div class="row-title">智能选路</div>
@@ -589,6 +633,50 @@ async function toggleAuto(enabled: boolean): Promise<void> {
 }
 .capture-hint.warn {
   color: var(--warn);
+}
+
+/* per-game server choice */
+.server-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.server-label {
+  font-weight: 600;
+  font-size: 14px;
+}
+.server-hint {
+  margin-left: auto;
+}
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.seg.disabled {
+  opacity: 0.6;
+}
+.seg-btn {
+  padding: 4px 14px;
+  border-radius: calc(var(--radius-sm) - 2px);
+  font-size: 13px;
+  color: var(--text-2);
+  transition: all 0.14s;
+}
+.seg-btn:hover:not(:disabled) {
+  color: var(--text);
+}
+.seg-btn.active {
+  background: var(--brand);
+  color: #fff;
+  font-weight: 600;
+}
+.seg-btn:disabled {
+  cursor: not-allowed;
 }
 
 /* smart routing */

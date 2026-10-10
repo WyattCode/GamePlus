@@ -10,6 +10,7 @@ import type {
   Subscription
 } from '@shared/types'
 import { backend } from '@/api/backend'
+import { useAccelStore } from '@/stores/accel'
 
 export const useLibraryStore = defineStore('library', () => {
   const games = ref<Game[]>([])
@@ -64,6 +65,22 @@ export const useLibraryStore = defineStore('library', () => {
 
   async function setGameAuto(id: string, enabled: boolean): Promise<void> {
     games.value = await backend.setGameAuto(id, enabled)
+  }
+
+  /**
+   * Persists the per-game 国服/国际服 choice. When the game is the one currently selected in the
+   * accel store, keeps that snapshot in sync and refreshes the smart-routing ranking so the
+   * recommendation reflects the new server.
+   */
+  async function setGameServer(id: string, server: 'cn' | 'intl'): Promise<void> {
+    games.value = await backend.setGameServer(id, server)
+
+    const accel = useAccelStore()
+    if (accel.selectedGame?.id === id) {
+      const updated = games.value.find((g) => g.id === id)
+      if (updated) accel.selectedGame = updated
+      await accel.refreshRanking(false)
+    }
   }
 
   async function addGame(data: Partial<Game>): Promise<void> {
@@ -172,6 +189,7 @@ export const useLibraryStore = defineStore('library', () => {
     pingAll,
     toggleFavorite,
     setGameAuto,
+    setGameServer,
     addGame,
     updateGame,
     removeGame,

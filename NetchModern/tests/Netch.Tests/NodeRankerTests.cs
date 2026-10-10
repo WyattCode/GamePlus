@@ -109,12 +109,6 @@ public class NodeRankerTests
     }
 
     [Fact]
-    public void CnAndIntlHasNoPreference()
-    {
-        Assert.Null(GameRegionPreference.For(GameWith("国服", "国际服")));
-    }
-
-    [Fact]
     public void IntlAloneHasNoPreference()
     {
         Assert.Null(GameRegionPreference.For(GameWith("国际服")));
@@ -124,6 +118,55 @@ public class NodeRankerTests
     public void NoRegionsHasNoPreference()
     {
         Assert.Null(GameRegionPreference.For(GameWith()));
+    }
+
+    [Fact]
+    public void HasServerChoiceDetectsCnAndIntl()
+    {
+        Assert.True(GameRegionPreference.HasServerChoice(GameWith("国服", "国际服")));
+        Assert.False(GameRegionPreference.HasServerChoice(GameWith("国服")));
+        Assert.False(GameRegionPreference.HasServerChoice(GameWith("国际服")));
+        Assert.False(GameRegionPreference.HasServerChoice(null));
+    }
+
+    [Fact]
+    public void CnChoicePrefersCn()
+    {
+        var pref = GameRegionPreference.For(GameWith("国服", "国际服"), "cn");
+        Assert.NotNull(pref);
+        Assert.Equal("国服", pref!.Value.Label);
+        Assert.Contains("CN", pref.Value.Regions);
+        Assert.Empty(pref.Value.ExcludeRegions);
+    }
+
+    [Fact]
+    public void IntlChoiceExcludesCnWhenNoOtherTags()
+    {
+        var pref = GameRegionPreference.For(GameWith("国服", "国际服"), "intl");
+        Assert.NotNull(pref);
+        Assert.Equal("国际服", pref!.Value.Label);
+        Assert.Empty(pref.Value.Regions);
+        Assert.Contains("CN", pref.Value.ExcludeRegions);
+    }
+
+    [Fact]
+    public void IntlChoiceUsesOtherRegionTags()
+    {
+        var pref = GameRegionPreference.For(GameWith("国服", "国际服", "亚服"), "intl");
+        Assert.NotNull(pref);
+        Assert.Equal("亚服", pref!.Value.Label);
+        Assert.Contains("HK", pref.Value.Regions);
+        Assert.DoesNotContain("CN", pref.Value.Regions);
+        Assert.Empty(pref.Value.ExcludeRegions);
+    }
+
+    [Fact]
+    public void IntlChoiceIsDefault()
+    {
+        var pref = GameRegionPreference.For(GameWith("国服", "国际服"));
+        Assert.NotNull(pref);
+        Assert.Equal("国际服", pref!.Value.Label);
+        Assert.Contains("CN", pref.Value.ExcludeRegions);
     }
 
     // --- ranking ---
@@ -235,13 +278,6 @@ public class NodeRankerTests
     }
 
     [Fact]
-    public void ReasonCnAndIntlNotesAmbiguity()
-    {
-        var ranking = NodeRanker.Rank(GameWith("国服", "国际服"), new[] { Node("A", 42) });
-        Assert.Contains("国服和国际服", ranking.Reason);
-    }
-
-    [Fact]
     public void ReasonPreferredAndLowest()
     {
         var ranking = NodeRanker.Rank(GameWith("日服"), new[] { Node("日本 东京", 42), Node("美国 洛杉矶", 90) });
@@ -284,5 +320,116 @@ public class NodeRankerTests
         Assert.Same(us, ranking.Recommended!.Server);
         Assert.Contains("已选择延迟最低的线路（10 ms）", ranking.Reason);
         Assert.DoesNotContain("仅比最低延迟线路高", ranking.Reason);
+    }
+
+    // --- per-game server choice ---
+
+    [Fact]
+    public void CnChoicePrefersCnNode()
+    {
+        var game = GameWith("国服", "国际服");
+        var cn = Node("上海 电信", 90);
+        var hk = Node("香港 01", 40);
+
+        var ranking = NodeRanker.Rank(game, new[] { cn, hk }, serverChoice: "cn");
+
+        Assert.Same(cn, ranking.Recommended!.Server);
+        Assert.Equal("cn", ranking.ServerChoice);
+    }
+
+    [Fact]
+    public void IntlChoiceExcludesCnEvenWhenFastest()
+    {
+        // CN 10 ms (score 10 + 60 = 70) vs HK 40 ms (score 40): the HK node wins.
+        var game = GameWith("国服", "国际服");
+        var cn = Node("上海 电信", 10);
+        var hk = Node("香港 01", 40);
+
+        var ranking = NodeRanker.Rank(game, new[] { cn, hk }, serverChoice: "intl");
+
+        Assert.Same(hk, ranking.Recommended!.Server);
+        Assert.Equal("intl", ranking.ServerChoice);
+        Assert.Contains("已排除国内线路", ranking.Reason);
+    }
+
+    [Fact]
+    public void IntlChoiceIsDefaultWhenNoChoiceGiven()
+    {
+        var game = GameWith("国服", "国际服");
+        var cn = Node("上海 电信", 10);
+        var hk = Node("香港 01", 40);
+
+        var ranking = NodeRanker.Rank(game, new[] { cn, hk });
+
+        Assert.Same(hk, ranking.Recommended!.Server);
+        Assert.Equal("intl", ranking.ServerChoice);
+    }
+
+    [Fact]
+    public void IntlChoiceUsesAsiaPreferenceWhenTagged()
+    {
+        var game = GameWith("国服", "国际服", "亚服");
+        var cn = Node("上海 电信", 10);
+        var jp = Node("日本 东京", 50);
+        var us = Node("美国 洛杉矶", 20);
+
+        var ranking = NodeRanker.Rank(game, new[] { cn, jp, us }, serverChoice: "intl");
+
+        // JP matches 亚服 (score 50) and beats US (20 + 60 = 80) and CN (10 + 60 = 70).
+        Assert.Same(jp, ranking.Recommended!.Server);
+        Assert.Equal("亚服", ranking.PreferenceLabel);
+    }
+
+    [Fact]
+    public void IntlChoiceOnlyCnNodesFallsBackToLowest()
+    {
+        var game = GameWith("国服", "国际服");
+        var cn = Node("上海 电信", 10);
+
+        var ranking = NodeRanker.Rank(game, new[] { cn }, serverChoice: "intl");
+
+        Assert.Same(cn, ranking.Recommended!.Server);
+        Assert.Contains("没有可用的海外线路", ranking.Reason);
+    }
+
+    [Fact]
+    public void IntlChoiceExcludesCnEvenWhenMuchFasterThanOverseas()
+    {
+        // CN 10 ms vs JP 150 ms: the 60 ms penalty would still let CN win (10 + 60 = 70 < 150).
+        // Exclusion must be HARD, so the overseas JP node is recommended.
+        var game = GameWith("国服", "国际服");
+        var cn = Node("上海 电信", 10);
+        var jp = Node("日本 东京", 150);
+
+        var ranking = NodeRanker.Rank(game, new[] { cn, jp }, serverChoice: "intl");
+
+        Assert.Same(jp, ranking.Recommended!.Server);
+        Assert.Contains("海外线路", ranking.Reason);
+        Assert.DoesNotContain("没有可用的海外线路", ranking.Reason);
+    }
+
+    [Fact]
+    public void IntlChoiceOnlyCnPoolRecommendsCnWithNoOverseasReason()
+    {
+        var game = GameWith("国服", "国际服");
+        var cn = Node("上海 电信", 10);
+
+        var ranking = NodeRanker.Rank(game, new[] { cn }, serverChoice: "intl");
+
+        Assert.Same(cn, ranking.Recommended!.Server);
+        Assert.Contains("没有可用的海外线路", ranking.Reason);
+    }
+
+    [Fact]
+    public void NonChoiceGameUnaffectedByServerChoice()
+    {
+        var game = GameWith("日服");
+        var jp = Node("日本 东京", 42);
+        var us = Node("美国 洛杉矶", 90);
+
+        var ranking = NodeRanker.Rank(game, new[] { jp, us }, serverChoice: "cn");
+
+        Assert.Same(jp, ranking.Recommended!.Server);
+        Assert.Null(ranking.ServerChoice);
     }
 }

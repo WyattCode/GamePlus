@@ -35,6 +35,12 @@ public partial class AppSettings : ObservableObject
     public List<string> AutoAccelerateGames { get; set; } = new();
 
     /// <summary>
+    ///     Per-game server choice for games that have both 国服 and 国际服 (gameId → "cn" | "intl").
+    ///     A missing entry means "intl" (the default).
+    /// </summary>
+    public Dictionary<string, string> GameServerChoice { get; set; } = new();
+
+    /// <summary>
     ///     Extra applications that are additionally proxied or explicitly bypassed in process-capture
     ///     mode. Only applies when acceleration runs in process mode (netfilter Redirector).
     /// </summary>

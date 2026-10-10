@@ -49,6 +49,7 @@ export interface Backend {
   updateSubscription(id: string): Promise<SubMutation>
   toggleFavorite(id: string): Promise<Game[]>
   setGameAuto(id: string, enabled: boolean): Promise<Game[]>
+  setGameServer(id: string, server: 'cn' | 'intl'): Promise<Game[]>
   onAutoAccel(cb: (e: AutoAccelEvent) => void): () => void
   addGame(data: Partial<Game>): Promise<Game[]>
   updateGame(id: string, data: Partial<Game>): Promise<Game[]>
@@ -119,18 +120,40 @@ function detectRegion(text: string): { code: string; name: string } | null {
   return null
 }
 
-function preferredRegionsFor(game: Game | null): { regions: string[]; label: string | null } {
-  if (!game || !game.regions || game.regions.length === 0) return { regions: [], label: null }
+function hasServerChoice(game: Game | null): boolean {
+  if (!game || !game.regions || game.regions.length === 0) return false
   const hasCn = game.regions.some((r) => r.includes('国服'))
   const hasIntl = game.regions.some((r) => r.includes('国际服'))
-  if (hasCn && hasIntl) return { regions: [], label: null }
+  return hasCn && hasIntl
+}
 
-  const regions: string[] = []
+function preferredRegionsFor(
+  game: Game | null,
+  serverChoice?: 'cn' | 'intl' | null
+): { regions: string[]; label: string | null; exclude: string[] } {
+  if (!game || !game.regions || game.regions.length === 0) return { regions: [], label: null, exclude: [] }
+
+  if (hasServerChoice(game)) {
+    if (serverChoice === 'cn') return { regions: ['CN'], label: '国服', exclude: [] }
+    const intl = buildPreference(game.regions, true)
+    if (intl) return { ...intl, exclude: [] }
+    return { regions: [], label: '国际服', exclude: ['CN'] }
+  }
+
+  const p = buildPreference(game.regions, false)
+  return p ? { ...p, exclude: [] } : { regions: [], label: null, exclude: [] }
+}
+
+function buildPreference(
+  regions: string[],
+  ignoreCn: boolean
+): { regions: string[]; label: string | null } | null {
+  const codes: string[] = []
   let label: string | null = null
   const add = (code: string): void => {
-    if (!regions.includes(code)) regions.push(code)
+    if (!codes.includes(code)) codes.push(code)
   }
-  for (const raw of game.regions) {
+  for (const raw of regions) {
     const r = raw.trim()
     if (r.includes('亚服')) {
       add('HK'); add('TW'); add('JP'); add('KR'); add('SG')
@@ -148,10 +171,11 @@ function preferredRegionsFor(game: Game | null): { regions: string[]; label: str
     } else if (r.includes('欧服')) {
       add('EU'); label ??= '欧服'
     } else if (r.includes('国服')) {
+      if (ignoreCn) continue
       add('CN'); label ??= '国服'
     }
   }
-  return { regions, label }
+  return codes.length === 0 ? null : { regions: codes, label: label ?? '偏好地区' }
 }
 
 // Mirrors SplitRouting.IsValidProcessName in Netch.Core/Services/SplitRouting.cs.
@@ -215,20 +239,31 @@ class MockBackend implements Backend {
       this.mockServers = this.mockServers.map((s) => ({ ...s, delay: jitter(s.delay || 90) }))
     }
     const game = gameId ? this.mockGames.find((g) => g.id === gameId) ?? null : null
-    const pref = preferredRegionsFor(game)
+    const choice = game && hasServerChoice(game) ? game.serverChoice ?? 'intl' : null
+    const pref = preferredRegionsFor(game, choice)
 
     const candidates: RankedNode[] = this.mockServers.map((s) => {
       const region = detectRegion(`${s.remark} ${s.hostname}`)
-      const match = region != null && pref.regions.includes(region.code)
+      const regionCode = region?.code ?? null
+      let match: boolean
+      let penalised: boolean
+      if (pref.exclude.length > 0) {
+        const isExcluded = regionCode != null && pref.exclude.includes(regionCode)
+        match = regionCode != null && !isExcluded
+        penalised = isExcluded
+      } else {
+        match = regionCode != null && pref.regions.includes(regionCode)
+        penalised = pref.regions.length > 0 && !match
+      }
       const tested = s.delay >= 0
       // Untested/failed nodes get score -1 so the UI renders them as grey/empty bars.
-      const score = tested ? s.delay + (pref.regions.length > 0 && !match ? 60 : 0) : -1
+      const score = tested ? s.delay + (penalised ? 60 : 0) : -1
       return {
         id: s.id,
         remark: s.remark,
         type: s.type,
         delay: s.delay,
-        region: region?.code ?? null,
+        region: regionCode,
         regionName: region?.name ?? null,
         regionMatch: match,
         score,
@@ -266,10 +301,16 @@ class MockBackend implements Backend {
       reason = '所有线路均未测通，已选择列表中的第一条线路'
     } else {
       const lowest = [...tested].sort((a, b) => a.delay - b.delay)[0]
-      if (pref.regions.length === 0) {
-        const hasCn = !!game?.regions?.some((r) => r.includes('国服'))
-        const hasIntl = !!game?.regions?.some((r) => r.includes('国际服'))
-        reason = `延迟最低（${lowest.delay} ms）${hasCn && hasIntl ? '；该游戏同时有国服和国际服，按延迟选择' : ''}`
+      if (pref.exclude.length > 0) {
+        const overseas = tested.filter((c) => !(c.region != null && pref.exclude.includes(c.region)))
+        if (overseas.length > 0) {
+          const o = [...overseas].sort((a, b) => a.delay - b.delay)[0]
+          reason = `国际服：已排除国内线路，选择延迟最低的海外线路（${o.delay} ms）`
+        } else {
+          reason = `国际服：没有可用的海外线路，已选择延迟最低的线路（${lowest.delay} ms）`
+        }
+      } else if (pref.regions.length === 0) {
+        reason = `延迟最低（${lowest.delay} ms）`
       } else if (recommended && recommended.regionMatch) {
         // The reason must describe the RECOMMENDED node, not the lowest-delay one.
         reason =
@@ -291,7 +332,8 @@ class MockBackend implements Backend {
       reason,
       preferenceLabel: pref.label,
       preferredRegions: pref.regions,
-      candidates
+      candidates,
+      serverChoice: choice
     }
   }
 
@@ -423,6 +465,13 @@ class MockBackend implements Backend {
       throw new Error('该游戏没有配置进程规则，无法自动加速')
     }
     g.autoAccelerate = enabled
+    return structuredClone(this.mockGames)
+  }
+  async setGameServer(id: string, server: 'cn' | 'intl'): Promise<Game[]> {
+    const g = this.mockGames.find((x) => x.id === id)
+    if (!g) throw new Error('游戏不存在')
+    if (!hasServerChoice(g)) throw new Error('该游戏没有国服/国际服之分')
+    g.serverChoice = server
     return structuredClone(this.mockGames)
   }
   onAutoAccel(_cb: (e: AutoAccelEvent) => void): () => void {

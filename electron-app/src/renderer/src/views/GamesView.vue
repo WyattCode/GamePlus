@@ -71,6 +71,15 @@ async function onToggleAuto(g: Game): Promise<void> {
   }
 }
 
+async function onToggleServer(g: Game): Promise<void> {
+  const next = g.serverChoice === 'cn' ? 'intl' : 'cn'
+  try {
+    await library.setGameServer(g.id, next)
+  } catch (e) {
+    toast.error(errorMessage(e))
+  }
+}
+
 const categories = computed(() => {
   const set = new Set<string>()
   library.games.forEach((g) => g.categories.forEach((c) => set.add(c)))
@@ -143,6 +152,14 @@ function pick(g: Game): void {
         <div class="tile-tags">
           <span v-if="g.custom" class="tag custom">自定义</span>
           <span v-for="c in g.categories.slice(0, 2)" :key="c" class="tag">{{ c }}</span>
+          <button
+            v-if="g.hasServerChoice"
+            class="tag server-tag"
+            title="点击切换服务器"
+            @click.stop="onToggleServer(g)"
+          >
+            {{ g.serverChoice === 'cn' ? '国服' : '国际服' }}
+          </button>
         </div>
         <button
           class="auto-chip"
@@ -307,6 +324,7 @@ function pick(g: Game): void {
 }
 .tile-tags {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 12px;
 }
@@ -320,6 +338,17 @@ function pick(g: Game): void {
 .tag.custom {
   background: var(--brand-soft);
   color: var(--brand-600);
+}
+.server-tag {
+  background: var(--brand-soft);
+  color: var(--brand-600);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.14s;
+}
+.server-tag:hover {
+  background: var(--brand);
+  color: #fff;
 }
 .auto-chip {
   display: inline-flex;

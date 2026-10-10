@@ -48,6 +48,10 @@ export interface Game {
   proxyProcesses?: string[]
   /** True when this game is in the auto-acceleration list. */
   autoAccelerate?: boolean
+  /** True when the game has both 国服 and 国际服, so the user can pick a server. */
+  hasServerChoice?: boolean
+  /** Per-game server choice; only meaningful when hasServerChoice is true. */
+  serverChoice?: 'cn' | 'intl' | null
 }
 
 export type AccelState =
@@ -215,6 +219,8 @@ export interface NodeRanking {
   preferenceLabel: string | null
   preferredRegions: string[]
   candidates: RankedNode[]
+  /** Per-game server choice ("cn" | "intl"); null for games without a 国服/国际服 choice. */
+  serverChoice?: 'cn' | 'intl' | null
 }
 
 export type DiagnosticStatus = 'ok' | 'warning' | 'error' | 'skipped'

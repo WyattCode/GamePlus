@@ -88,26 +88,66 @@ public static class NodeRegions
 /// <summary>Maps a game's declared regions to the node regions that best serve it.</summary>
 public static class GameRegionPreference
 {
-    /// <summary>A preferred set of region codes plus the label to show in the UI.</summary>
-    public readonly record struct Preference(IReadOnlyList<string> Regions, string Label);
+    /// <summary>
+    ///     A preferred set of region codes plus the label to show in the UI. <see cref="ExcludeRegions" />
+    ///     lists regions that must be treated as off-region even though no positive preference exists
+    ///     (used for the 国际服 choice of a 国服/国际服 game).
+    /// </summary>
+    public readonly record struct Preference(
+        IReadOnlyList<string> Regions,
+        string Label,
+        IReadOnlyList<string> ExcludeRegions)
+    {
+        public Preference(IReadOnlyList<string> regions, string label)
+            : this(regions, label, Array.Empty<string>())
+        {
+        }
+    }
+
+    /// <summary>True when the game declares both 国服 and 国际服, so the user can pick a server.</summary>
+    public static bool HasServerChoice(Game? game)
+    {
+        if (game is null || game.Regions.Count == 0)
+            return false;
+        var hasCn = game.Regions.Any(r => r.Contains("国服", StringComparison.Ordinal));
+        var hasIntl = game.Regions.Any(r => r.Contains("国际服", StringComparison.Ordinal));
+        return hasCn && hasIntl;
+    }
 
     /// <summary>
     ///     Derives the preferred node regions for a game. Returns null when there is no single preference
-    ///     (no regions declared, only "国际服", or an ambiguous mix of 国服 + 国际服).
+    ///     (no regions declared, or only "国际服").
     /// </summary>
-    public static Preference? For(Game? game)
+    /// <param name="game">The game to derive the preference for.</param>
+    /// <param name="serverChoice">
+    ///     "cn" or "intl" for games with both 国服 and 国际服; null/unknown is treated as "intl".
+    /// </param>
+    public static Preference? For(Game? game, string? serverChoice = null)
     {
         if (game is null || game.Regions.Count == 0)
             return null;
 
         var regions = game.Regions;
-        var hasCn = regions.Any(r => r.Contains("国服", StringComparison.Ordinal));
-        var hasIntl = regions.Any(r => r.Contains("国际服", StringComparison.Ordinal));
 
-        // 国服 + 国际服 together: we can't know which server the user actually plays on.
-        if (hasCn && hasIntl)
-            return null;
+        if (HasServerChoice(game))
+        {
+            if (string.Equals(serverChoice, "cn", StringComparison.OrdinalIgnoreCase))
+                return new Preference(new[] { "CN" }, "国服");
 
+            // 国际服: derive from the OTHER region tags, ignoring the 国服 tag.
+            var intl = BuildPreference(regions, ignoreCn: true);
+            if (intl is { } p)
+                return p;
+
+            // No other tags → no positive preference, but exclude CN.
+            return new Preference(Array.Empty<string>(), "国际服", new[] { "CN" });
+        }
+
+        return BuildPreference(regions, ignoreCn: false);
+    }
+
+    private static Preference? BuildPreference(IReadOnlyList<string> regions, bool ignoreCn)
+    {
         var codes = new List<string>();
         string? label = null;
 
@@ -164,6 +204,8 @@ public static class GameRegionPreference
             }
             else if (r.Contains("国服", StringComparison.Ordinal))
             {
+                if (ignoreCn)
+                    continue;
                 Add("CN");
                 label ??= "国服";
             }
@@ -190,7 +232,8 @@ public sealed record NodeRanking(
     RankedNode? Recommended,
     string Reason,
     string? PreferenceLabel,
-    IReadOnlyList<string> PreferredRegions);
+    IReadOnlyList<string> PreferredRegions,
+    string? ServerChoice = null);
 
 /// <summary>
 ///     Ranks proxy nodes for a game. The delay used here is the TCP connect time to the node itself,
@@ -202,12 +245,25 @@ public static class NodeRanker
     /// <summary>Default penalty (ms) applied to a node that is outside the game's preferred regions.</summary>
     public const int RegionPenaltyMs = 60;
 
+    /// <summary>
+    ///     Score added to a node in an EXCLUDED region (国际服 of a 国服/国际服 game). Large enough that
+    ///     every tested non-excluded node sorts ahead of every tested excluded node, so an excluded node
+    ///     is only recommended when no non-excluded node is usable.
+    /// </summary>
+    public const int ExcludedPenaltyMs = 100_000;
+
     /// <summary>Ranks the pool best-first and picks a recommended node with a human-readable reason.</summary>
-    public static NodeRanking Rank(Game? game, IReadOnlyList<Server> servers, int regionPenaltyMs = RegionPenaltyMs)
+    public static NodeRanking Rank(Game? game, IReadOnlyList<Server> servers, int regionPenaltyMs = RegionPenaltyMs,
+        string? serverChoice = null)
     {
-        var pref = GameRegionPreference.For(game);
+        var pref = GameRegionPreference.For(game, serverChoice);
         var preferred = pref?.Regions ?? Array.Empty<string>();
+        var excluded = pref?.ExcludeRegions ?? Array.Empty<string>();
         var label = pref?.Label;
+        var hasChoice = GameRegionPreference.HasServerChoice(game);
+        var choice = hasChoice
+            ? (string.Equals(serverChoice, "cn", StringComparison.OrdinalIgnoreCase) ? "cn" : "intl")
+            : null;
 
         var candidates = new List<RankedNode>(servers.Count);
         foreach (var s in servers)
@@ -215,11 +271,31 @@ public static class NodeRanker
             var region = NodeRegions.Detect(s);
             var regionCode = region?.Code;
             var regionName = region?.Name;
-            var match = regionCode is not null && preferred.Contains(regionCode);
+
+            bool match;
+            bool penalised;
+            bool isExcluded = false;
+            if (excluded.Count > 0)
+            {
+                // Exclusion mode: a node in an excluded region is off-region; every other node (including
+                // nodes with an unknown region) counts as matching.
+                isExcluded = regionCode is not null && excluded.Contains(regionCode);
+                match = regionCode is not null && !isExcluded;
+                penalised = isExcluded;
+            }
+            else
+            {
+                match = regionCode is not null && preferred.Contains(regionCode);
+                penalised = preferred.Count > 0 && !match;
+            }
 
             var tested = s.Delay >= 0;
             // Untested/failed nodes get score -1 so the UI can render them as grey/empty bars.
-            var score = tested ? s.Delay + (preferred.Count > 0 && !match ? regionPenaltyMs : 0) : -1;
+            // Excluded nodes get a hard, large penalty so they always sort after every tested
+            // non-excluded node (the 国际服 product decision: overseas exits only).
+            var score = tested
+                ? s.Delay + (isExcluded ? ExcludedPenaltyMs : penalised ? regionPenaltyMs : 0)
+                : -1;
 
             candidates.Add(new RankedNode(s, s.Delay, regionCode, regionName, match, score, string.Empty));
         }
@@ -241,9 +317,9 @@ public static class NodeRanker
             .ToList();
 
         var recommended = withNotes.FirstOrDefault();
-        var reason = BuildReason(game, withNotes, preferred, label, regionPenaltyMs);
+        var reason = BuildReason(game, withNotes, preferred, excluded, label, regionPenaltyMs);
 
-        return new NodeRanking(withNotes, recommended, reason, label, preferred);
+        return new NodeRanking(withNotes, recommended, reason, label, preferred, choice);
     }
 
     // 0 = tested, 1 = untested (-1), 2 = failed (< -1)
@@ -263,7 +339,7 @@ public static class NodeRanker
     }
 
     private static string BuildReason(Game? game, IReadOnlyList<RankedNode> ordered, IReadOnlyList<string> preferred,
-        string? label, int regionPenaltyMs)
+        IReadOnlyList<string> excluded, string? label, int regionPenaltyMs)
     {
         var best = ordered.FirstOrDefault();
         if (best is null)
@@ -275,11 +351,21 @@ public static class NodeRanker
 
         var lowest = tested.OrderBy(c => c.Delay).ThenBy(c => c.Server.Remark, StringComparer.OrdinalIgnoreCase).First();
 
-        if (preferred.Count == 0)
+        // Exclusion mode (国际服 of a 国服/国际服 game): describe the lowest non-excluded node.
+        if (excluded.Count > 0)
         {
-            var extra = HasCnAndIntl(game) ? "；该游戏同时有国服和国际服，按延迟选择" : "";
-            return $"延迟最低（{lowest.Delay} ms）{extra}";
+            var overseas = tested.Where(c => !(c.Region is { } r && excluded.Contains(r))).ToList();
+            if (overseas.Count > 0)
+            {
+                var o = overseas.OrderBy(c => c.Delay).ThenBy(c => c.Server.Remark, StringComparer.OrdinalIgnoreCase).First();
+                return $"国际服：已排除国内线路，选择延迟最低的海外线路（{o.Delay} ms）";
+            }
+
+            return $"国际服：没有可用的海外线路，已选择延迟最低的线路（{lowest.Delay} ms）";
         }
+
+        if (preferred.Count == 0)
+            return $"延迟最低（{lowest.Delay} ms）";
 
         // The reason must describe the RECOMMENDED node, not the lowest-delay one.
         if (best.RegionMatch)
@@ -299,14 +385,5 @@ public static class NodeRanker
         // Describe the best MATCHING node, not the recommended unmatched one.
         var m = matching.OrderBy(c => c.Delay).First();
         return $"{label}所在地区的线路（{m.RegionName} {m.Delay} ms）比最低延迟线路慢 {regionPenaltyMs} ms 以上，已选择延迟最低的线路（{best.Delay} ms）";
-    }
-
-    private static bool HasCnAndIntl(Game? game)
-    {
-        if (game is null)
-            return false;
-        var hasCn = game.Regions.Any(r => r.Contains("国服", StringComparison.Ordinal));
-        var hasIntl = game.Regions.Any(r => r.Contains("国际服", StringComparison.Ordinal));
-        return hasCn && hasIntl;
     }
 }

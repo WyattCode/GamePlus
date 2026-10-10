@@ -100,8 +100,19 @@ internal sealed class RpcRouter
                     ? null
                     : await WithStateValue(() => Games.Games.FirstOrDefault(g => g.Id == gameId), ct);
 
-                var penalty = SettingsSvc.Settings.Advanced.RegionPenaltyMs;
-                var ranking = NodeRanker.Rank(game, pool, penalty);
+                // Read the penalty + per-game server choice under the state lock: GameServerChoice is a
+                // plain Dictionary written by games.setServer under the same lock, so reading it outside
+                // would race with a concurrent write. No network I/O happens inside this block.
+                var (penalty, choice) = await WithStateValue(() =>
+                {
+                    var p = SettingsSvc.Settings.Advanced.RegionPenaltyMs;
+                    var c = game is null
+                        ? null
+                        : SettingsSvc.Settings.GameServerChoice.GetValueOrDefault(game.Id);
+                    return (p, c);
+                }, ct);
+
+                var ranking = NodeRanker.Rank(game, pool, penalty, choice);
                 return Mapping.ToDto(ranking, pool);
             }
 
@@ -294,6 +305,25 @@ internal sealed class RpcRouter
                         list.RemoveAll(x => x == id);
                     }
 
+                    await SettingsSvc.SaveAsync();
+                    return GameList();
+                }, ct);
+            }
+
+            case "games.setServer":
+            {
+                var id = JsonParams.RequiredString(@params, "id");
+                var server = JsonParams.RequiredString(@params, "server");
+                if (server is not ("cn" or "intl"))
+                    throw new InvalidOperationException("服务器只能是 cn 或 intl");
+                return await WithStateValueAsync(async () =>
+                {
+                    var game = Games.Games.FirstOrDefault(g => g.Id == id)
+                               ?? throw new InvalidOperationException("游戏不存在");
+                    if (!GameRegionPreference.HasServerChoice(game))
+                        throw new InvalidOperationException("该游戏没有国服/国际服之分");
+
+                    SettingsSvc.Settings.GameServerChoice[id] = server;
                     await SettingsSvc.SaveAsync();
                     return GameList();
                 }, ct);
@@ -544,11 +574,12 @@ internal sealed class RpcRouter
     private SubscriptionDto[] SubList() =>
         Subs.Subscriptions.ToList().Select(Mapping.ToDto).ToArray();
 
-    /// <summary>Builds the games DTO list, marking the per-game auto-acceleration toggle.</summary>
+    /// <summary>Builds the games DTO list, marking the per-game auto-acceleration toggle + server choice.</summary>
     private GameDto[] GameList()
     {
         var auto = SettingsSvc.Settings.AutoAccelerateGames;
-        return Games.Games.Select(g => Mapping.ToDto(g, auto)).ToArray();
+        var choices = SettingsSvc.Settings.GameServerChoice;
+        return Games.Games.Select(g => Mapping.ToDto(g, auto, choices)).ToArray();
     }
 
     /// <summary>Game name for a given id, or null when unknown (used for auto-accel event payloads).</summary>
@@ -816,8 +847,16 @@ internal sealed class RpcRouter
             pool = await WithStateValue(() => Servers.Servers.ToList(), ct);
         }
 
-        var penalty = SettingsSvc.Settings.Advanced.RegionPenaltyMs;
-        var ranking = NodeRanker.Rank(game, pool, penalty);
+        // Read the penalty + per-game server choice under the state lock (GameServerChoice is a plain
+        // Dictionary written by games.setServer under the same lock). No network I/O inside this block.
+        var (penalty, choice) = await WithStateValue(() =>
+        {
+            var p = SettingsSvc.Settings.Advanced.RegionPenaltyMs;
+            var c = SettingsSvc.Settings.GameServerChoice.GetValueOrDefault(game.Id);
+            return (p, c);
+        }, ct);
+
+        var ranking = NodeRanker.Rank(game, pool, penalty, choice);
         var node = ranking.Recommended?.Server ?? pool[0];
         Logs.Log(Netch.Core.Enums.LogLevel.Info, $"智能选路：{node.Remark}（{ranking.Reason}）");
         return node;

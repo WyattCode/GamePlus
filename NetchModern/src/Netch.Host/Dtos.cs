@@ -16,7 +16,8 @@ internal record ServerDto(string Id, string Kind, string Type, string Remark, st
 internal record GameDto(string Id, string Name, string Icon, string Accent, string RegionText,
     int RuleCount, string[] Categories, bool Favorite, bool Custom,
     string EnglishName, string[] Aliases, string Category, string[] Regions, string[] Platforms,
-    string[] ProxyDomains, string[] ProxyIps, string[] ProxyProcesses, bool AutoAccelerate);
+    string[] ProxyDomains, string[] ProxyIps, string[] ProxyProcesses, bool AutoAccelerate,
+    bool HasServerChoice, string? ServerChoice);
 
 internal record SubscriptionDto(string Id, string Remark, string Link, int ServerCount, string? LastUpdated);
 
@@ -43,7 +44,7 @@ internal record RankedNodeDto(string Id, string Remark, string Type, int Delay, 
     string? RegionName, bool RegionMatch, int Score, string Note);
 
 internal record NodeRankingDto(string? RecommendedId, string Reason, string? PreferenceLabel,
-    string[] PreferredRegions, RankedNodeDto[] Candidates);
+    string[] PreferredRegions, RankedNodeDto[] Candidates, string? ServerChoice);
 
 internal record DiagnosticItemDto(string Id, string Title, string Status, string Detail,
     string? Suggestion, string? FixAction);
@@ -81,19 +82,32 @@ internal static class Mapping
     public static ServerDto ToDto(Server s, string id) =>
         new(id, KindOf(s), ChipOf(s), s.Remark, s.Hostname, s.Port, s.Group, s.Delay);
 
-    public static GameDto ToDto(Game g) => ToDto(g, null);
+    public static GameDto ToDto(Game g) => ToDto(g, null, null);
 
     /// <summary>
     ///     Builds the game DTO. <paramref name="autoAccelerateIds" /> is the set of game ids with the
     ///     per-game auto-acceleration toggle enabled (null → false for every game).
+    ///     <paramref name="serverChoices" /> maps game ids to their 国服/国际服 choice (null → default).
     /// </summary>
-    public static GameDto ToDto(Game g, IReadOnlyCollection<string>? autoAccelerateIds) =>
-        new(g.Id, g.Name, g.Icon, g.Accent, g.RegionText, g.RuleCount,
+    public static GameDto ToDto(Game g, IReadOnlyCollection<string>? autoAccelerateIds,
+        IReadOnlyDictionary<string, string>? serverChoices)
+    {
+        var hasChoice = GameRegionPreference.HasServerChoice(g);
+        string? choice = null;
+        if (hasChoice)
+        {
+            var raw = serverChoices is not null && serverChoices.TryGetValue(g.Id, out var v) ? v : null;
+            choice = string.Equals(raw, "cn", StringComparison.OrdinalIgnoreCase) ? "cn" : "intl";
+        }
+
+        return new GameDto(g.Id, g.Name, g.Icon, g.Accent, g.RegionText, g.RuleCount,
             BuildCategories(g), g.IsFavorite, g.IsCustom,
             g.EnglishName, g.Aliases.ToArray(), g.Category.ToString(), g.Regions.ToArray(),
             g.Platforms.ToArray(), g.ProxyDomains.ToArray(), g.ProxyIps.ToArray(),
             g.ProxyProcesses.ToArray(),
-            autoAccelerateIds is not null && autoAccelerateIds.Contains(g.Id));
+            autoAccelerateIds is not null && autoAccelerateIds.Contains(g.Id),
+            hasChoice, choice);
+    }
 
     /// <summary>
     ///     Builds a <see cref="Game" /> from client-edit fields (used by games.add / games.update).
@@ -253,7 +267,8 @@ internal static class Mapping
             ranking.Reason,
             ranking.PreferenceLabel,
             ranking.PreferredRegions.ToArray(),
-            candidates);
+            candidates,
+            ranking.ServerChoice);
     }
 
     public static DiagnosticReportDto ToDto(DiagnosticReport r) =>

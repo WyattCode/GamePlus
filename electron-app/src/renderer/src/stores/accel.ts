@@ -3,6 +3,7 @@ import { computed, onScopeDispose, ref } from 'vue'
 import type { AccelStatus, EffectReport, Game, NodeRanking, Server } from '@shared/types'
 import { backend } from '@/api/backend'
 import { useLibraryStore } from '@/stores/library'
+import { track } from '@/utils/telemetry'
 
 export const useAccelStore = defineStore('accel', () => {
   const status = ref<AccelStatus>({
@@ -73,11 +74,31 @@ export const useAccelStore = defineStore('accel', () => {
   async function start(): Promise<void> {
     if (!selectedGame.value) return
     const nodeId = smartNode.value ? null : selectedNodeId.value
-    await backend.startAccelerate(selectedGame.value.id, nodeId)
+    const startedAt = Date.now()
+    try {
+      await backend.startAccelerate(selectedGame.value.id, nodeId)
+      track({
+        type: 'accel_start',
+        ok: true,
+        mode: status.value.captureMode ?? undefined,
+        durationMs: Date.now() - startedAt
+      })
+    } catch (e) {
+      track({
+        type: 'accel_start',
+        ok: false,
+        mode: status.value.captureMode ?? undefined,
+        reason: e instanceof Error ? e.message : String(e),
+        durationMs: Date.now() - startedAt
+      })
+      throw e
+    }
   }
 
   async function stop(): Promise<void> {
+    const durationSec = status.value.durationSec
     await backend.stopAccelerate()
+    track({ type: 'accel_stop', durationSec })
   }
 
   async function toggle(): Promise<void> {

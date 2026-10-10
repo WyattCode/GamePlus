@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
+import PrivacyCard from '@/components/PrivacyCard.vue'
 import SplitRoutingCard from '@/components/SplitRoutingCard.vue'
 import UpdateCard from '@/components/UpdateCard.vue'
 import { useAppStore } from '@/stores/app'
@@ -320,6 +321,8 @@ async function toggleStartHidden(v: boolean): Promise<void> {
         <button class="btn diag-btn" @click="router.push('/settings/advanced')">打开</button>
       </div>
     </div>
+
+    <PrivacyCard />
 
     <UpdateCard />
 

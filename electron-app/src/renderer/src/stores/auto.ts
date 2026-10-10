@@ -6,6 +6,7 @@ import { useAccelStore } from '@/stores/accel'
 import { useDiagnosticsStore } from '@/stores/diagnostics'
 import { useLibraryStore } from '@/stores/library'
 import { useToastStore } from '@/stores/toast'
+import { track } from '@/utils/telemetry'
 
 // Global auto-acceleration listener + tray status sync. Initialised once from App.vue's startApp().
 export const useAutoStore = defineStore('auto', () => {
@@ -26,6 +27,7 @@ export const useAutoStore = defineStore('auto', () => {
   }
 
   function onEvent(e: AutoAccelEvent): void {
+    track({ type: 'auto_accel', kind: e.kind })
     switch (e.kind) {
       case 'started': {
         toast.info(`检测到 ${e.gameName} 启动，已自动加速`)

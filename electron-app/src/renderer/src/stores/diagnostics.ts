@@ -4,6 +4,7 @@ import type { DiagnosticReport } from '@shared/types'
 import { backend } from '@/api/backend'
 import { useAccelStore } from '@/stores/accel'
 import { errorMessage, useToastStore } from '@/stores/toast'
+import { track } from '@/utils/telemetry'
 
 /** One-click diagnostics dialog state. */
 export const useDiagnosticsStore = defineStore('diagnostics', () => {
@@ -18,10 +19,17 @@ export const useDiagnosticsStore = defineStore('diagnostics', () => {
   async function run(): Promise<void> {
     running.value = true
     try {
-      report.value = await backend.runDiagnostics({
+      const r = await backend.runDiagnostics({
         gameId: accel.selectedGame?.id ?? null,
         nodeId: accel.smartNode ? null : accel.selectedNodeId,
         error: lastError.value
+      })
+      report.value = r
+      const items = r.items ?? []
+      track({
+        type: 'diagnostics',
+        failed: items.filter((i) => i.status === 'error').length,
+        warned: items.filter((i) => i.status === 'warning').length
       })
     } catch (e) {
       toast.error('诊断失败：' + errorMessage(e))

@@ -12,6 +12,7 @@ import type {
   EngineSettings,
   Game,
   ImportResult,
+  LanAddress,
   LibraryScanResult,
   LogEntry,
   NodeRanking,
@@ -139,7 +140,8 @@ export class WebSocketBackend implements Backend {
         downloadBps: 0,
         uploadBps: 0,
         gameId: null,
-        nodeId: null
+        nodeId: null,
+        lanShareEndpoint: null
       }
       this.lastStatus = idle
       this.statusCbs.forEach((cb) => cb(idle))
@@ -407,5 +409,10 @@ export class WebSocketBackend implements Backend {
 
   async clearHistory(gameId?: string): Promise<void> {
     await this.call('history.clear', { gameId: gameId ?? null })
+  }
+
+  async getLanAddresses(): Promise<LanAddress[]> {
+    const res = await this.call<{ addresses: LanAddress[] }>('lan.addresses')
+    return res.addresses
   }
 }

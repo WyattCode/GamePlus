@@ -17,6 +17,9 @@ import type {
   Game,
   GameCompat,
   ImportResult,
+  LanAddress,
+  LanShareSettings,
+  LanShareUpdate,
   LibraryScanResult,
   LogEntry,
   NodeRanking,
@@ -111,6 +114,8 @@ export interface Backend {
   listHistory(gameId?: string, limit?: number): Promise<AccelSession[]>
   /** Clears all history, or only one game's when gameId is given. */
   clearHistory(gameId?: string): Promise<void>
+  /** Private IPv4 addresses of this PC, for the LAN-share bind-address picker. */
+  getLanAddresses(): Promise<LanAddress[]>
 }
 
 // Re-exported so callers can open the connection gate without importing the transport directly.
@@ -286,6 +291,16 @@ export function modeUnavailableError(mode: CaptureModeKind): string {
   return '该游戏没有域名规则，无法使用系统代理模式'
 }
 
+/** True when s is a dotted quad inside 10/8, 172.16/12 or 192.168/16. */
+function isPrivateIpv4(s: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s)
+  if (!m) return false
+  const octets = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])]
+  if (octets.some((o) => o > 255)) return false
+  const [a, b] = octets
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+}
+
 class MockBackend implements Backend {
   private statusCbs = new Set<(s: AccelStatus) => void>()
   private logCbs = new Set<(l: LogEntry) => void>()
@@ -303,7 +318,8 @@ class MockBackend implements Backend {
     uploadBps: 0,
     gameId: null,
     nodeId: null,
-    captureMode: null
+    captureMode: null,
+    lanShareEndpoint: null
   }
 
   private effect: EffectReport = {
@@ -521,7 +537,8 @@ class MockBackend implements Backend {
       uploadBps: 0,
       gameId: null,
       nodeId: null,
-      captureMode: null
+      captureMode: null,
+      lanShareEndpoint: null
     }
     this.emit()
     this.log('info', '加速已停止')
@@ -592,6 +609,15 @@ class MockBackend implements Backend {
       autoSwitchSustainSec: 15,
       autoSwitchCooldownSec: 60,
       autoSwitchMaxSwitches: 3
+    },
+    lanShare: {
+      enabled: false,
+      bindAddress: '',
+      httpPort: 7899,
+      socksPort: 0,
+      allowedClients: [],
+      username: '',
+      hasPassword: false
     }
   }
 
@@ -641,6 +667,10 @@ class MockBackend implements Backend {
   async clearHistory(gameId?: string): Promise<void> {
     if (gameId) this.mockHistory = this.mockHistory.filter((s) => s.gameId !== gameId)
     else this.mockHistory = []
+  }
+
+  async getLanAddresses(): Promise<LanAddress[]> {
+    return [{ address: '192.168.1.23', interfaceName: '以太网' }]
   }
 
   async addServerFromLink(link: string): Promise<Server[]> {
@@ -1035,7 +1065,46 @@ class MockBackend implements Backend {
         throw new Error('订阅自动更新间隔只能 0、6、12、24 或 48 小时')
       }
     }
-    const { advanced, ...rest } = patch
+    if (patch.lanShare) {
+      const cur = this.mockSettings.lanShare
+      const u = patch.lanShare
+      const next: LanShareSettings = {
+        enabled: u.enabled ?? cur.enabled,
+        bindAddress: (u.bindAddress ?? cur.bindAddress).trim(),
+        httpPort: u.httpPort ?? cur.httpPort,
+        socksPort: u.socksPort ?? cur.socksPort,
+        allowedClients: u.allowedClients ?? cur.allowedClients,
+        username: (u.username ?? cur.username).trim(),
+        hasPassword: cur.hasPassword
+      }
+      if (u.clearPassword) next.hasPassword = false
+      else if (u.password) next.hasPassword = true
+      if (next.enabled) {
+        if (!isPrivateIpv4(next.bindAddress)) {
+          throw new Error('共享地址必须是本机已有的局域网 IPv4 地址（10.x / 172.16–31.x / 192.168.x）')
+        }
+        if (next.allowedClients.length === 0) throw new Error('允许的设备列表不能为空')
+        if (next.allowedClients.length > 32) throw new Error('允许的设备最多 32 条')
+      }
+      if (!Number.isInteger(next.httpPort) || next.httpPort < 1024 || next.httpPort > 65535) {
+        throw new Error('HTTP 端口必须在 1024–65535 之间')
+      }
+      if (
+        next.socksPort !== 0 &&
+        (!Number.isInteger(next.socksPort) || next.socksPort < 1024 || next.socksPort > 65535)
+      ) {
+        throw new Error('SOCKS5 端口必须是 0（关闭）或在 1024–65535 之间')
+      }
+      if (next.socksPort !== 0 && next.socksPort === next.httpPort) {
+        throw new Error('HTTP 与 SOCKS5 端口不能相同')
+      }
+      const localSocks = this.mockSettings.advanced.localSocksPort
+      if (localSocks > 0 && (localSocks === next.httpPort || localSocks === next.socksPort)) {
+        throw new Error('端口不能与本地 SOCKS 端口相同')
+      }
+      this.mockSettings = { ...this.mockSettings, lanShare: next }
+    }
+    const { advanced, lanShare, ...rest } = patch
     if (advanced) {
       const adv: Partial<AdvancedSettings> = advanced
       if (adv.tunDns !== undefined) {
@@ -1377,6 +1446,12 @@ class MockBackend implements Backend {
     this.emit()
   }
   private emit(): void {
+    // LAN share endpoint is derived, never stored: only advertised while actually accelerating.
+    const ls = this.mockSettings.lanShare
+    this.status.lanShareEndpoint =
+      ls.enabled && this.status.state === 'accelerating'
+        ? `${ls.bindAddress || '192.168.1.23'}:${ls.httpPort}`
+        : null
     const snap = structuredClone(this.status)
     this.statusCbs.forEach((cb) => cb(snap))
   }

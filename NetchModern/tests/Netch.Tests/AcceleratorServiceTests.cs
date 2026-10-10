@@ -18,6 +18,7 @@ public class AcceleratorServiceTests
         public IReadOnlyCollection<string>? ProxyDomains { get; set; }
         public IReadOnlyCollection<string>? ProxyIps { get; set; }
         public IReadOnlyCollection<string>? DirectDomains { get; set; }
+        public LanShareOptions? LanShare { get; set; }
         public int StartCalls { get; private set; }
         public int StopCalls { get; private set; }
         public Task<Socks5Server> StartAsync(Server server, CancellationToken ct = default)
@@ -140,11 +141,11 @@ public class AcceleratorServiceTests
 
     private static AcceleratorService MakeAccelerator(FakeServerController controller, FakeSystemProxy proxy,
         IModeControllerFactory? modeFactory = null, Func<Game, string>? captureModeFor = null,
-        Func<Game, bool>? downloadViaProxyFor = null)
+        Func<Game, bool>? downloadViaProxyFor = null, Func<LanShareOptionsResult>? lanShare = null)
     {
         var log = new LogService();
         return new AcceleratorService(log, _ => controller, proxy, modeFactory ?? new FakeModeControllerFactory(),
-            null, null, null, null, captureModeFor, downloadViaProxyFor);
+            null, null, null, null, captureModeFor, downloadViaProxyFor, lanShare);
     }
 
     private static AcceleratorService MakeAcceleratorWithEffect(FakeServerController controller, FakeSystemProxy proxy,
@@ -474,6 +475,70 @@ public class AcceleratorServiceTests
         Assert.Equal(2, controller.StartCalls);
         Assert.Equal(new[] { "steamcontent.com" }, controller.DirectDomains);
         Assert.Equal(new[] { "store.steampowered.com" }, controller.ProxyDomains);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_WithLanShare_SetsControllerLanShareAndStatusEndpoint()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var options = new LanShareOptions("192.168.1.10", 7899, 0, new[] { "192.168.1.0/24" }, null, null);
+        var accel = MakeAccelerator(controller, proxy,
+            lanShare: () => new LanShareOptionsResult(options, null));
+        var game = MakeGame("game.example.com");
+
+        await accel.StartAsync(game, MakeServer());
+
+        Assert.Same(options, controller.LanShare);
+        Assert.Equal("192.168.1.10:7899", accel.Status.LanShareEndpoint);
+        Assert.Equal(AccelerationState.Accelerating, accel.State);
+        await accel.StopAsync();
+        Assert.Null(accel.Status.LanShareEndpoint);
+    }
+
+    [Fact]
+    public async Task StartAsync_LanShareProblem_ContinuesWithoutLanShare()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var accel = MakeAccelerator(controller, proxy,
+            lanShare: () => new LanShareOptionsResult(null, "共享地址不再是本机的局域网地址"));
+        var game = MakeGame("game.example.com");
+
+        await accel.StartAsync(game, MakeServer());
+
+        // The problem only disables the LAN inbounds — acceleration itself still succeeds.
+        Assert.Null(controller.LanShare);
+        Assert.Null(accel.Status.LanShareEndpoint);
+        Assert.Equal(AccelerationState.Accelerating, accel.State);
+        Assert.True(proxy.IsEnabled);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_LanShare_PreservedAcrossFallbackRestart()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(failProcess: true);
+        var options = new LanShareOptions("192.168.1.10", 7899, 0, new[] { "192.168.1.0/24" }, null, null);
+        var accel = MakeAccelerator(controller, proxy, modeFactory,
+            lanShare: () => new LanShareOptionsResult(options, null));
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" },
+            ProxyDomains = new List<string> { "game.example.com" }
+        };
+
+        await accel.StartAsync(game, MakeServer());
+
+        // The StartDomainProxyAsync restart must re-apply the LAN-share inbounds.
+        Assert.Equal(2, controller.StartCalls);
+        Assert.Same(options, controller.LanShare);
+        Assert.Equal("192.168.1.10:7899", accel.Status.LanShareEndpoint);
         await accel.StopAsync();
     }
 

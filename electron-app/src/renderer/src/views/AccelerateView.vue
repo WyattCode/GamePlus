@@ -703,6 +703,12 @@ watch(
           <AppIcon name="info" :size="14" />
           {{ captureHint.text }}
         </div>
+
+        <!-- LAN share chip: shown while the console proxy share is active -->
+        <div v-if="accel.status.lanShareEndpoint" class="capture-hint lan-chip">
+          <AppIcon name="globe" :size="14" />
+          局域网共享中 · {{ accel.status.lanShareEndpoint }}
+        </div>
       </div>
 
       <!-- Metrics -->
@@ -1013,6 +1019,10 @@ watch(
 }
 .capture-hint.warn {
   color: var(--warn);
+}
+.lan-chip {
+  color: var(--brand);
+  font-weight: 600;
 }
 
 /* advisory hints (网络良好，可不加速 / 加速效果不明显) */

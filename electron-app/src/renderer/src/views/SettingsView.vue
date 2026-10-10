@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
+import LanShareCard from '@/components/LanShareCard.vue'
 import PrivacyCard from '@/components/PrivacyCard.vue'
 import SplitRoutingCard from '@/components/SplitRoutingCard.vue'
 import UpdateCard from '@/components/UpdateCard.vue'
@@ -292,6 +293,8 @@ async function toggleStartHidden(v: boolean): Promise<void> {
     </div>
 
     <SplitRoutingCard />
+
+    <LanShareCard />
 
     <div class="card group">
       <div class="g-title">{{ t('settings.rules.title') }}</div>

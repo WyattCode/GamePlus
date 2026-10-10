@@ -103,6 +103,8 @@ export interface AccelStatus {
   nodeId: string | null
   /** Active capture method, or null when idle. */
   captureMode: ActiveCaptureMode | null
+  /** "bindAddress:httpPort" while LAN sharing is enabled and accelerating; null otherwise. */
+  lanShareEndpoint?: string | null
 }
 
 export interface Subscription {
@@ -159,6 +161,44 @@ export interface AdvancedSettings {
   autoSwitchMaxSwitches: number
 }
 
+/** LAN sharing ("HTTP proxy share" for consoles) settings; default OFF. */
+export interface LanShareSettings {
+  /** Master switch; requires explicit user confirmation in the UI to turn on. */
+  enabled: boolean
+  /** Private LAN IPv4 of this PC the proxy inbounds bind to (never 0.0.0.0). */
+  bindAddress: string
+  /** HTTP proxy port for consoles (1024–65535). */
+  httpPort: number
+  /** Optional SOCKS5 port for PCs/phones; 0 = off. */
+  socksPort: number
+  /** Non-empty allowlist of private IPv4 / CIDR entries (max 32). */
+  allowedClients: string[]
+  /** Optional auth username (HTTP basic / SOCKS). */
+  username: string
+  /** True when a password is stored (never sent back to the renderer). */
+  hasPassword: boolean
+}
+
+/** Patch for settings.set's `lanShare` field; omitted fields keep their current value. */
+export interface LanShareUpdate {
+  enabled?: boolean
+  bindAddress?: string
+  httpPort?: number
+  socksPort?: number
+  allowedClients?: string[]
+  username?: string
+  /** Sets a new password when non-empty. */
+  password?: string
+  /** Clears the stored password. */
+  clearPassword?: boolean
+}
+
+/** One private IPv4 address of this PC, from the `lan.addresses` RPC. */
+export interface LanAddress {
+  address: string
+  interfaceName: string
+}
+
 /** Engine-side settings persisted by the C# backend (subset of the full AppSettings). */
 export interface EngineSettings {
   theme: 'light' | 'dark' | 'system'
@@ -174,14 +214,17 @@ export interface EngineSettings {
   extraApps: ExtraApp[]
   /** Advanced engine options. */
   advanced: AdvancedSettings
+  /** LAN sharing (console HTTP proxy share) settings. */
+  lanShare: LanShareSettings
 }
 
 /**
- * Patch accepted by settings.set: any top-level field, plus a partial `advanced` object so callers
- * can update a single advanced field without resending (and re-validating) the whole block.
+ * Patch accepted by settings.set: any top-level field, plus partial `advanced` / `lanShare` objects
+ * so callers can update a single field without resending (and re-validating) the whole block.
  */
-export type SettingsPatch = Partial<Omit<EngineSettings, 'advanced'>> & {
+export type SettingsPatch = Partial<Omit<EngineSettings, 'advanced' | 'lanShare'>> & {
   advanced?: Partial<AdvancedSettings>
+  lanShare?: LanShareUpdate
 }
 
 /** Result of importing nodes (share links, subscription blob, Clash YAML or a subscription URL). */

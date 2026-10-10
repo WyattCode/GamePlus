@@ -36,6 +36,13 @@ public partial class AppSettings : ObservableObject
 
     public AdvancedSettings Advanced { get; set; } = new();
 
+    /// <summary>
+    ///     LAN sharing for consoles (Switch / PlayStation / Xbox): extra HTTP (+ optional SOCKS5) proxy
+    ///     inbounds on one private LAN IPv4 of this PC while acceleration runs. Default OFF; only TCP sent
+    ///     via the proxy is accelerated (no game UDP / P2P / voice chat, no NAT improvement).
+    /// </summary>
+    public LanShareSettings LanShare { get; set; } = new();
+
     /// <summary>Ids of games the user has favourited.</summary>
     public List<string> FavoriteGames { get; set; } = new();
 
@@ -62,7 +69,7 @@ public partial class AppSettings : ObservableObject
     ///     Games whose CDN download domains should also be routed through the node (gameId → true).
     ///     A missing entry means downloads go DIRECT (the default) — personal VPS bandwidth is too
     ///     limited for multi-GB downloads. Concurrent so the accelerator can read it lock-free while
-    ///     the RPC path writes it under the state lock.
+    ///     settings are being serialized.
     /// </summary>
     public ConcurrentDictionary<string, bool> GameDownloadViaProxy { get; set; } = new();
 
@@ -90,7 +97,7 @@ public partial class AppSettings : ObservableObject
     /// <summary>
     ///     Games whose direct baseline should be re-measured on the next acceleration (one-shot flag,
     ///     set by the effect card's "重新测量" button). Keys are game ids; the value is always true.
-    ///     Concurrent so the RPC path can mutate it while settings are being serialized.
+    ///     Concurrent so the RPC path writes it while settings are being serialized.
     /// </summary>
     public ConcurrentDictionary<string, bool> RemeasureGames { get; set; } = new();
 }

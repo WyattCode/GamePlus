@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Netch.Core.Models.Servers;
+using Netch.Core.Models.Settings;
 
 namespace Netch.Core.Services;
 
@@ -14,8 +15,8 @@ public static class V2rayConfigGenerator
 
     public static string Generate(Server server, int localSocksPort, int localHttpPort = 0, int apiPort = 0,
         IReadOnlyCollection<string>? proxyDomains = null, IReadOnlyCollection<string>? proxyIps = null,
-        IReadOnlyCollection<string>? directDomains = null)
-        => GenerateNode(server, localSocksPort, localHttpPort, apiPort, proxyDomains, proxyIps, directDomains).ToJsonString(Options);
+        IReadOnlyCollection<string>? directDomains = null, LanShareOptions? lanShare = null)
+        => GenerateNode(server, localSocksPort, localHttpPort, apiPort, proxyDomains, proxyIps, directDomains, lanShare).ToJsonString(Options);
 
     /// <param name="proxyDomains">
     ///     When non-empty (game mode), only these domains route through the node and everything else goes
@@ -27,9 +28,13 @@ public static class V2rayConfigGenerator
     ///     forwards all traffic to the local proxy. A direct rule is placed before the proxy rules and
     ///     sniffing (routeOnly) is enabled on the local inbounds so domain matching works there.
     /// </param>
+    /// <param name="lanShare">
+    ///     LAN share for consoles: adds "lan-http" (+ optional "lan-socks") inbounds bound to a private LAN
+    ///     IPv4, with allow/block routing rules for the allowlisted clients placed FIRST. Null = disabled.
+    /// </param>
     public static JsonObject GenerateNode(Server server, int localSocksPort, int localHttpPort = 0, int apiPort = 0,
         IReadOnlyCollection<string>? proxyDomains = null, IReadOnlyCollection<string>? proxyIps = null,
-        IReadOnlyCollection<string>? directDomains = null)
+        IReadOnlyCollection<string>? directDomains = null, LanShareOptions? lanShare = null)
     {
         var hasDirect = directDomains is { Count: > 0 };
 
@@ -188,7 +193,98 @@ public static class V2rayConfigGenerator
             });
         }
 
+        ApplyLanShare(config, lanShare);
+
         return config;
+    }
+
+    /// <summary>
+    ///     Adds the LAN-share inbounds ("lan-http", optional "lan-socks") and the allow/block routing rules
+    ///     for the allowlisted clients. The rules are inserted at the very start of the routing rules so
+    ///     they win over everything else (including the api rule, which only matches "api-in" anyway).
+    /// </summary>
+    private static void ApplyLanShare(JsonObject config, LanShareOptions? lanShare)
+    {
+        if (lanShare == null)
+            return;
+
+        var inbounds = (JsonArray)config["inbounds"]!;
+        var rules = (JsonArray)config["routing"]!["rules"]!;
+
+        var httpIn = new JsonObject
+        {
+            ["tag"] = "lan-http",
+            ["listen"] = lanShare.BindAddress,
+            ["port"] = lanShare.HttpPort,
+            ["protocol"] = "http",
+            ["settings"] = new JsonObject
+            {
+                ["allowTransparent"] = false
+            }
+        };
+        if (!string.IsNullOrEmpty(lanShare.Username))
+        {
+            httpIn["settings"]!["accounts"] = new JsonArray
+            {
+                new JsonObject { ["user"] = lanShare.Username, ["pass"] = lanShare.Password }
+            };
+        }
+
+        inbounds.Add(httpIn);
+
+        var lanTags = new JsonArray { "lan-http" };
+        if (lanShare.SocksPort > 0)
+        {
+            var socksSettings = new JsonObject();
+            if (!string.IsNullOrEmpty(lanShare.Username))
+            {
+                socksSettings["auth"] = "password";
+                socksSettings["accounts"] = new JsonArray
+                {
+                    new JsonObject { ["user"] = lanShare.Username, ["pass"] = lanShare.Password }
+                };
+            }
+            else
+            {
+                socksSettings["auth"] = "noauth";
+            }
+
+            inbounds.Add(new JsonObject
+            {
+                ["tag"] = "lan-socks",
+                ["listen"] = lanShare.BindAddress,
+                ["port"] = lanShare.SocksPort,
+                ["protocol"] = "socks",
+                ["settings"] = new JsonObject
+                {
+                    ["udp"] = true,
+                    ["auth"] = socksSettings["auth"]!.DeepClone()
+                }
+            });
+            if (socksSettings.ContainsKey("accounts"))
+                ((JsonObject)inbounds[^1]!["settings"]!)["accounts"] = socksSettings["accounts"]!.DeepClone();
+
+            lanTags.Add("lan-socks");
+        }
+
+        var sources = new JsonArray();
+        foreach (var c in lanShare.AllowedClients)
+            sources.Add(c);
+
+        // Allowlisted clients route through the node; everyone else on the LAN inbounds is blocked.
+        rules.Insert(0, new JsonObject
+        {
+            ["type"] = "field",
+            ["inboundTag"] = lanTags.DeepClone(),
+            ["source"] = sources.DeepClone(),
+            ["outboundTag"] = "proxy"
+        });
+        rules.Insert(1, new JsonObject
+        {
+            ["type"] = "field",
+            ["inboundTag"] = lanTags.DeepClone(),
+            ["outboundTag"] = "block"
+        });
     }
 
     /// <summary>

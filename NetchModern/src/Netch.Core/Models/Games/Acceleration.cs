@@ -44,6 +44,13 @@ public sealed partial class AccelerationStatus : ObservableObject
     [ObservableProperty]
     private string? _captureMode;
 
+    /// <summary>
+    ///     LAN-share endpoint ("addr:port") exposed for consoles while accelerating, or null when the
+    ///     feature is off / unavailable.
+    /// </summary>
+    [ObservableProperty]
+    private string? _lanShareEndpoint;
+
     public string LatencyText => Latency < 0 ? "—" : $"{Latency} ms";
     public string LossText => $"{Loss:0.#}%";
     public string JitterText => $"{Jitter} ms";
@@ -60,5 +67,6 @@ public sealed partial class AccelerationStatus : ObservableObject
         DownloadRate = 0;
         UploadRate = 0;
         CaptureMode = null;
+        LanShareEndpoint = null;
     }
 }

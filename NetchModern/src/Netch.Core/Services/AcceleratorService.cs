@@ -37,10 +37,12 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     private readonly IBaselineStore? _baselines;
     private readonly Func<Game, string>? _captureModeFor;
     private readonly Func<Game, bool>? _downloadViaProxyFor;
+    private readonly Func<LanShareOptionsResult>? _lanShare;
 
     private IServerController? _controller;
     private IModeController? _modeController;
     private Socks5Server? _socks;
+    private LanShareOptions? _lanShareOptions;
     private long _lastDown;
     private long _lastUp;
     private int _pinging;
@@ -62,7 +64,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         ISystemProxyService systemProxy, IModeControllerFactory modeControllerFactory, EffectMonitor? effect = null,
         Func<IReadOnlyList<ExtraApp>>? extraApps = null, Func<AdvancedSettings>? advanced = null,
         IBaselineStore? baselines = null, Func<Game, string>? captureModeFor = null,
-        Func<Game, bool>? downloadViaProxyFor = null)
+        Func<Game, bool>? downloadViaProxyFor = null, Func<LanShareOptionsResult>? lanShare = null)
     {
         _log = log;
         _controllerFactory = controllerFactory;
@@ -74,6 +76,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         _baselines = baselines;
         _captureModeFor = captureModeFor;
         _downloadViaProxyFor = downloadViaProxyFor;
+        _lanShare = lanShare;
     }
 
     /// <summary>Convenience overload using the default <see cref="ModeControllerFactory" /> (real drivers).</summary>
@@ -191,10 +194,40 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             // sniffing in the config generator handles the split there too.
             var downloadViaProxy = game.DownloadDomains.Count > 0 && (_downloadViaProxyFor?.Invoke(game) ?? false);
 
+            // LAN share (console proxy sharing): resolve the validated snapshot once per acceleration and
+            // hand it to the controller before start. A problem only disables the LAN inbounds — the
+            // acceleration itself continues without them.
+            _lanShareOptions = null;
+            if (_lanShare != null)
+            {
+                LanShareOptionsResult result;
+                try
+                {
+                    result = _lanShare.Invoke();
+                }
+                catch (Exception e)
+                {
+                    result = new LanShareOptionsResult(null, e.Message);
+                }
+
+                if (result.Problem != null)
+                {
+                    _log.Log(LogLevel.Warning, $"局域网共享未启动：{result.Problem}");
+                }
+                else if (result.Options != null)
+                {
+                    _lanShareOptions = result.Options;
+                    _log.Log(LogLevel.Info,
+                        $"局域网共享已开启：http://{result.Options.BindAddress}:{result.Options.HttpPort}（仅允许 {result.Options.AllowedClients.Count} 个地址）");
+                    Status.LanShareEndpoint = $"{result.Options.BindAddress}:{result.Options.HttpPort}";
+                }
+            }
+
             _controller = _controllerFactory(node);
             // Fixed local SOCKS5 port (0 = automatic). Set before StartAsync; persists across the
             // restart in StartDomainProxyAsync because it reuses the same controller instance.
             _controller.PreferredSocksPort = adv?.LocalSocksPort ?? 0;
+            _controller.LanShare = _lanShareOptions;
             if (game.DownloadDomains.Count > 0)
             {
                 if (downloadViaProxy)
@@ -450,6 +483,9 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         // Re-apply the fixed local port: the controller instance is reused, but be explicit so a future
         // refactor that swaps the instance can't silently drop the setting.
         _controller.PreferredSocksPort = _advanced?.Invoke()?.LocalSocksPort ?? 0;
+        // Re-apply the LAN-share inbounds too: the restart regenerates the core config, which would
+        // otherwise silently drop them.
+        _controller.LanShare = _lanShareOptions;
 
         // Re-apply the same download-split decision as the initial start (StartAsync) so the restart
         // keeps DirectDomains/ProxyDomains consistent.
@@ -509,6 +545,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         }
 
         _socks = null;
+        _lanShareOptions = null;
 
         Status.Reset();
         CurrentGame = null;

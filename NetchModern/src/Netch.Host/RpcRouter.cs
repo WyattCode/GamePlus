@@ -1,5 +1,8 @@
 using System.Globalization;
 using System.Linq;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -616,6 +619,15 @@ internal sealed class RpcRouter
                     return Mapping.ToDto(SettingsSvc.Settings);
                 }, ct);
 
+            case "lan.addresses":
+                // Pure local NIC enumeration — no shared state, so no state lock.
+                return new
+                {
+                    addresses = LocalPrivateIPv4Addresses()
+                        .Select(a => new { address = a.Address.ToString(), interfaceName = a.InterfaceName })
+                        .ToArray()
+                };
+
             case "rules.status":
                 return await WithStateValue(() =>
                 {
@@ -831,6 +843,33 @@ internal sealed class RpcRouter
         {
             return false;
         }
+    }
+
+    /// <summary>
+    ///     Lists the private IPv4 addresses (10/8, 172.16/12, 192.168/16) of this PC's Up, non-loopback
+    ///     network interfaces, deduplicated by address. Used by lan.addresses and lanShare validation.
+    /// </summary>
+    private static IReadOnlyList<(IPAddress Address, string InterfaceName)> LocalPrivateIPv4Addresses()
+    {
+        var result = new List<(IPAddress, string)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus != OperationalStatus.Up
+                || nic.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+                continue;
+
+            foreach (var unicast in nic.GetIPProperties().UnicastAddresses)
+            {
+                var ip = unicast.Address;
+                if (ip.AddressFamily != AddressFamily.InterNetwork || !LanShareValidator.IsPrivateIPv4(ip))
+                    continue;
+                if (seen.Add(ip.ToString()))
+                    result.Add((ip, nic.Name));
+            }
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -1327,6 +1366,8 @@ internal sealed class RpcRouter
         }
         if (JsonParams.HasProperty(p, "advanced"))
             ApplyAdvanced(p, s);
+        if (JsonParams.HasProperty(p, "lanShare"))
+            ApplyLanShare(p, s);
     }
 
     /// <summary>
@@ -1404,6 +1445,85 @@ internal sealed class RpcRouter
             s.Advanced.AutoSwitchCooldownSec = cooldownSec;
         if (autoSwitchMaxSwitches is { } maxSwitches)
             s.Advanced.AutoSwitchMaxSwitches = maxSwitches;
+    }
+
+    /// <summary>
+    ///     Applies the <c>lanShare</c> object (LAN sharing for consoles). Validates ALL provided fields
+    ///     first (throwing on the first error without mutating anything), then applies them. An empty
+    ///     password with an unchanged username keeps the stored password unless
+    ///     <c>clearPassword: true</c> is sent, so the UI can save without re-entering it.
+    /// </summary>
+    private static void ApplyLanShare(JsonElement p, AppSettings s)
+    {
+        if (!p.TryGetProperty("lanShare", out var lan) || lan.ValueKind != JsonValueKind.Object)
+            throw new InvalidOperationException("lanShare 必须是对象");
+
+        var cur = s.LanShare;
+
+        // Read every field first (absent fields fall back to the current values).
+        var enabled = JsonParams.OptionalBool(lan, "enabled") ?? cur.Enabled;
+        var bindRaw = JsonParams.OptionalString(lan, "bindAddress");
+        var httpPort = JsonParams.OptionalInt(lan, "httpPort") ?? cur.HttpPort;
+        var socksPort = JsonParams.OptionalInt(lan, "socksPort") ?? cur.SocksPort;
+        var username = (JsonParams.OptionalString(lan, "username") ?? cur.Username).Trim();
+        var clearPassword = JsonParams.OptionalBool(lan, "clearPassword") ?? false;
+
+        // Password resolution: an explicitly sent non-empty password wins; an empty/absent password
+        // keeps the stored one when the username is unchanged (unless clearPassword).
+        var passwordRaw = JsonParams.OptionalString(lan, "password");
+        string password;
+        if (clearPassword || username.Length == 0)
+            password = "";
+        else if (!string.IsNullOrEmpty(passwordRaw))
+            password = passwordRaw;
+        else if (username == cur.Username.Trim())
+            password = cur.Password;
+        else
+            password = "";
+
+        // --- validation (nothing has been mutated yet) ---
+
+        // The bind address is checked against the current local addresses only when enabling or when
+        // an explicit non-empty address was provided.
+        string normalizedBind;
+        if (enabled || (bindRaw != null && bindRaw.Trim().Length > 0))
+        {
+            var localAddresses = LocalPrivateIPv4Addresses().Select(a => a.Address).ToList();
+            normalizedBind = LanShareValidator.ValidateBindAddress((bindRaw ?? cur.BindAddress).Trim(), localAddresses);
+        }
+        else
+        {
+            normalizedBind = (bindRaw ?? cur.BindAddress).Trim();
+        }
+
+        IReadOnlyList<string> clients;
+        if (JsonParams.HasProperty(lan, "allowedClients"))
+        {
+            var raw = JsonParams.StringList(lan, "allowedClients");
+            // Required non-empty when enabling; still normalized when provided non-empty while disabled.
+            if (enabled || raw.Any(c => !string.IsNullOrWhiteSpace(c)))
+                clients = LanShareValidator.ValidateClients(raw);
+            else
+                clients = new List<string>(raw);
+        }
+        else
+        {
+            clients = enabled
+                ? LanShareValidator.ValidateClients(cur.AllowedClients)
+                : new List<string>(cur.AllowedClients);
+        }
+
+        LanShareValidator.ValidatePorts(httpPort, socksPort, s.Advanced.LocalSocksPort);
+        LanShareValidator.ValidateCredentials(username, password);
+
+        // --- all fields validated — now apply ---
+        cur.Enabled = enabled;
+        cur.BindAddress = normalizedBind;
+        cur.HttpPort = httpPort;
+        cur.SocksPort = socksPort;
+        cur.AllowedClients = new List<string>(clients);
+        cur.Username = username;
+        cur.Password = password;
     }
 
     /// <summary>

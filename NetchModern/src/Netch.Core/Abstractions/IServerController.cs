@@ -1,4 +1,5 @@
 using Netch.Core.Models.Servers;
+using Netch.Core.Models.Settings;
 
 namespace Netch.Core.Abstractions;
 
@@ -31,6 +32,12 @@ public interface IServerController
     ///     set before <see cref="StartAsync" />.
     /// </summary>
     IReadOnlyCollection<string>? DirectDomains { get; set; }
+
+    /// <summary>
+    ///     LAN share for consoles: extra HTTP (+ optional SOCKS5) inbounds on a private LAN IPv4 of this PC.
+    ///     Null = disabled (the default). Set before <see cref="StartAsync" />.
+    /// </summary>
+    LanShareOptions? LanShare { get; set; }
 
     Task<Socks5Server> StartAsync(Server server, CancellationToken ct = default);
 

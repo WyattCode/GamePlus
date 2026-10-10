@@ -26,18 +26,24 @@ internal record GameDto(string Id, string Name, string Icon, string Accent, stri
 internal record SubscriptionDto(string Id, string Remark, string Link, int ServerCount, string? LastUpdated);
 
 internal record AccelStatusDto(string State, int Latency, double Loss, int Jitter, int DurationSec,
-    long DownloadBps, long UploadBps, string? GameId, string? NodeId, string? CaptureMode);
+    long DownloadBps, long UploadBps, string? GameId, string? NodeId, string? CaptureMode,
+    string? LanShareEndpoint);
 
 internal record LogDto(string Ts, string Level, string Message);
 
 internal record SettingsDto(string Theme, string Language, bool MinimizeToTray, string RulesUrl,
-    bool AutoAccelerate, int SubscriptionAutoUpdateHours, ExtraAppDto[] ExtraApps, AdvancedSettingsDto Advanced);
+    bool AutoAccelerate, int SubscriptionAutoUpdateHours, ExtraAppDto[] ExtraApps, AdvancedSettingsDto Advanced,
+    LanShareDto LanShare);
 
 internal record ExtraAppDto(string Name, string Process, string Mode, bool Enabled);
 
 internal record AdvancedSettingsDto(string TunDns, bool MeasureEffect, int RegionPenaltyMs, int LocalSocksPort,
     string DefaultCaptureMode, bool AutoSwitchEnabled, int AutoSwitchLossPct, int AutoSwitchLatencyMs,
     int AutoSwitchSustainSec, int AutoSwitchCooldownSec, int AutoSwitchMaxSwitches);
+
+/// <summary>LAN-share settings as seen by the UI. The password is NEVER returned — only <c>HasPassword</c>.</summary>
+internal record LanShareDto(bool Enabled, string BindAddress, int HttpPort, int SocksPort,
+    string[] AllowedClients, string Username, bool HasPassword);
 
 internal record EffectSnapshotDto(int Latency, double Loss, int Jitter, int Samples);
 
@@ -261,7 +267,8 @@ internal static class Mapping
             st.UploadRate,
             a.CurrentGame?.Id,
             nodeId,
-            st.CaptureMode);
+            st.CaptureMode,
+            st.LanShareEndpoint);
     }
 
     public static LogDto ToDto(LogEntry e) =>
@@ -269,7 +276,8 @@ internal static class Mapping
 
     public static SettingsDto ToDto(Netch.Core.Models.Settings.AppSettings s) =>
         new(s.Theme.ToString().ToLowerInvariant(), s.Language, s.MinimizeToTray, s.RulesUrl,
-            s.AutoAccelerate, s.SubscriptionAutoUpdateHours, s.ExtraApps.Select(ToDto).ToArray(), ToAdvancedDto(s));
+            s.AutoAccelerate, s.SubscriptionAutoUpdateHours, s.ExtraApps.Select(ToDto).ToArray(), ToAdvancedDto(s),
+            ToLanShareDto(s.LanShare));
 
     /// <summary>
     ///     Builds the advanced-settings DTO. <c>TunDns</c> lives on <see cref="AppSettings.Dns" />, not on
@@ -280,6 +288,11 @@ internal static class Mapping
             s.Advanced.DefaultCaptureMode, s.Advanced.AutoSwitchEnabled, s.Advanced.AutoSwitchLossPct,
             s.Advanced.AutoSwitchLatencyMs, s.Advanced.AutoSwitchSustainSec, s.Advanced.AutoSwitchCooldownSec,
             s.Advanced.AutoSwitchMaxSwitches);
+
+    /// <summary>Builds the LAN-share DTO. The password is never sent to the UI — only <c>HasPassword</c>.</summary>
+    public static LanShareDto ToLanShareDto(LanShareSettings l) =>
+        new(l.Enabled, l.BindAddress, l.HttpPort, l.SocksPort, l.AllowedClients.ToArray(), l.Username,
+            !string.IsNullOrEmpty(l.Password));
 
     public static ExtraAppDto ToDto(ExtraApp a) =>
         new(a.Name, a.Process, a.Mode == ExtraAppMode.Bypass ? "bypass" : "proxy", a.Enabled);

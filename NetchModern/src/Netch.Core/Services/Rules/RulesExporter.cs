@@ -117,6 +117,7 @@ public static class RulesExporter
             ProxyDomains = new List<string>(source.ProxyDomains),
             ProxyIps = new List<string>(source.ProxyIps),
             ProxyProcesses = new List<string>(source.ProxyProcesses),
+            DownloadDomains = new List<string>(source.DownloadDomains),
             IsCustom = false,
             IsFavorite = false
         };

@@ -16,7 +16,8 @@ public static partial class SampleGames
             Id = "steam", Name = "Steam 平台", EnglishName = "Steam", Icon = "🚂", AccentColor = "#1387B8", Category = GameCategory.Platform,
             Aliases = { "steam", "蒸汽", "zhengqi" }, Regions = { "国际服" }, Platforms = { "PC" },
             ProxyProcesses = { "steam.exe", "steamwebhelper.exe" },
-            ProxyDomains = { "steampowered.com", "steamcommunity.com", "steamstatic.com", "steamcontent.com", "steamserver.net", "steam-chat.com", "valvesoftware.com" }
+            ProxyDomains = { "steampowered.com", "steamcommunity.com", "steamstatic.com", "steamserver.net", "steam-chat.com", "valvesoftware.com" },
+            DownloadDomains = { "steamcontent.com", "steampipe.akamaized.net" }
         };
         yield return new Game
         {

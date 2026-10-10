@@ -292,6 +292,21 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
   }
 }
 
+// --- per-game download split (Steam CDN direct) ---
+
+const hasDownloadDomains = computed(() => (selectedGame.value?.downloadDomains?.length ?? 0) > 0)
+const downloadViaProxy = computed(() => selectedGame.value?.downloadViaProxy === true)
+
+async function toggleDownloadProxy(enabled: boolean): Promise<void> {
+  const g = selectedGame.value
+  if (!g || running.value) return
+  try {
+    await library.setGameDownloadProxy(g.id, enabled)
+  } catch (e) {
+    toast.error(errorMessage(e))
+  }
+}
+
 // --- capture mode (per game) ---
 
 const MODE_LABELS: Record<CaptureMode, string> = {
@@ -467,6 +482,24 @@ watch(
             </button>
           </div>
           <span class="muted small server-hint">手动指定后失败不会自动降级</span>
+        </div>
+
+        <!-- Per-game download split: CDN downloads go DIRECT unless the toggle is on -->
+        <div v-if="hasDownloadDomains" class="server-row">
+          <div class="server-label">游戏下载</div>
+          <label class="switch" :class="{ disabled: running }" title="下载也走代理">
+            <input
+              type="checkbox"
+              :checked="downloadViaProxy"
+              :disabled="running"
+              @change="toggleDownloadProxy(($event.target as HTMLInputElement).checked)"
+            />
+            <span class="track"><span class="thumb" /></span>
+          </label>
+          <span class="dl-name">下载也走代理</span>
+          <span class="muted small server-hint dl-hint">
+            默认：商店/社区/登录走代理，游戏下载（CDN）直连，避免消耗节点流量；开启后下载也经过节点（需重新加速生效）。
+          </span>
         </div>
 
         <div class="row">
@@ -954,6 +987,18 @@ watch(
 }
 .seg-btn:disabled {
   cursor: not-allowed;
+}
+
+/* per-game download split */
+.dl-name {
+  font-size: 13px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.dl-hint {
+  flex: 1;
+  margin-left: 12px;
+  text-align: right;
 }
 
 /* smart routing */

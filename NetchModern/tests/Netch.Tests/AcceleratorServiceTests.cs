@@ -17,6 +17,7 @@ public class AcceleratorServiceTests
         public int PreferredSocksPort { get; set; }
         public IReadOnlyCollection<string>? ProxyDomains { get; set; }
         public IReadOnlyCollection<string>? ProxyIps { get; set; }
+        public IReadOnlyCollection<string>? DirectDomains { get; set; }
         public int StartCalls { get; private set; }
         public int StopCalls { get; private set; }
         public Task<Socks5Server> StartAsync(Server server, CancellationToken ct = default)
@@ -138,11 +139,12 @@ public class AcceleratorServiceTests
         new() { Hostname = "example.com", Port = 8388, Remark = "test" };
 
     private static AcceleratorService MakeAccelerator(FakeServerController controller, FakeSystemProxy proxy,
-        IModeControllerFactory? modeFactory = null, Func<Game, string>? captureModeFor = null)
+        IModeControllerFactory? modeFactory = null, Func<Game, string>? captureModeFor = null,
+        Func<Game, bool>? downloadViaProxyFor = null)
     {
         var log = new LogService();
         return new AcceleratorService(log, _ => controller, proxy, modeFactory ?? new FakeModeControllerFactory(),
-            null, null, null, null, captureModeFor);
+            null, null, null, null, captureModeFor, downloadViaProxyFor);
     }
 
     private static AcceleratorService MakeAcceleratorWithEffect(FakeServerController controller, FakeSystemProxy proxy,
@@ -398,6 +400,81 @@ public class AcceleratorServiceTests
         Assert.Equal("127.0.0.1", proxy.Host);
         Assert.Equal(controller.HttpPort, proxy.Port);
         Assert.Equal(new[] { "game.example.com" }, controller.ProxyDomains);
+    }
+
+    [Fact]
+    public async Task StartAsync_WithDownloadDomains_DefaultRoutesDownloadsDirect()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var accel = MakeAccelerator(controller, proxy);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyDomains = new List<string> { "store.steampowered.com" },
+            DownloadDomains = new List<string> { "steamcontent.com", "steampipe.akamaized.net" }
+        };
+        var server = MakeServer();
+
+        await accel.StartAsync(game, server);
+
+        // Default: CDN download domains are forced DIRECT (also in domain-only mode).
+        Assert.Equal(new[] { "steamcontent.com", "steampipe.akamaized.net" }, controller.DirectDomains);
+        Assert.Equal(new[] { "store.steampowered.com" }, controller.ProxyDomains);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_DownloadViaProxy_DirectDomainsNullAndProxyDomainsMerged()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var accel = MakeAccelerator(controller, proxy, captureModeFor: _ => "proxy",
+            downloadViaProxyFor: _ => true);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyDomains = new List<string> { "store.steampowered.com" },
+            DownloadDomains = new List<string> { "steamcontent.com" }
+        };
+        var server = MakeServer();
+
+        await accel.StartAsync(game, server);
+
+        // Toggle on: no DIRECT rule, and the download domains join the proxied set.
+        Assert.Null(controller.DirectDomains);
+        Assert.NotNull(controller.ProxyDomains);
+        Assert.Contains("steamcontent.com", controller.ProxyDomains!);
+        Assert.Contains("store.steampowered.com", controller.ProxyDomains!);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_FallbackToDomainProxy_KeepsDownloadSplitDecision()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(failProcess: true);
+        var accel = MakeAccelerator(controller, proxy, modeFactory);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" },
+            ProxyDomains = new List<string> { "store.steampowered.com" },
+            DownloadDomains = new List<string> { "steamcontent.com" }
+        };
+        var server = MakeServer();
+
+        await accel.StartAsync(game, server);
+
+        // The StartDomainProxyAsync restart must keep the same DirectDomains/ProxyDomains decision.
+        Assert.Equal(2, controller.StartCalls);
+        Assert.Equal(new[] { "steamcontent.com" }, controller.DirectDomains);
+        Assert.Equal(new[] { "store.steampowered.com" }, controller.ProxyDomains);
+        await accel.StopAsync();
     }
 
     [Fact]

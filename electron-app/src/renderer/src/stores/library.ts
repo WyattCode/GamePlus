@@ -99,6 +99,20 @@ export const useLibraryStore = defineStore('library', () => {
     }
   }
 
+  /**
+   * Persists whether the game's download (CDN) traffic also goes through the node. Keeps the accel
+   * store's selected-game snapshot in sync so the toggle reflects the new value immediately.
+   */
+  async function setGameDownloadProxy(id: string, enabled: boolean): Promise<void> {
+    games.value = await backend.setGameDownloadProxy(id, enabled)
+
+    const accel = useAccelStore()
+    if (accel.selectedGame?.id === id) {
+      const updated = games.value.find((g) => g.id === id)
+      if (updated) accel.selectedGame = updated
+    }
+  }
+
   async function addGame(data: Partial<Game>): Promise<void> {
     games.value = await backend.addGame(data)
   }
@@ -220,6 +234,7 @@ export const useLibraryStore = defineStore('library', () => {
     setGameAuto,
     setGameServer,
     setGameMode,
+    setGameDownloadProxy,
     addGame,
     updateGame,
     removeGame,

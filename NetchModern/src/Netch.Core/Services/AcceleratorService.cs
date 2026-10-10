@@ -36,6 +36,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     private readonly Func<AdvancedSettings>? _advanced;
     private readonly IBaselineStore? _baselines;
     private readonly Func<Game, string>? _captureModeFor;
+    private readonly Func<Game, bool>? _downloadViaProxyFor;
 
     private IServerController? _controller;
     private IModeController? _modeController;
@@ -60,7 +61,8 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     public AcceleratorService(ILogService log, Func<Server, IServerController> controllerFactory,
         ISystemProxyService systemProxy, IModeControllerFactory modeControllerFactory, EffectMonitor? effect = null,
         Func<IReadOnlyList<ExtraApp>>? extraApps = null, Func<AdvancedSettings>? advanced = null,
-        IBaselineStore? baselines = null, Func<Game, string>? captureModeFor = null)
+        IBaselineStore? baselines = null, Func<Game, string>? captureModeFor = null,
+        Func<Game, bool>? downloadViaProxyFor = null)
     {
         _log = log;
         _controllerFactory = controllerFactory;
@@ -71,6 +73,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         _advanced = advanced;
         _baselines = baselines;
         _captureModeFor = captureModeFor;
+        _downloadViaProxyFor = downloadViaProxyFor;
     }
 
     /// <summary>Convenience overload using the default <see cref="ModeControllerFactory" /> (real drivers).</summary>
@@ -179,15 +182,34 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
                 ? (mode == "auto" ? hasProcess || hasIp : true)
                 : false;
 
+            // Steam download split: CDN download domains go DIRECT by default (personal VPS bandwidth is
+            // too limited for multi-GB downloads); the per-game 「游戏下载走代理」 toggle puts them through
+            // the node again. Capture modes run the core in global mode, so the DIRECT routing rule +
+            // sniffing in the config generator handles the split there too.
+            var downloadViaProxy = game.DownloadDomains.Count > 0 && (_downloadViaProxyFor?.Invoke(game) ?? false);
+
             _controller = _controllerFactory(node);
             // Fixed local SOCKS5 port (0 = automatic). Set before StartAsync; persists across the
             // restart in StartDomainProxyAsync because it reuses the same controller instance.
             _controller.PreferredSocksPort = adv?.LocalSocksPort ?? 0;
+            if (game.DownloadDomains.Count > 0)
+            {
+                if (downloadViaProxy)
+                {
+                    _controller.DirectDomains = null;
+                }
+                else
+                {
+                    _controller.DirectDomains = game.DownloadDomains;
+                    _log.Log(LogLevel.Info, $"游戏下载（CDN）直连：{game.DownloadDomains.Count} 个域名不经过节点");
+                }
+            }
+
             if (mode == "proxy" || (mode == "auto" && !useCapture))
             {
                 // Domain-only game: system proxy with xray domain/IP routing (works for apps that honour
                 // the Windows proxy — launchers/browsers; raw-socket games need a process/IP rule instead).
-                _controller.ProxyDomains = game.ProxyDomains;
+                _controller.ProxyDomains = ProxyDomainsFor(game, downloadViaProxy);
                 _controller.ProxyIps = game.ProxyIps;
             }
 
@@ -246,6 +268,22 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     {
         var normalized = (value ?? "").Trim().ToLowerInvariant();
         return normalized is "process" or "tun" or "proxy" ? normalized : "auto";
+    }
+
+    /// <summary>
+    ///     Proxy domains for the domain-routing paths: when the per-game download-proxy toggle is on,
+    ///     the game's CDN download domains are added to the proxied set (case-insensitive union).
+    /// </summary>
+    private static IReadOnlyCollection<string> ProxyDomainsFor(Game game, bool downloadViaProxy)
+    {
+        if (!downloadViaProxy || game.DownloadDomains.Count == 0)
+            return game.ProxyDomains;
+
+        var merged = new List<string>(game.ProxyDomains);
+        foreach (var d in game.DownloadDomains)
+            if (!merged.Contains(d, StringComparer.OrdinalIgnoreCase))
+                merged.Add(d);
+        return merged;
     }
 
     /// <summary>
@@ -405,7 +443,12 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         // Re-apply the fixed local port: the controller instance is reused, but be explicit so a future
         // refactor that swaps the instance can't silently drop the setting.
         _controller.PreferredSocksPort = _advanced?.Invoke()?.LocalSocksPort ?? 0;
-        _controller.ProxyDomains = game.ProxyDomains;
+
+        // Re-apply the same download-split decision as the initial start (StartAsync) so the restart
+        // keeps DirectDomains/ProxyDomains consistent.
+        var downloadViaProxy = game.DownloadDomains.Count > 0 && (_downloadViaProxyFor?.Invoke(game) ?? false);
+        _controller.DirectDomains = game.DownloadDomains.Count > 0 && !downloadViaProxy ? game.DownloadDomains : null;
+        _controller.ProxyDomains = ProxyDomainsFor(game, downloadViaProxy);
         _controller.ProxyIps = game.ProxyIps;
         _socks = await _controller.StartAsync(node, ct);
 

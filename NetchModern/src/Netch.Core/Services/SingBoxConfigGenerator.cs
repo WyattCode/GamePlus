@@ -14,20 +14,23 @@ public static class SingBoxConfigGenerator
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
     public static string GenerateHysteria2(Hysteria2Server s, int localSocksPort, int localHttpPort = 0, int apiPort = 0,
-        IReadOnlyCollection<string>? proxyDomains = null, IReadOnlyCollection<string>? proxyIps = null)
-        => Build(ProxyHysteria2(s), localSocksPort, localHttpPort, apiPort, proxyDomains, proxyIps).ToJsonString(Options);
+        IReadOnlyCollection<string>? proxyDomains = null, IReadOnlyCollection<string>? proxyIps = null,
+        IReadOnlyCollection<string>? directDomains = null)
+        => Build(ProxyHysteria2(s), localSocksPort, localHttpPort, apiPort, proxyDomains, proxyIps, directDomains).ToJsonString(Options);
 
     public static string GenerateShadowsocks(ShadowsocksServer s, int localSocksPort, int localHttpPort = 0, int apiPort = 0,
-        IReadOnlyCollection<string>? proxyDomains = null, IReadOnlyCollection<string>? proxyIps = null)
-        => Build(ProxyShadowsocks(s), localSocksPort, localHttpPort, apiPort, proxyDomains, proxyIps).ToJsonString(Options);
+        IReadOnlyCollection<string>? proxyDomains = null, IReadOnlyCollection<string>? proxyIps = null,
+        IReadOnlyCollection<string>? directDomains = null)
+        => Build(ProxyShadowsocks(s), localSocksPort, localHttpPort, apiPort, proxyDomains, proxyIps, directDomains).ToJsonString(Options);
 
     /// <summary>Dispatches to the right sing-box outbound builder for the given node.</summary>
     public static string Generate(Server server, int localSocksPort, int localHttpPort = 0, int apiPort = 0,
-        IReadOnlyCollection<string>? proxyDomains = null, IReadOnlyCollection<string>? proxyIps = null)
+        IReadOnlyCollection<string>? proxyDomains = null, IReadOnlyCollection<string>? proxyIps = null,
+        IReadOnlyCollection<string>? directDomains = null)
         => server switch
         {
-            Hysteria2Server hy2 => GenerateHysteria2(hy2, localSocksPort, localHttpPort, apiPort, proxyDomains, proxyIps),
-            ShadowsocksServer ss => GenerateShadowsocks(ss, localSocksPort, localHttpPort, apiPort, proxyDomains, proxyIps),
+            Hysteria2Server hy2 => GenerateHysteria2(hy2, localSocksPort, localHttpPort, apiPort, proxyDomains, proxyIps, directDomains),
+            ShadowsocksServer ss => GenerateShadowsocks(ss, localSocksPort, localHttpPort, apiPort, proxyDomains, proxyIps, directDomains),
             _ => throw new NotSupportedException($"sing-box does not handle server type: {server.Type}")
         };
 
@@ -102,7 +105,8 @@ public static class SingBoxConfigGenerator
     }
 
     private static JsonObject Build(JsonObject proxy, int localSocksPort, int localHttpPort, int apiPort,
-        IReadOnlyCollection<string>? proxyDomains, IReadOnlyCollection<string>? proxyIps)
+        IReadOnlyCollection<string>? proxyDomains, IReadOnlyCollection<string>? proxyIps,
+        IReadOnlyCollection<string>? directDomains = null)
     {
         var inbounds = new JsonArray
         {
@@ -129,6 +133,20 @@ public static class SingBoxConfigGenerator
         {
             new JsonObject { ["ip_is_private"] = true, ["outbound"] = "direct" }
         };
+
+        // Always-direct domains (e.g. game CDN downloads): sniff first so the destination domain is
+        // recoverable even when the capture layer rewrites it to the local proxy, then place the direct
+        // rule BEFORE the proxy rules so it wins.
+        if (directDomains is { Count: > 0 })
+        {
+            rules.Insert(0, new JsonObject { ["action"] = "sniff" });
+
+            var direct = new JsonArray();
+            foreach (var d in directDomains)
+                direct.Add(d);
+
+            rules.Add(new JsonObject { ["domain_suffix"] = direct, ["outbound"] = "direct" });
+        }
 
         var hasDomains = proxyDomains is { Count: > 0 };
         var hasIps = proxyIps is { Count: > 0 };

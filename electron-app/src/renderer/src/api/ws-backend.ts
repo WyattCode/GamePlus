@@ -314,6 +314,9 @@ export class WebSocketBackend implements Backend {
   setGameMode(id: string, mode: CaptureMode | 'default'): Promise<Game[]> {
     return this.call('games.setMode', { id, mode })
   }
+  setGameDownloadProxy(id: string, enabled: boolean): Promise<Game[]> {
+    return this.call('games.setDownloadProxy', { id, enabled })
+  }
   addGame(data: Partial<Game>): Promise<Game[]> {
     return this.call('games.add', data)
   }

@@ -85,7 +85,8 @@ internal static class Composition
                 return settings.GameCaptureMode.TryGetValue(game.Id, out var m)
                     ? m
                     : settings.Advanced.DefaultCaptureMode;
-            }));
+            },
+            game => sp.GetRequiredService<ISettingsService>().Settings.GameDownloadViaProxy.TryGetValue(game.Id, out var v) && v));
 
         // Per-game acceleration history. The store owns its own lock; the recorder subscribes to the
         // accelerator's StateChanged and appends one session per completed acceleration. GameServerChoice

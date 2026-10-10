@@ -33,6 +33,9 @@ public sealed class SingBoxServerController : ProcessGuard, IServerController
 
     public IReadOnlyCollection<string>? ProxyIps { get; set; }
 
+    /// <summary>Domains that must always go direct (e.g. game CDN downloads); set before <see cref="StartAsync" />.</summary>
+    public IReadOnlyCollection<string>? DirectDomains { get; set; }
+
     public async Task<Socks5Server> StartAsync(Server server, CancellationToken ct = default)
     {
         if (server is not (Hysteria2Server or ShadowsocksServer))
@@ -47,7 +50,7 @@ public sealed class SingBoxServerController : ProcessGuard, IServerController
         // Unique per-instance name so two concurrent sing-box controllers never clobber each other's config.
         _configPath = Path.Combine(dir, $"singbox-{SocksPort}.json");
 
-        var config = SingBoxConfigGenerator.Generate(server, SocksPort, HttpPort, ApiPort, ProxyDomains, ProxyIps);
+        var config = SingBoxConfigGenerator.Generate(server, SocksPort, HttpPort, ApiPort, ProxyDomains, ProxyIps, DirectDomains);
         await File.WriteAllTextAsync(_configPath, config, ct);
 
         StartProcess($"run -c \"{_configPath}\"");

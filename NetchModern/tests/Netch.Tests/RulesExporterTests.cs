@@ -196,4 +196,28 @@ public class RulesExporterTests
             Assert.Equal(original.AccentColor, roundTripped.AccentColor);
         }
     }
+
+    [Fact]
+    public void Export_PreservesDownloadDomains()
+    {
+        var games = SampleGames.Create().Where(g => !g.IsCustom).ToList();
+        Assert.NotEmpty(games);
+
+        var json = RulesExporter.Export(games, SampleGames.RulesVersion, DateTimeOffset.UtcNow);
+        var parsed = GameRulesFile.Parse(json, out var error);
+        Assert.Null(error);
+        Assert.NotNull(parsed);
+
+        var byId = parsed!.Games.ToDictionary(g => g.Id);
+        foreach (var original in games)
+        {
+            Assert.True(byId.TryGetValue(original.Id, out var roundTripped),
+                $"game '{original.Id}' missing from parsed output");
+
+            Assert.Equal(original.DownloadDomains, roundTripped!.DownloadDomains);
+        }
+
+        // Steam carries the CDN download domains through the round-trip.
+        Assert.Equal(new[] { "steamcontent.com", "steampipe.akamaized.net" }, byId["steam"].DownloadDomains);
+    }
 }

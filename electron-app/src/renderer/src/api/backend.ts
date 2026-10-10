@@ -62,6 +62,8 @@ export interface Backend {
   setGameServer(id: string, server: 'cn' | 'intl'): Promise<Game[]>
   /** Sets (or clears, with "default") the per-game capture-mode override. */
   setGameMode(id: string, mode: CaptureMode | 'default'): Promise<Game[]>
+  /** Toggles whether the game's download (CDN) traffic also goes through the node. */
+  setGameDownloadProxy(id: string, enabled: boolean): Promise<Game[]>
   onAutoAccel(cb: (e: AutoAccelEvent) => void): () => void
   /** Pushes AutoSwitchEvent when the auto node switcher reacts to sustained bad quality. */
   onAutoSwitch(cb: (e: AutoSwitchEvent) => void): () => void
@@ -268,11 +270,31 @@ class MockBackend implements Backend {
   /** Per-game capture-mode overrides (gameId → mode); missing = follow the global default. */
   private gameModes = new Map<string, CaptureMode>()
 
-  /** Returns the mock game list with captureMode/availableModes filled in. */
+  /** Per-game download-via-proxy flags (gameId → true); missing = downloads go DIRECT. */
+  private downloadProxy = new Map<string, boolean>()
+
+  private mockServers: Server[] = structuredClone(sampleServers)
+  private mockSubs: Subscription[] = structuredClone(sampleSubscriptions)
+  private mockGames: Game[] = structuredClone(sampleGames)
+
+  constructor() {
+    // Seed the Steam built-in download-split domains (mirrors the backend's seed data): the CDN
+    // download domains are no longer part of proxyDomains but live in downloadDomains.
+    const steam = this.mockGames.find((g) => g.id === 'steam' || g.name.includes('Steam'))
+    if (steam) {
+      steam.downloadDomains = ['steamcontent.com', 'steampipe.akamaized.net']
+      if (steam.proxyDomains) {
+        steam.proxyDomains = steam.proxyDomains.filter((d) => !d.includes('steamcontent.com'))
+      }
+    }
+  }
+
+  /** Returns the mock game list with captureMode/availableModes/downloadViaProxy filled in. */
   private gamesWithModes(): Game[] {
     return this.mockGames.map((g) => ({
       ...g,
       captureMode: this.gameModes.get(g.id) ?? null,
+      downloadViaProxy: this.downloadProxy.get(g.id) ?? false,
       availableModes: availableModesFor(g)
     }))
   }
@@ -492,9 +514,6 @@ class MockBackend implements Backend {
     return { baseline: null, measuredAt: null }
   }
 
-  private mockServers: Server[] = structuredClone(sampleServers)
-  private mockSubs: Subscription[] = structuredClone(sampleSubscriptions)
-  private mockGames: Game[] = structuredClone(sampleGames)
   private mockSettings: EngineSettings = {
     theme: 'light',
     language: 'System',
@@ -692,6 +711,16 @@ class MockBackend implements Backend {
     }
     return structuredClone(this.gamesWithModes())
   }
+  async setGameDownloadProxy(id: string, enabled: boolean): Promise<Game[]> {
+    const g = this.mockGames.find((x) => x.id === id)
+    if (!g) throw new Error('游戏不存在')
+    if (!g.downloadDomains || g.downloadDomains.length === 0) {
+      throw new Error('该游戏没有配置下载域名')
+    }
+    if (enabled) this.downloadProxy.set(id, true)
+    else this.downloadProxy.delete(id)
+    return structuredClone(this.gamesWithModes())
+  }
   onAutoAccel(_cb: (e: AutoAccelEvent) => void): () => void {
     // The mock never detects real game processes, so this event never fires.
     return () => {}
@@ -732,6 +761,7 @@ class MockBackend implements Backend {
   async removeGame(id: string): Promise<Game[]> {
     this.mockGames = this.mockGames.filter((x) => x.id !== id)
     this.gameModes.delete(id)
+    this.downloadProxy.delete(id)
     return structuredClone(this.gamesWithModes())
   }
   async exportServers(): Promise<string[]> {

@@ -52,6 +52,10 @@ export interface Game {
   proxyDomains?: string[]
   proxyIps?: string[]
   proxyProcesses?: string[]
+  /** CDN download domains; forced DIRECT unless downloadViaProxy is true. */
+  downloadDomains?: string[]
+  /** True when the game's download (CDN) traffic also goes through the node. */
+  downloadViaProxy?: boolean
   /** True when this game is in the auto-acceleration list. */
   autoAccelerate?: boolean
   /** True when the game has both 国服 and 国际服, so the user can pick a server. */

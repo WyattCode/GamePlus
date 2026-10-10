@@ -144,6 +144,7 @@ public sealed class GameRulesFile
             if (CheckList(game.ProxyDomains, index, "ProxyDomains", out error) is false) return null;
             if (CheckList(game.ProxyIps, index, "ProxyIps", out error) is false) return null;
             if (CheckList(game.ProxyProcesses, index, "ProxyProcesses", out error) is false) return null;
+            if (CheckList(game.DownloadDomains, index, "DownloadDomains", out error) is false) return null;
 
             foreach (var proc in game.ProxyProcesses ?? new List<string>())
             {
@@ -180,6 +181,21 @@ public sealed class GameRulesFile
                 if (string.IsNullOrWhiteSpace(domain))
                 {
                     error = $"第 {index} 个游戏的 ProxyDomains 包含空项";
+                    return null;
+                }
+
+                if (domain.Any(char.IsWhiteSpace))
+                {
+                    error = $"第 {index} 个游戏的域名不能包含空白字符：{domain}";
+                    return null;
+                }
+            }
+
+            foreach (var domain in game.DownloadDomains ?? new List<string>())
+            {
+                if (string.IsNullOrWhiteSpace(domain))
+                {
+                    error = $"第 {index} 个游戏的 DownloadDomains 包含空项";
                     return null;
                 }
 

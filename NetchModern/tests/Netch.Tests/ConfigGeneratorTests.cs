@@ -12,6 +12,9 @@ public class ConfigGeneratorTests
         return root["outbounds"]!.AsArray()[0]!.AsObject();
     }
 
+    private static ShadowsocksServer PlainServer() =>
+        new() { Hostname = "example.com", Port = 8388, EncryptMethod = "aes-256-gcm", Password = "secret" };
+
     [Fact]
     public void Vmess_WsTls_EmitsWsSettingsAndSni()
     {
@@ -266,5 +269,116 @@ public class ConfigGeneratorTests
         };
 
         Assert.Throws<InvalidOperationException>(() => V2rayConfigGenerator.Generate(server, 1080));
+    }
+
+    [Fact]
+    public void V2ray_DirectDomains_EmitsDirectRuleBeforeProxyRules_AndSniffing()
+    {
+        var json = V2rayConfigGenerator.Generate(PlainServer(), 1080, 1081, 0,
+            new[] { "game.example.com" }, null, new[] { "steamcontent.com", "steampipe.akamaized.net" });
+
+        var root = JsonNode.Parse(json)!.AsObject();
+
+        // Direct rule sits right after the private-IP rule and BEFORE the game's proxy rule.
+        var rules = root["routing"]!["rules"]!.AsArray();
+        Assert.Equal("geoip:private", rules[0]!["ip"]![0]!.GetValue<string>());
+        Assert.Equal("direct", rules[1]!["outboundTag"]!.GetValue<string>());
+        Assert.Equal("domain:steamcontent.com", rules[1]!["domain"]!.AsArray()[0]!.GetValue<string>());
+        Assert.Equal("domain:steampipe.akamaized.net", rules[1]!["domain"]!.AsArray()[1]!.GetValue<string>());
+        Assert.Equal("proxy", rules[2]!["outboundTag"]!.GetValue<string>());
+
+        // Sniffing (routeOnly) is enabled on both local inbounds so the domain rule can match.
+        var inbounds = root["inbounds"]!.AsArray();
+        var socks = inbounds[0]!.AsObject();
+        Assert.True(socks["sniffing"]!["enabled"]!.GetValue<bool>());
+        Assert.True(socks["sniffing"]!["routeOnly"]!.GetValue<bool>());
+        Assert.Equal(2, socks["sniffing"]!["destOverride"]!.AsArray().Count);
+        Assert.Equal("http", socks["sniffing"]!["destOverride"]!.AsArray()[0]!.GetValue<string>());
+        Assert.Equal("tls", socks["sniffing"]!["destOverride"]!.AsArray()[1]!.GetValue<string>());
+
+        var http = inbounds[1]!.AsObject();
+        Assert.Equal("http-in", http["tag"]!.GetValue<string>());
+        Assert.True(http["sniffing"]!["enabled"]!.GetValue<bool>());
+        Assert.True(http["sniffing"]!["routeOnly"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void V2ray_DirectDomains_GlobalMode_DirectRuleAfterPrivateIp()
+    {
+        var json = V2rayConfigGenerator.Generate(PlainServer(), 1080, 0, 0,
+            null, null, new[] { "steamcontent.com" });
+
+        var root = JsonNode.Parse(json)!.AsObject();
+        var rules = root["routing"]!["rules"]!.AsArray();
+
+        Assert.Equal(2, rules.Count);
+        Assert.Equal("geoip:private", rules[0]!["ip"]![0]!.GetValue<string>());
+        Assert.Equal("direct", rules[1]!["outboundTag"]!.GetValue<string>());
+        Assert.Equal("domain:steamcontent.com", rules[1]!["domain"]!.AsArray()[0]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void V2ray_NoDirectDomains_NoSniffing_NoExtraRules()
+    {
+        var json = V2rayConfigGenerator.Generate(PlainServer(), 1080, 1081, 0,
+            new[] { "game.example.com" }, null, null);
+
+        var root = JsonNode.Parse(json)!.AsObject();
+
+        foreach (var inbound in root["inbounds"]!.AsArray())
+            Assert.False(inbound!.AsObject().ContainsKey("sniffing"));
+
+        var rules = root["routing"]!["rules"]!.AsArray();
+        Assert.Equal(3, rules.Count); // private-IP, proxy domain, catch-all direct
+        Assert.Equal("proxy", rules[1]!["outboundTag"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SingBox_DirectDomains_EmitsSniffFirst_AndDirectRuleAfterPrivate()
+    {
+        var json = SingBoxConfigGenerator.Generate(PlainServer(), 1080, 1081, 0,
+            new[] { "game.example.com" }, null, new[] { "steamcontent.com", "steampipe.akamaized.net" });
+
+        var root = JsonNode.Parse(json)!.AsObject();
+        var rules = root["route"]!["rules"]!.AsArray();
+
+        // Sniff action first, then private-IP, then the always-direct domains, then the proxy rule.
+        Assert.Equal("sniff", rules[0]!["action"]!.GetValue<string>());
+        Assert.True(rules[1]!["ip_is_private"]!.GetValue<bool>());
+        Assert.Equal("direct", rules[2]!["outbound"]!.GetValue<string>());
+        Assert.Equal("steamcontent.com", rules[2]!["domain_suffix"]!.AsArray()[0]!.GetValue<string>());
+        Assert.Equal("steampipe.akamaized.net", rules[2]!["domain_suffix"]!.AsArray()[1]!.GetValue<string>());
+        Assert.Equal("proxy", rules[3]!["outbound"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SingBox_DirectDomains_GlobalMode_SniffAndDirectRule()
+    {
+        var json = SingBoxConfigGenerator.Generate(PlainServer(), 1080, 0, 0,
+            null, null, new[] { "steamcontent.com" });
+
+        var root = JsonNode.Parse(json)!.AsObject();
+        var rules = root["route"]!["rules"]!.AsArray();
+
+        Assert.Equal(3, rules.Count);
+        Assert.Equal("sniff", rules[0]!["action"]!.GetValue<string>());
+        Assert.True(rules[1]!["ip_is_private"]!.GetValue<bool>());
+        Assert.Equal("direct", rules[2]!["outbound"]!.GetValue<string>());
+        Assert.Equal("steamcontent.com", rules[2]!["domain_suffix"]!.AsArray()[0]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SingBox_NoDirectDomains_NoSniffAction_NoExtraRules()
+    {
+        var json = SingBoxConfigGenerator.Generate(PlainServer(), 1080, 1081, 0,
+            new[] { "game.example.com" }, null, null);
+
+        var root = JsonNode.Parse(json)!.AsObject();
+        var rules = root["route"]!["rules"]!.AsArray();
+
+        Assert.Equal(2, rules.Count); // private-IP, proxy domain
+        Assert.True(rules[0]!["ip_is_private"]!.GetValue<bool>());
+        foreach (var rule in rules)
+            Assert.False(rule!.AsObject().ContainsKey("action"));
     }
 }

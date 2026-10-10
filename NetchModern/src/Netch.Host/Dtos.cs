@@ -18,7 +18,8 @@ internal record GameDto(string Id, string Name, string Icon, string Accent, stri
     int RuleCount, string[] Categories, bool Favorite, bool Custom,
     string EnglishName, string[] Aliases, string Category, string[] Regions, string[] Platforms,
     string[] ProxyDomains, string[] ProxyIps, string[] ProxyProcesses, bool AutoAccelerate,
-    bool HasServerChoice, string? ServerChoice, string? CaptureMode, string[] AvailableModes);
+    bool HasServerChoice, string? ServerChoice, string? CaptureMode, string[] AvailableModes,
+    string[] DownloadDomains, bool DownloadViaProxy);
 
 internal record SubscriptionDto(string Id, string Remark, string Link, int ServerCount, string? LastUpdated);
 
@@ -103,11 +104,13 @@ internal static class Mapping
     ///     per-game auto-acceleration toggle enabled (null → false for every game).
     ///     <paramref name="serverChoices" /> maps game ids to their 国服/国际服 choice (null → default).
     ///     <paramref name="captureModes" /> maps game ids to their per-game capture-mode override
-    ///     (null → no override).
+    ///     (null → no override). <paramref name="downloadViaProxy" /> maps game ids to their
+    ///     「游戏下载走代理」 toggle (null → false for every game).
     /// </summary>
     public static GameDto ToDto(Game g, IReadOnlyCollection<string>? autoAccelerateIds,
         IReadOnlyDictionary<string, string>? serverChoices,
-        IReadOnlyDictionary<string, string>? captureModes)
+        IReadOnlyDictionary<string, string>? captureModes,
+        IReadOnlyDictionary<string, bool>? downloadViaProxy = null)
     {
         var hasChoice = GameRegionPreference.HasServerChoice(g);
         string? choice = null;
@@ -121,6 +124,8 @@ internal static class Mapping
         if (captureModes is not null && captureModes.TryGetValue(g.Id, out var cm) && !string.IsNullOrWhiteSpace(cm))
             captureMode = cm;
 
+        var downloadProxy = downloadViaProxy is not null && downloadViaProxy.TryGetValue(g.Id, out var dvp) && dvp;
+
         var available = new List<string>();
         if (g.ProxyProcesses.Count > 0) available.Add("process");
         if (g.ProxyIps.Count > 0) available.Add("tun");
@@ -132,7 +137,8 @@ internal static class Mapping
             g.Platforms.ToArray(), g.ProxyDomains.ToArray(), g.ProxyIps.ToArray(),
             g.ProxyProcesses.ToArray(),
             autoAccelerateIds is not null && autoAccelerateIds.Contains(g.Id),
-            hasChoice, choice, captureMode, available.ToArray());
+            hasChoice, choice, captureMode, available.ToArray(),
+            g.DownloadDomains.ToArray(), downloadProxy);
     }
 
     /// <summary>
@@ -157,6 +163,7 @@ internal static class Mapping
             game.ProxyDomains = new List<string>(existing.ProxyDomains);
             game.ProxyIps = new List<string>(existing.ProxyIps);
             game.ProxyProcesses = new List<string>(existing.ProxyProcesses);
+            game.DownloadDomains = new List<string>(existing.DownloadDomains);
             game.IsCustom = existing.IsCustom;
             game.IsFavorite = existing.IsFavorite;
         }
@@ -194,6 +201,7 @@ internal static class Mapping
         if (JsonParams.HasProperty(p, "proxyDomains")) game.ProxyDomains = JsonParams.StringList(p, "proxyDomains");
         if (JsonParams.HasProperty(p, "proxyIps")) game.ProxyIps = JsonParams.StringList(p, "proxyIps");
         if (JsonParams.HasProperty(p, "proxyProcesses")) game.ProxyProcesses = JsonParams.StringList(p, "proxyProcesses");
+        if (JsonParams.HasProperty(p, "downloadDomains")) game.DownloadDomains = JsonParams.StringList(p, "downloadDomains");
         return game;
     }
 

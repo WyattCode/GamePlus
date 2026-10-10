@@ -25,6 +25,13 @@ public interface IServerController
     /// <summary>Game mode: IPs / CIDR ranges to route through the node; set before <see cref="StartAsync" />.</summary>
     IReadOnlyCollection<string>? ProxyIps { get; set; }
 
+    /// <summary>
+    ///     Domains that must always go DIRECT (e.g. game CDN download hosts). The generated config places a
+    ///     direct rule before the proxy rules (plus sniffing so process/TUN global mode can match by domain);
+    ///     set before <see cref="StartAsync" />.
+    /// </summary>
+    IReadOnlyCollection<string>? DirectDomains { get; set; }
+
     Task<Socks5Server> StartAsync(Server server, CancellationToken ct = default);
 
     Task StopAsync(CancellationToken ct = default);

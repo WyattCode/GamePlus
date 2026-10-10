@@ -179,6 +179,48 @@ public class GameRulesFileTests
     }
 
     [Fact]
+    public void DownloadDomains_MissingIsEmpty()
+    {
+        var file = GameRulesFile.Parse(Valid, out var error);
+        Assert.Null(error);
+        Assert.NotNull(file);
+        Assert.Empty(file!.Games[0].DownloadDomains);
+    }
+
+    [Fact]
+    public void DownloadDomains_RoundTrips()
+    {
+        var json = Valid.Replace(
+            "\"ProxyDomains\": [\"riotgames.com\"],",
+            "\"ProxyDomains\": [\"riotgames.com\"],\n          \"DownloadDomains\": [\"steamcontent.com\", \"steampipe.akamaized.net\"],");
+        var file = GameRulesFile.Parse(json, out var error);
+
+        Assert.Null(error);
+        Assert.NotNull(file);
+        Assert.Equal(new[] { "steamcontent.com", "steampipe.akamaized.net" }, file!.Games[0].DownloadDomains);
+    }
+
+    [Fact]
+    public void RejectsDownloadDomainWithWhitespace()
+    {
+        var json = Valid.Replace(
+            "\"ProxyDomains\": [\"riotgames.com\"],",
+            "\"ProxyDomains\": [\"riotgames.com\"],\n          \"DownloadDomains\": [\"steam content.com\"],");
+        Assert.Null(GameRulesFile.Parse(json, out var error));
+        Assert.Contains("域名", error);
+    }
+
+    [Fact]
+    public void RejectsEmptyDownloadDomain()
+    {
+        var json = Valid.Replace(
+            "\"ProxyDomains\": [\"riotgames.com\"],",
+            "\"ProxyDomains\": [\"riotgames.com\"],\n          \"DownloadDomains\": [\"\"],");
+        Assert.Null(GameRulesFile.Parse(json, out var error));
+        Assert.Contains("DownloadDomains", error);
+    }
+
+    [Fact]
     public void RejectsTooManyGames()
     {
         var games = string.Join(",", Enumerable.Range(0, 2001)

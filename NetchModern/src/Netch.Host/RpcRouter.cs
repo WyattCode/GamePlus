@@ -392,6 +392,27 @@ internal sealed class RpcRouter
                 }, ct);
             }
 
+            case "games.setDownloadProxy":
+            {
+                var id = JsonParams.RequiredString(@params, "id");
+                var enabled = JsonParams.OptionalBool(@params, "enabled") ?? false;
+                return await WithStateValueAsync(async () =>
+                {
+                    var game = Games.Games.FirstOrDefault(g => g.Id == id)
+                               ?? throw new InvalidOperationException("游戏不存在");
+                    if (game.DownloadDomains.Count == 0)
+                        throw new InvalidOperationException("该游戏没有单独的下载域名");
+
+                    if (enabled)
+                        SettingsSvc.Settings.GameDownloadViaProxy[id] = true;
+                    else
+                        SettingsSvc.Settings.GameDownloadViaProxy.TryRemove(id, out _);
+
+                    await SettingsSvc.SaveAsync();
+                    return GameList();
+                }, ct);
+            }
+
             case "games.add":
             {
                 var game = Mapping.ToGame(@params);
@@ -935,7 +956,8 @@ internal sealed class RpcRouter
         var auto = SettingsSvc.Settings.AutoAccelerateGames;
         var choices = SettingsSvc.Settings.GameServerChoice;
         var modes = SettingsSvc.Settings.GameCaptureMode;
-        return Games.Games.Select(g => Mapping.ToDto(g, auto, choices, modes)).ToArray();
+        var downloads = SettingsSvc.Settings.GameDownloadViaProxy;
+        return Games.Games.Select(g => Mapping.ToDto(g, auto, choices, modes, downloads)).ToArray();
     }
 
     /// <summary>Game name for a given id, or null when unknown (used for auto-accel event payloads).</summary>

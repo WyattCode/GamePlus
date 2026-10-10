@@ -59,6 +59,14 @@ public partial class AppSettings : ObservableObject
     public ConcurrentDictionary<string, string> GameCaptureMode { get; set; } = new();
 
     /// <summary>
+    ///     Games whose CDN download domains should also be routed through the node (gameId → true).
+    ///     A missing entry means downloads go DIRECT (the default) — personal VPS bandwidth is too
+    ///     limited for multi-GB downloads. Concurrent so the accelerator can read it lock-free while
+    ///     the RPC path writes it under the state lock.
+    /// </summary>
+    public ConcurrentDictionary<string, bool> GameDownloadViaProxy { get; set; } = new();
+
+    /// <summary>
     ///     Extra applications that are additionally proxied or explicitly bypassed in process-capture
     ///     mode. Only applies when acceleration runs in process mode (netfilter Redirector).
     /// </summary>

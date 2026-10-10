@@ -126,9 +126,18 @@ public class BundledRulesSchemaTests
     }
 
     [Fact]
-    public void RulesVersion_IsAtLeastTwo()
+    public void RulesVersion_IsAtLeastThree()
     {
-        Assert.True(SampleGames.RulesVersion >= 2, "RulesVersion must be >= 2 after the rule review");
+        Assert.True(SampleGames.RulesVersion >= 3, "RulesVersion must be >= 3 after the download-domain split");
+    }
+
+    [Fact]
+    public void Steam_HasDownloadDomainsAndNoSteamContentInProxy()
+    {
+        var steam = Games().Single(g => g.Id == "steam");
+
+        Assert.Equal(new[] { "steamcontent.com", "steampipe.akamaized.net" }, steam.DownloadDomains);
+        Assert.DoesNotContain(steam.ProxyDomains, d => d.Equals("steamcontent.com", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

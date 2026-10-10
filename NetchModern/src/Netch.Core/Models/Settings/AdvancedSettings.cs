@@ -14,11 +14,12 @@ public partial class AdvancedSettings : ObservableObject
     public const int MaxRegionPenaltyMs = 300;
 
     /// <summary>
-    ///     When false, the accelerator skips the direct baseline + effect sampling (saves ~3.5 s on start);
-    ///     the effect card then shows "已关闭加速效果测量".
+    ///     When true, the accelerator takes a fresh direct baseline (~3.5 s) before EVERY acceleration.
+    ///     When false (default) the baseline is measured automatically only on the first acceleration of
+    ///     each game and then reused; the user can force a re-measure from the effect card.
     /// </summary>
     [ObservableProperty]
-    private bool _measureEffect = true;
+    private bool _measureEffect;
 
     /// <summary>Penalty (ms) applied to a node outside the game's preferred regions.</summary>
     [ObservableProperty]

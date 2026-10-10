@@ -42,6 +42,7 @@ internal sealed class RpcRouter
     private IAcceleratorService Accel => _sp.GetRequiredService<IAcceleratorService>();
     private IPersistenceService Persistence => _sp.GetRequiredService<IPersistenceService>();
     private ISettingsService SettingsSvc => _sp.GetRequiredService<ISettingsService>();
+    private IBaselineStore Baselines => _sp.GetRequiredService<IBaselineStore>();
     private IUpdateChecker UpdateChecker => _sp.GetRequiredService<IUpdateChecker>();
     private ILogService Logs => _sp.GetRequiredService<ILogService>();
     private DiagnosticsService Diagnostics => _sp.GetRequiredService<DiagnosticsService>();
@@ -145,6 +146,15 @@ internal sealed class RpcRouter
 
             case "effect.get":
                 return EffectDto();
+
+            case "effect.remeasure":
+            {
+                var gameId = JsonParams.RequiredString(@params, "gameId");
+                // The store owns the RemeasureGames dictionary (ConcurrentDictionary) and its own
+                // persistence, so no state lock is needed here.
+                Baselines.MarkRemeasure(gameId);
+                return new { ok = true };
+            }
 
             case "diag.run":
             {
@@ -545,7 +555,7 @@ internal sealed class RpcRouter
         var report = Accel.EffectReport();
         return report is null
             ? new EffectReportDto(false, null, null, null, null,
-                "尚未开始测量", Array.Empty<EffectPointDto>(), false)
+                "尚未开始测量", Array.Empty<EffectPointDto>(), false, null, false)
             : Mapping.ToDto(report);
     }
 

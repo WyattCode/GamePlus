@@ -65,6 +65,9 @@ internal static class Composition
         // Acceleration-effect measurement: a real TLS-handshake probe against the game's own target.
         services.AddSingleton<IEffectProbe, TlsHandshakeProbe>();
         services.AddSingleton<EffectMonitor>();
+        services.AddSingleton<IBaselineStore>(sp => new SettingsBaselineStore(
+            sp.GetRequiredService<ISettingsService>(),
+            sp.GetRequiredService<ILogService>()));
 
         services.AddSingleton<IAcceleratorService>(sp => new AcceleratorService(
             sp.GetRequiredService<ILogService>(),
@@ -73,7 +76,8 @@ internal static class Composition
             sp.GetRequiredService<IModeControllerFactory>(),
             sp.GetRequiredService<EffectMonitor>(),
             () => sp.GetRequiredService<ISettingsService>().Settings.ExtraApps.ToList(),
-            () => sp.GetRequiredService<ISettingsService>().Settings.Advanced));
+            () => sp.GetRequiredService<ISettingsService>().Settings.Advanced,
+            sp.GetRequiredService<IBaselineStore>()));
 
         // One-click diagnostics: environment checks + plain-Chinese explanations.
         services.AddSingleton<IDiagnosticEnvironment>(_ =>

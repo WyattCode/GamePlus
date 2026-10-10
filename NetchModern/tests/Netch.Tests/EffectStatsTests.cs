@@ -39,7 +39,7 @@ public class EffectStatsTests
         var current = new EffectSnapshot(74, 0, 0, 5);
         var (pct, summary) = EffectStats.Improvement(baseline, current);
         Assert.Equal(38, pct);
-        Assert.Equal("延迟降低 38%", summary);
+        Assert.Equal("参考延迟降低 38%", summary);
     }
 
     [Fact]
@@ -49,8 +49,8 @@ public class EffectStatsTests
         var current = new EffectSnapshot(150, 0, 0, 5);
         var (pct, summary) = EffectStats.Improvement(baseline, current);
         Assert.Equal(-50, pct);
-        Assert.Contains("延迟升高", summary);
-        Assert.Contains("建议切换线路", summary);
+        Assert.Contains("参考延迟升高", summary);
+        Assert.Contains("可尝试切换线路", summary);
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public class EffectStatsTests
         var current = new EffectSnapshot(102, 0, 0, 5);
         var (pct, summary) = EffectStats.Improvement(baseline, current);
         Assert.Equal(-2, pct);
-        Assert.Equal("延迟与直连相近", summary);
+        Assert.Equal("参考延迟与直连相近", summary);
     }
 
     [Fact]

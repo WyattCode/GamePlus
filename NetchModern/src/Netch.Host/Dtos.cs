@@ -38,7 +38,8 @@ internal record EffectSnapshotDto(int Latency, double Loss, int Jitter, int Samp
 internal record EffectPointDto(long Ts, int Accel);
 
 internal record EffectReportDto(bool HasTarget, string? Target, EffectSnapshotDto? Baseline,
-    EffectSnapshotDto? Current, int? LatencyPct, string Summary, EffectPointDto[] Series, bool Measuring);
+    EffectSnapshotDto? Current, int? LatencyPct, string Summary, EffectPointDto[] Series, bool Measuring,
+    string? BaselineMeasuredAt, bool BaselineFromCache);
 
 internal record RankedNodeDto(string Id, string Remark, string Type, int Delay, string? Region,
     string? RegionName, bool RegionMatch, int Score, string Note);
@@ -239,7 +240,8 @@ internal static class Mapping
 
     public static EffectReportDto ToDto(EffectReport r) =>
         new(r.HasTarget, r.Target, ToDto(r.Baseline), ToDto(r.Current), r.LatencyPct, r.Summary,
-            r.Series.Select(p => new EffectPointDto(p.TsMs, p.Accel)).ToArray(), r.Measuring);
+            r.Series.Select(p => new EffectPointDto(p.TsMs, p.Accel)).ToArray(), r.Measuring,
+            r.BaselineMeasuredAt, r.BaselineFromCache);
 
     /// <summary>Builds the ranking DTO, assigning stable ids from the same pool as servers.list.</summary>
     public static NodeRankingDto ToDto(NodeRanking ranking, IReadOnlyList<Server> pool)

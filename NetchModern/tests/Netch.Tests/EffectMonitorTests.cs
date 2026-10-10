@@ -63,7 +63,7 @@ public class EffectMonitorTests
         Assert.NotNull(report.Current);
         Assert.Equal(74, report.Current!.Latency);
         Assert.Equal(38, report.LatencyPct);
-        Assert.Equal("延迟降低 38%", report.Summary);
+        Assert.Equal("参考延迟降低 38%", report.Summary);
         monitor.End();
     }
 
@@ -97,5 +97,37 @@ public class EffectMonitorTests
 
         Assert.Equal(90, monitor.Report().Series.Count);
         monitor.End();
+    }
+
+    [Fact]
+    public void UseStoredBaseline_ReusesSnapshotWithoutProbing()
+    {
+        var probe = new FakeProbe();
+        var monitor = NewMonitor(probe);
+        var measured = new DateTime(2024, 5, 1, 12, 0, 0, DateTimeKind.Utc);
+        monitor.UseStoredBaseline(GameWithTarget(), new EffectSnapshot(120, 0, 0, 5), measured);
+
+        Assert.Equal(0, probe.DirectCalls);
+
+        var report = monitor.Report();
+        Assert.True(report.HasTarget);
+        Assert.NotNull(report.Baseline);
+        Assert.Equal(120, report.Baseline!.Latency);
+        Assert.True(report.BaselineFromCache);
+        Assert.Equal(measured.ToString("o"), report.BaselineMeasuredAt);
+    }
+
+    [Fact]
+    public void BeginWithoutBaseline_ReportsNoBaselineHint()
+    {
+        var probe = new FakeProbe();
+        var monitor = NewMonitor(probe);
+        monitor.BeginWithoutBaseline(GameWithTarget());
+
+        var report = monitor.Report();
+        Assert.True(report.HasTarget);
+        Assert.Null(report.Baseline);
+        Assert.Contains("暂无直连基线", report.Summary);
+        Assert.False(report.BaselineFromCache);
     }
 }

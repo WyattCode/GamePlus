@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Netch.Core.Models.Settings;
@@ -45,6 +46,20 @@ public partial class AppSettings : ObservableObject
     ///     mode. Only applies when acceleration runs in process mode (netfilter Redirector).
     /// </summary>
     public List<ExtraApp> ExtraApps { get; set; } = new();
+
+    /// <summary>
+    ///     Last measured direct baseline per game (gameId → baseline). Reused for the effect comparison
+    ///     on later sessions so the ~3.5 s measurement only runs once per game by default.
+    ///     Concurrent so the acceleration path can mutate it while settings are being serialized.
+    /// </summary>
+    public ConcurrentDictionary<string, StoredBaseline> EffectBaselines { get; set; } = new();
+
+    /// <summary>
+    ///     Games whose direct baseline should be re-measured on the next acceleration (one-shot flag,
+    ///     set by the effect card's "重新测量" button). Keys are game ids; the value is always true.
+    ///     Concurrent so the RPC path can mutate it while settings are being serialized.
+    /// </summary>
+    public ConcurrentDictionary<string, bool> RemeasureGames { get; set; } = new();
 }
 
 public enum AppTheme

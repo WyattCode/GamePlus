@@ -34,6 +34,8 @@ public static class EffectStats
     /// <summary>
     ///     Compares the direct baseline with the accelerated current snapshot. Returns the latency
     ///     improvement percentage (null when there isn't enough data) and a one-line Chinese summary.
+    ///     The wording is deliberately "参考" (reference): this is an in-app TLS-handshake measurement,
+    ///     not the latency the game itself shows.
     /// </summary>
     public static (int? LatencyPct, string Summary) Improvement(EffectSnapshot baseline, EffectSnapshot current)
     {
@@ -46,10 +48,10 @@ public static class EffectStats
 
         var pct = (int)Math.Round(100.0 * (baseline.Latency - current.Latency) / baseline.Latency);
         var summary = pct >= 5
-            ? $"延迟降低 {pct}%"
+            ? $"参考延迟降低 {pct}%"
             : pct <= -5
-                ? $"延迟升高 {Math.Abs(pct)}%，建议切换线路"
-                : "延迟与直连相近";
+                ? $"参考延迟升高 {Math.Abs(pct)}%，可尝试切换线路"
+                : "参考延迟与直连相近";
 
         if (baseline.Loss > 0 || current.Loss > 0)
             summary += $"，丢包 {baseline.Loss:0.#}% → {current.Loss:0.#}%";

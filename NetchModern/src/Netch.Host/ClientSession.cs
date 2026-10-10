@@ -191,7 +191,7 @@ internal sealed class ClientSession
         var report = _accel.EffectReport();
         return report is null
             ? new EffectReportDto(false, null, null, null, null,
-                "尚未开始测量", Array.Empty<EffectPointDto>(), false)
+                "尚未开始测量", Array.Empty<EffectPointDto>(), false, null, false)
             : Mapping.ToDto(report);
     }
 

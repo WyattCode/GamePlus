@@ -34,6 +34,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     private readonly EffectMonitor? _effect;
     private readonly Func<IReadOnlyList<ExtraApp>>? _extraApps;
     private readonly Func<AdvancedSettings>? _advanced;
+    private readonly IBaselineStore? _baselines;
 
     private IServerController? _controller;
     private IModeController? _modeController;
@@ -57,7 +58,8 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
 
     public AcceleratorService(ILogService log, Func<Server, IServerController> controllerFactory,
         ISystemProxyService systemProxy, IModeControllerFactory modeControllerFactory, EffectMonitor? effect = null,
-        Func<IReadOnlyList<ExtraApp>>? extraApps = null, Func<AdvancedSettings>? advanced = null)
+        Func<IReadOnlyList<ExtraApp>>? extraApps = null, Func<AdvancedSettings>? advanced = null,
+        IBaselineStore? baselines = null)
     {
         _log = log;
         _controllerFactory = controllerFactory;
@@ -66,6 +68,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         _effect = effect;
         _extraApps = extraApps;
         _advanced = advanced;
+        _baselines = baselines;
     }
 
     /// <summary>Convenience overload using the default <see cref="ModeControllerFactory" /> (real drivers).</summary>
@@ -101,14 +104,48 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
 
             var adv = _advanced?.Invoke();
 
-            // Take the direct baseline BEFORE any capture is active: in TUN mode the capture layer would
-            // route the probe's own traffic through the tunnel, so the "direct" number would be wrong.
+            // Baseline policy: the direct baseline (~3.5 s) runs automatically only on the FIRST
+            // acceleration of each game (persisted) or when the user explicitly asks for it
+            // (MeasureEffect = "measure before EVERY acceleration", or the one-shot remeasure flag).
+            // Otherwise the stored baseline is reused — the accelerated sampling still runs every session.
             if (_effect != null)
             {
-                if (adv is { MeasureEffect: false })
-                    _effect.Disable();
-                else
+                // Consume the one-shot flag unconditionally first so it is cleared even when another
+                // condition already forces a measurement.
+                var remeasure = _baselines?.ConsumeRemeasure(game.Id) ?? false;
+                var stored = _baselines?.Get(game.Id);
+                var measure = adv is { MeasureEffect: true } || _baselines is null || stored is null || remeasure;
+
+                if (measure)
+                {
                     await _effect.MeasureBaselineAsync(game, ct);
+                    var snapshot = _effect.CurrentBaseline();
+                    if (snapshot is { Samples: >= 3 } && _baselines is not null)
+                    {
+                        var target = EffectProbeTarget.Resolve(game);
+                        _baselines.Save(game.Id, new StoredBaseline
+                        {
+                            Latency = snapshot.Latency,
+                            Loss = snapshot.Loss,
+                            Jitter = snapshot.Jitter,
+                            Samples = snapshot.Samples,
+                            Target = target is null ? "" : $"{target.Value.Host}:{target.Value.Port}",
+                            MeasuredUtc = DateTime.UtcNow
+                        });
+                    }
+                }
+                else if (stored is not null)
+                {
+                    _effect.UseStoredBaseline(game,
+                        new EffectSnapshot(stored.Latency, stored.Loss, stored.Jitter, stored.Samples),
+                        stored.MeasuredUtc);
+                    _log.Log(LogLevel.Info,
+                        $"已使用 {stored.MeasuredUtc.ToLocalTime():yyyy-MM-dd} 测得的直连基线（如需更新可在“加速效果”中重新测量）");
+                }
+                else
+                {
+                    _effect.BeginWithoutBaseline(game);
+                }
             }
 
             // Games use raw sockets that ignore the Windows system proxy. To actually redirect their
@@ -158,7 +195,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
 
             // Start the accelerated sampling loop against the SOCKS endpoint of the controller that is
             // actually running (StartDomainProxyAsync restarts it, so _socks is re-assigned there).
-            if (_effect != null && _socks != null && adv is not { MeasureEffect: false })
+            if (_effect != null && _socks != null)
                 _effect.Begin(_socks.Hostname, _socks.Port);
         }
         catch (Exception e)

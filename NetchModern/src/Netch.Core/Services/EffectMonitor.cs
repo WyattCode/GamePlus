@@ -7,7 +7,8 @@ public sealed record EffectPoint(long TsMs, int Accel);
 
 /// <summary>The full effect report handed to the UI.</summary>
 public sealed record EffectReport(bool HasTarget, string? Target, EffectSnapshot? Baseline, EffectSnapshot? Current,
-    int? LatencyPct, string Summary, IReadOnlyList<EffectPoint> Series, bool Measuring);
+    int? LatencyPct, string Summary, IReadOnlyList<EffectPoint> Series, bool Measuring,
+    string? BaselineMeasuredAt = null, bool BaselineFromCache = false);
 
 /// <summary>
 ///     Measures the acceleration effect against the game's own target: a direct baseline taken before any
@@ -36,6 +37,9 @@ public sealed class EffectMonitor
     private bool _measuring;
     private bool _started;
     private bool _disabled;
+    private bool _baselineFromCache;
+    private DateTime? _baselineMeasuredUtc;
+    private EffectSnapshot? _cachedBaseline;
     private string? _socksHost;
     private int _socksPort;
     private Timer? _timer;
@@ -75,6 +79,9 @@ public sealed class EffectMonitor
             _series.Clear();
             _measuring = target is not null;
             _started = true;
+            _baselineFromCache = false;
+            _baselineMeasuredUtc = null;
+            _cachedBaseline = null;
         }
 
         if (target is null)
@@ -131,6 +138,67 @@ public sealed class EffectMonitor
         // token was cancelled (spec). Reset _measuring first so the report doesn't stay stuck "measuring".
         ct.ThrowIfCancellationRequested();
 
+        Updated?.Invoke();
+    }
+
+    /// <summary>
+    ///     Returns the baseline measured in this session as a snapshot (null when nothing was measured),
+    ///     so the caller can persist it for later sessions.
+    /// </summary>
+    public EffectSnapshot? CurrentBaseline()
+    {
+        lock (_lock)
+        {
+            return _baselineSamples.Count > 0 ? EffectStats.Compute(_baselineSamples) : null;
+        }
+    }
+
+    /// <summary>
+    ///     Reuses a previously measured baseline (persisted per game) instead of probing: sets the target,
+    ///     clears samples/series and stores the given snapshot as the baseline. The accelerated sampling
+    ///     still runs every session.
+    /// </summary>
+    public void UseStoredBaseline(Game game, EffectSnapshot baseline, DateTime measuredUtc)
+    {
+        var target = EffectProbeTarget.Resolve(game);
+        lock (_lock)
+        {
+            _disabled = false;
+            _target = target;
+            _hasTarget = target is not null;
+            _baselineSamples.Clear();
+            _accelSamples.Clear();
+            _series.Clear();
+            _measuring = false;
+            _started = true;
+            _baselineFromCache = true;
+            _baselineMeasuredUtc = measuredUtc;
+            _cachedBaseline = baseline;
+        }
+        Updated?.Invoke();
+    }
+
+    /// <summary>
+    ///     Starts without any baseline (game never measured and the policy skipped the measurement).
+    ///     The report then says there is no direct baseline and offers the "重新测量" action.
+    /// </summary>
+    public void BeginWithoutBaseline(Game game)
+    {
+        var target = EffectProbeTarget.Resolve(game);
+        lock (_lock)
+        {
+            _disabled = false;
+            _target = target;
+            _hasTarget = target is not null;
+            _baselineSamples.Clear();
+            _accelSamples.Clear();
+            _series.Clear();
+            _measuring = false;
+            _started = true;
+            _baselineFromCache = false;
+            _baselineMeasuredUtc = null;
+            _cachedBaseline = null;
+        }
         Updated?.Invoke();
     }
 
@@ -192,6 +260,9 @@ public sealed class EffectMonitor
             _measuring = false;
             _started = false;
             _disabled = false;
+            _baselineFromCache = false;
+            _baselineMeasuredUtc = null;
+            _cachedBaseline = null;
         }
         Updated?.Invoke();
     }
@@ -244,7 +315,9 @@ public sealed class EffectMonitor
                 return new EffectReport(false, null, null, null, null, "已关闭加速效果测量",
                     Array.Empty<EffectPoint>(), false);
 
-            var baseline = _baselineSamples.Count > 0 ? EffectStats.Compute(_baselineSamples) : null;
+            var baseline = _baselineSamples.Count > 0
+                ? EffectStats.Compute(_baselineSamples)
+                : _cachedBaseline;
             var currentSamples = _accelSamples.Count > CurrentWindow
                 ? _accelSamples.Skip(_accelSamples.Count - CurrentWindow).ToList()
                 : _accelSamples.ToList();
@@ -260,7 +333,11 @@ public sealed class EffectMonitor
             {
                 summary = "该游戏未配置可测量的域名/IP，仅显示线路延迟";
             }
-            else if (baseline is null || current is null)
+            else if (baseline is null)
+            {
+                summary = "暂无直连基线，可点击“重新测量”";
+            }
+            else if (current is null)
             {
                 summary = "正在测量…";
             }
@@ -272,8 +349,11 @@ public sealed class EffectMonitor
             }
 
             var target = _target is null ? null : $"{_target.Value.Host}:{_target.Value.Port}";
+            var measuredAt = _baselineFromCache && _baselineMeasuredUtc is { } dt
+                ? dt.ToString("o")
+                : null;
             return new EffectReport(_hasTarget, target, baseline, current, pct, summary,
-                _series.ToList(), _measuring);
+                _series.ToList(), _measuring, measuredAt, _baselineFromCache);
         }
     }
 }

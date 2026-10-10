@@ -1,0 +1,291 @@
+name: build
+
+# Build the C# backend, run the frontend checks, package the Windows installer and (on v* tags)
+# create a DRAFT GitHub release. Nothing is ever published automatically.
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege by default; the release job opts into contents: write.
+permissions:
+  contents: read
+
+# One run per ref. Tag builds are never cancelled (a release must not be interrupted mid-flight).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  build:
+    name: build (windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      native_complete: ${{ steps.native.outputs.complete }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: electron-app/package-lock.json
+
+      # ---------------------------------------------------------------- backend
+      - name: Restore backend
+        run: dotnet restore NetchModern/NetchModern.slnx
+
+      - name: Build backend
+        run: dotnet build NetchModern/NetchModern.slnx -c Release --no-restore
+
+      - name: Test backend
+        run: dotnet test NetchModern/NetchModern.slnx -c Release --no-build
+
+      # ---------------------------------------------------------------- frontend
+      - name: Install frontend dependencies
+        working-directory: electron-app
+        run: npm ci
+
+      - name: Typecheck frontend
+        working-directory: electron-app
+        run: npm run typecheck
+
+      - name: Unit tests (vitest)
+        working-directory: electron-app
+        run: npx vitest run
+
+      # ---------------------------------------------------------------- native cores
+      # The native proxy cores (xray.exe, sing-box.exe, geoip.dat, ...) are NOT committed to the
+      # repository (TODO(owner): decide on hosting). A normal push/PR therefore builds an incomplete
+      # dev/CI package: it must not fail the job, it only warns. A v* tag is a release and must be
+      # complete, unless the repository variable ALLOW_INCOMPLETE_RELEASE is set to 'true'.
+      - name: Check native binaries
+        id: native
+        env:
+          # Untrusted-ish inputs are passed through env, never interpolated into the script body.
+          REF: ${{ github.ref }}
+          ALLOW_INCOMPLETE_RELEASE: ${{ vars.ALLOW_INCOMPLETE_RELEASE }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Read the REQUIRED list straight out of build.ps1 so the two never drift apart.
+          $buildScript = 'NetchModern/build.ps1'
+          $required = @()
+          if (Test-Path $buildScript) {
+            $text = Get-Content $buildScript -Raw
+            # The array literal spans multiple lines and its entries may carry trailing '# ...'
+            # comments (which themselves can contain parentheses), so match from '$requiredNative = @('
+            # up to the first line that consists only of optional whitespace followed by ')'.
+            $match = [regex]::Match($text, '(?ms)\$requiredNative\s*=\s*@\(\s*$(?<body>.*?)^\s*\)')
+            if ($match.Success) {
+              # Strip '#' comments from each line before extracting the quoted names.
+              $body = ($match.Groups['body'].Value -split "`r?`n" | ForEach-Object {
+                ($_ -replace '#.*$', '')
+              }) -join "`n"
+              $required = @(
+                [regex]::Matches($body, "'(?<name>[^']+)'") |
+                  ForEach-Object { $_.Groups['name'].Value }
+              )
+            }
+          }
+          if ($required.Count -eq 0) {
+            # Fallback: at least the proxy core must be there.
+            $required = @('xray.exe')
+          }
+          Write-Host "Required native components: $($required -join ', ')"
+
+          $nativeDir = 'NetchModern/native'
+          $missing = @()
+          if (-not (Test-Path $nativeDir)) {
+            $missing = $required
+          } else {
+            $missing = @($required | Where-Object { -not (Test-Path (Join-Path $nativeDir $_)) })
+          }
+
+          $complete = ($missing.Count -eq 0)
+          "complete=$($complete.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+          $isTag = $env:REF -like 'refs/tags/v*'
+          if ($complete) {
+            Write-Host "All required native components are present."
+          } elseif ($isTag -and $env:ALLOW_INCOMPLETE_RELEASE -ne 'true') {
+            Write-Host "::error::Missing REQUIRED native components for release tag: $($missing -join ', '). Populate NetchModern/native/ (see NetchModern/native/README.md) or set the repository variable ALLOW_INCOMPLETE_RELEASE=true to override."
+            exit 1
+          } else {
+            Write-Host "::warning::Missing REQUIRED native components: $($missing -join ', '). The installer produced by this run will be an incomplete dev/CI package that cannot accelerate (no proxy cores / routing data / TUN support). See NetchModern/native/README.md."
+          }
+
+      # ---------------------------------------------------------------- backend staging
+      # Publishes Netch.Host into electron-app/resources/backend. -AllowMissingNative downgrades a
+      # missing REQUIRED native set to a warning; on a release tag the check above already failed.
+      - name: Publish backend into electron-app/resources/backend
+        run: ./NetchModern/build.ps1 -AllowMissingNative
+
+      # ---------------------------------------------------------------- installer
+      - name: Build frontend bundle
+        working-directory: electron-app
+        run: npm run build
+
+      - name: Package installer (unsigned)
+        working-directory: electron-app
+        env:
+          # Never sign in CI: no certificate is available and the installer is intentionally unsigned.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_LINK: ''
+          CSC_KEY_PASSWORD: ''
+        run: npx electron-builder --win nsis --publish never
+
+      # ---------------------------------------------------------------- checksums
+      - name: Compute SHA-256 of installers
+        id: sums
+        env:
+          NATIVE_COMPLETE: ${{ steps.native.outputs.complete }}
+          REF: ${{ github.ref }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Only the installers in dist/ (never dist/win-unpacked, which holds the unpacked app).
+          $installers = @(Get-ChildItem -Path 'electron-app/dist' -Filter '*.exe' -File -ErrorAction SilentlyContinue)
+          if ($installers.Count -eq 0) {
+            Write-Host "::error::No installer (*.exe) found in electron-app/dist."
+            exit 1
+          }
+
+          $summary = New-Object System.Collections.Generic.List[string]
+          $summary.Add('## Game+ installer')
+          $summary.Add('')
+          if ($env:NATIVE_COMPLETE -eq 'true') {
+            $summary.Add('Native components: **complete**')
+          } else {
+            $summary.Add('Native components: **INCOMPLETE** - this package cannot accelerate (dev/CI build only).')
+          }
+          $summary.Add('')
+          $summary.Add('| File | SHA-256 |')
+          $summary.Add('| --- | --- |')
+
+          foreach ($file in $installers) {
+            $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            # sha256sum format: "<lowercase hex>  <file name>"
+            "$hash  $($file.Name)" | Set-Content -Path "$($file.FullName).sha256" -Encoding ascii -NoNewline
+            Add-Content -Path "$($file.FullName).sha256" -Value "`n" -NoNewline
+            $summary.Add("| $($file.Name) | ``$hash`` |")
+            Write-Host "$hash  $($file.Name)"
+          }
+
+          $summary | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+      # ---------------------------------------------------------------- artifact
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # Tag builds are named after the tag, everything else after the commit SHA.
+          name: GamePlus-installer-${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || github.sha }}${{ steps.native.outputs.complete == 'true' && '' || '-incomplete' }}
+          path: |
+            electron-app/dist/*.exe
+            electron-app/dist/*.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # -------------------------------------------------------------------- release
+  # Draft release only: a human reviews the notes/checksums and publishes manually.
+  release:
+    name: draft release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: GamePlus-installer-*
+          merge-multiple: true
+          path: artifacts
+
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          NATIVE_COMPLETE: ${{ needs.build.outputs.native_complete }}
+        run: |
+          set -euo pipefail
+
+          ls -l artifacts
+
+          # Collect the installers and their checksums (flat directory after merge-multiple).
+          mapfile -t files < <(find artifacts -maxdepth 1 -type f \( -name '*.exe' -o -name '*.exe.sha256' \) | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No installer files were downloaded from the build artifact."
+            exit 1
+          fi
+
+          # SHA-256 table for the release notes.
+          sums=""
+          for f in "${files[@]}"; do
+            case "$f" in
+              *.sha256)
+                name="$(basename "$f" .sha256)"
+                hash="$(awk '{print $1}' "$f")"
+                sums="${sums}| \`${name}\` | \`${hash}\` |"$'\n'
+                ;;
+            esac
+          done
+
+          if [ "${NATIVE_COMPLETE}" = "true" ]; then
+            native_note="Native components: complete."
+          else
+            native_note="**Native components: INCOMPLETE** - this package cannot accelerate. Do not publish as a normal release."
+          fi
+
+          notes="$(cat <<EOF
+          Game+ ${TAG}
+
+          ${native_note}
+
+          ## Unsigned installer
+
+          This installer is **not code-signed**. Windows SmartScreen will show a warning on first run:
+          click **更多信息 (More info)** and then **仍要运行 (Run anyway)**.
+
+          ## SHA-256
+
+          | File | SHA-256 |
+          | --- | --- |
+          ${sums}
+          EOF
+          )"
+
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            # A release for this tag already exists. Only replace assets while it is still a DRAFT;
+            # never clobber the assets of an already published release.
+            is_draft="$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft)"
+            if [ "$is_draft" = "true" ]; then
+              gh release upload "$TAG" --repo "$REPO" --clobber "${files[@]}"
+            else
+              echo "::error::Release ${TAG} already exists and is published. Refusing to replace its assets. Delete the release or bump the tag."
+              exit 1
+            fi
+          else
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --draft \
+              --title "Game+ ${TAG}" \
+              --notes "$notes" \
+              "${files[@]}"
+          fi

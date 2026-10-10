@@ -3,6 +3,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { startSidecar, stopSidecar } from './sidecar'
+import { getPrefs, setPrefs } from './prefs'
 import { trayIcon32 } from './trayIcon'
 
 let mainWindow: BrowserWindow | null = null
@@ -150,6 +151,9 @@ function registerWindowControls(): void {
   )
   // Renderer asks for the backend WebSocket coordinates; resolves once the sidecar is up.
   ipcMain.handle('backend:get-connection', () => startSidecar())
+  // Renderer-only UI prefs (onboarding etc.).
+  ipcMain.handle('prefs:get', () => getPrefs())
+  ipcMain.handle('prefs:set', (_e, patch) => setPrefs(patch ?? {}))
 }
 
 // Single-instance: a second launch must not spawn another sidecar / proxy chain. Focus the running
@@ -173,8 +177,12 @@ if (!gotSingleInstanceLock) {
     })
 
     registerWindowControls()
-    // Kick the backend off early so it's ready by the time the renderer connects.
-    startSidecar().catch((e) => console.error('sidecar failed to start:', e))
+    // Start the backend early only when the user has already finished onboarding (or in dev).
+    // Otherwise the renderer triggers it lazily on its first backend:get-connection, i.e. after
+    // the user has read the permission explanation — so no UAC prompt before the app says anything.
+    if (getPrefs().onboardingDone || is.dev) {
+      startSidecar().catch((e) => console.error('sidecar failed to start:', e))
+    }
     createWindow()
     createTray()
 

@@ -3,11 +3,13 @@ import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { useAppStore } from '@/stores/app'
 import { useDiagnosticsStore } from '@/stores/diagnostics'
+import { useOnboardingStore } from '@/stores/onboarding'
 import { backend } from '@/api/backend'
 import type { EngineSettings, UpdateInfo } from '@shared/types'
 
 const app = useAppStore()
 const diagnostics = useDiagnosticsStore()
+const onboarding = useOnboardingStore()
 const themes = [
   { v: 'light', label: '浅色', icon: 'sun' },
   { v: 'dark', label: '深色', icon: 'moon' },
@@ -106,6 +108,13 @@ const updateText = computed<string | null>(() => {
           />
           <span class="track"><span class="thumb" /></span>
         </label>
+      </div>
+      <div class="setting">
+        <div>
+          <div class="s-name">新手引导</div>
+          <div class="muted small">重新查看首次使用的引导步骤</div>
+        </div>
+        <button class="btn diag-btn" @click="onboarding.reopen()">重新查看新手引导</button>
       </div>
     </div>
 

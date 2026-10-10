@@ -76,8 +76,11 @@ export const useLibraryStore = defineStore('library', () => {
     servers.value = await backend.removeServer(id)
   }
 
-  async function addSubscription(remark: string, link: string): Promise<void> {
+  /** Adds a subscription and returns the newly-created entry (so callers can immediately update it). */
+  async function addSubscription(remark: string, link: string): Promise<Subscription | null> {
+    const before = new Set(subscriptions.value.map((s) => s.id))
     subscriptions.value = await backend.addSubscription(remark, link)
+    return subscriptions.value.find((s) => !before.has(s.id)) ?? null
   }
 
   async function removeSubscription(id: string): Promise<void> {

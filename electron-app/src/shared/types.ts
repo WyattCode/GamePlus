@@ -197,3 +197,9 @@ export interface DiagnosticReport {
   /** Plain-Chinese explanation of the last error, when one was supplied. */
   errorExplanation: string | null
 }
+
+/** UI preferences persisted by the Electron main process (userData/prefs.json). */
+export interface UiPrefs {
+  /** True once the user has completed (or skipped) the first-run onboarding. */
+  onboardingDone: boolean
+}

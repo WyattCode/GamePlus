@@ -12,7 +12,7 @@ import type {
   UpdateInfo
 } from '@shared/types'
 import { sampleGames, sampleServers, sampleSubscriptions } from '@/data/sampleData'
-import { WebSocketBackend } from './ws-backend'
+import { WebSocketBackend, allowBackendConnection as allowBackendConnectionImpl } from './ws-backend'
 
 export interface SubMutation {
   subscriptions: Subscription[]
@@ -54,6 +54,12 @@ export interface Backend {
     error?: string | null
   }): Promise<DiagnosticReport>
   fixDiagnostic(action: string): Promise<{ fixed: boolean }>
+}
+
+// Re-exported so callers can open the connection gate without importing the transport directly.
+// The mock backend has no gate (it never spawns a process), so this is a no-op there.
+export function allowBackendConnection(): void {
+  if (inElectron) allowBackendConnectionImpl()
 }
 
 function jitter(base: number): number {

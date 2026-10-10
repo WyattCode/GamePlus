@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { UiPrefs } from '../shared/types'
 
 // Minimal, typed surface exposed to the renderer. Window chrome + theme now; the
 // backend RPC channel to the C# sidecar will be added here as it comes online.
@@ -28,6 +29,10 @@ const api = {
     onLost: (cb: () => void): void => {
       ipcRenderer.on('backend:lost', () => cb())
     }
+  },
+  prefs: {
+    get: (): Promise<UiPrefs> => ipcRenderer.invoke('prefs:get'),
+    set: (patch: Partial<UiPrefs>): Promise<UiPrefs> => ipcRenderer.invoke('prefs:set', patch)
   }
 }
 

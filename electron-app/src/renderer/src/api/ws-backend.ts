@@ -23,6 +23,20 @@ const METHOD_TIMEOUTS: Record<string, number> = {
   'diag.run': 30_000
 }
 
+// Module-level gate: nothing may spawn/elevate the sidecar until the app explicitly allows it. The
+// onboarding flow shows an explanation of the UAC prompt first, so any store that eagerly connects
+// (e.g. the accel store on the default route) must wait here instead of triggering elevation.
+let releaseGate!: () => void
+const gate = new Promise<void>((r) => (releaseGate = r))
+let gateOpen = false
+
+/** Opens the backend connection gate. Idempotent — safe to call from multiple places. */
+export function allowBackendConnection(): void {
+  if (gateOpen) return
+  gateOpen = true
+  releaseGate()
+}
+
 // Speaks the JSON-RPC/WebSocket protocol of the headless C# sidecar (see Netch.Host).
 // Requests: {id, method, params} -> {id, result|error}. Events: {event, data}.
 export class WebSocketBackend implements Backend {
@@ -63,6 +77,8 @@ export class WebSocketBackend implements Backend {
     if (this.connecting) return this.connecting
 
     this.connecting = (async () => {
+      // Wait for the app to allow connecting (onboarding may still be explaining the UAC prompt).
+      await gate
       const { port, token } = await window.gameplus.backend.getConnection()
       await new Promise<void>((resolve, reject) => {
         const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${token}`)

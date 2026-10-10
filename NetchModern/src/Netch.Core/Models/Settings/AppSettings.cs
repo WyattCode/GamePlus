@@ -31,6 +31,12 @@ public partial class AppSettings : ObservableObject
 
     /// <summary>Ids of games with the per-game auto-acceleration toggle enabled.</summary>
     public List<string> AutoAccelerateGames { get; set; } = new();
+
+    /// <summary>
+    ///     Extra applications that are additionally proxied or explicitly bypassed in process-capture
+    ///     mode. Only applies when acceleration runs in process mode (netfilter Redirector).
+    /// </summary>
+    public List<ExtraApp> ExtraApps { get; set; } = new();
 }
 
 public enum AppTheme

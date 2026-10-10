@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Netch.Core.Abstractions;
 using Netch.Core.Models.Games;
 using Netch.Core.Models.Servers;
+using Netch.Core.Models.Settings;
 using Netch.Core.Services;
 using Netch.Core.Services.Diagnostics;
 using Netch.Core.Services.Library;
@@ -599,6 +600,63 @@ internal sealed class RpcRouter
                 throw new InvalidOperationException("规则更新地址必须是 https:// 开头的网址");
             s.RulesUrl = trimmed;
         }
+        if (JsonParams.HasProperty(p, "extraApps"))
+        {
+            // Validate the whole array BEFORE mutating anything (same style as rulesUrl).
+            var parsed = ParseExtraApps(p);
+            s.ExtraApps = parsed;
+        }
+    }
+
+    /// <summary>
+    ///     Parses and validates the <c>extraApps</c> array. Throws before any mutation so a bad entry
+    ///     can't leave settings half-applied.
+    /// </summary>
+    private static List<ExtraApp> ParseExtraApps(JsonElement p)
+    {
+        if (!p.TryGetProperty("extraApps", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException("extraApps 必须是数组");
+
+        var result = new List<ExtraApp>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                throw new InvalidOperationException("extraApps 的每一项必须是对象");
+
+            var process = (JsonParams.OptionalString(item, "process") ?? "").Trim();
+            if (!SplitRouting.IsValidProcessName(process))
+                throw new InvalidOperationException($"无效的进程名：{process}（应为 xxx.exe）");
+
+            if (!seen.Add(process))
+                throw new InvalidOperationException($"进程 {process} 重复");
+
+            var modeRaw = (JsonParams.OptionalString(item, "mode") ?? "proxy").Trim().ToLowerInvariant();
+            if (modeRaw is not ("proxy" or "bypass"))
+                throw new InvalidOperationException($"无效的分流方式：{modeRaw}（可选：proxy / bypass）");
+
+            var name = (JsonParams.OptionalString(item, "name") ?? "").Trim();
+            if (name.Length == 0)
+                name = process;
+            if (name.Length > 40)
+                name = name[..40];
+
+            var enabled = JsonParams.OptionalBool(item, "enabled") ?? true;
+
+            result.Add(new ExtraApp
+            {
+                Name = name,
+                Process = process,
+                Mode = modeRaw == "bypass" ? ExtraAppMode.Bypass : ExtraAppMode.Proxy,
+                Enabled = enabled
+            });
+
+            if (result.Count > 50)
+                throw new InvalidOperationException("分应用分流最多 50 条");
+        }
+
+        return result;
     }
 
     /// <summary>https:// anywhere; plain http:// only for loopback hosts (local testing).</summary>

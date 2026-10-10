@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
+import SplitRoutingCard from '@/components/SplitRoutingCard.vue'
 import { useAppStore } from '@/stores/app'
 import { useDiagnosticsStore } from '@/stores/diagnostics'
 import { useLibraryStore } from '@/stores/library'
@@ -286,6 +287,8 @@ async function toggleStartHidden(v: boolean): Promise<void> {
         </label>
       </div>
     </div>
+
+    <SplitRoutingCard />
 
     <div class="card group">
       <div class="g-title">游戏规则库</div>

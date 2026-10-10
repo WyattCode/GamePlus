@@ -90,6 +90,18 @@ export interface LogEntry {
   message: string
 }
 
+/** How an extra application's traffic is treated in process-capture mode. */
+export type ExtraAppMode = 'proxy' | 'bypass'
+
+/** An extra application additionally proxied or explicitly bypassed (process mode only). */
+export interface ExtraApp {
+  name: string
+  /** Executable file name, e.g. "Discord.exe". */
+  process: string
+  mode: ExtraAppMode
+  enabled: boolean
+}
+
 /** Engine-side settings persisted by the C# backend (subset of the full AppSettings). */
 export interface EngineSettings {
   theme: 'light' | 'dark' | 'system'
@@ -99,6 +111,8 @@ export interface EngineSettings {
   rulesUrl: string
   /** Global master switch for auto-acceleration on game launch. */
   autoAccelerate: boolean
+  /** Extra applications for per-app split routing (process mode only). */
+  extraApps: ExtraApp[]
 }
 
 /** Connection state of the C# backend sidecar. */

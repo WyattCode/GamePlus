@@ -69,7 +69,8 @@ internal static class Composition
             sp.GetRequiredService<Func<Server, IServerController>>(),
             sp.GetRequiredService<ISystemProxyService>(),
             sp.GetRequiredService<IModeControllerFactory>(),
-            sp.GetRequiredService<EffectMonitor>()));
+            sp.GetRequiredService<EffectMonitor>(),
+            () => sp.GetRequiredService<ISettingsService>().Settings.ExtraApps.ToList()));
 
         // One-click diagnostics: environment checks + plain-Chinese explanations.
         services.AddSingleton<IDiagnosticEnvironment>(_ =>

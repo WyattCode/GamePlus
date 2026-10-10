@@ -2,6 +2,7 @@ using System.Text.Json;
 using Netch.Core.Models;
 using Netch.Core.Models.Games;
 using Netch.Core.Models.Servers;
+using Netch.Core.Models.Settings;
 using Netch.Core.Services;
 using Netch.Core.Services.Diagnostics;
 using Netch.Core.Services.Library;
@@ -25,7 +26,9 @@ internal record AccelStatusDto(string State, int Latency, double Loss, int Jitte
 internal record LogDto(string Ts, string Level, string Message);
 
 internal record SettingsDto(string Theme, string Language, bool MinimizeToTray, string RulesUrl,
-    bool AutoAccelerate);
+    bool AutoAccelerate, ExtraAppDto[] ExtraApps);
+
+internal record ExtraAppDto(string Name, string Process, string Mode, bool Enabled);
 
 internal record EffectSnapshotDto(int Latency, double Loss, int Jitter, int Samples);
 
@@ -203,7 +206,10 @@ internal static class Mapping
 
     public static SettingsDto ToDto(Netch.Core.Models.Settings.AppSettings s) =>
         new(s.Theme.ToString().ToLowerInvariant(), s.Language, s.MinimizeToTray, s.RulesUrl,
-            s.AutoAccelerate);
+            s.AutoAccelerate, s.ExtraApps.Select(ToDto).ToArray());
+
+    public static ExtraAppDto ToDto(ExtraApp a) =>
+        new(a.Name, a.Process, a.Mode == ExtraAppMode.Bypass ? "bypass" : "proxy", a.Enabled);
 
     public static EffectSnapshotDto? ToDto(EffectSnapshot? s) =>
         s is null ? null : new EffectSnapshotDto(s.Latency, s.Loss, s.Jitter, s.Samples);

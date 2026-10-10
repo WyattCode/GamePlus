@@ -5,6 +5,7 @@ import type {
   DiagnosticReport,
   EffectReport,
   EngineSettings,
+  ExtraApp,
   Game,
   LibraryScanResult,
   LogEntry,
@@ -147,6 +148,15 @@ function preferredRegionsFor(game: Game | null): { regions: string[]; label: str
     }
   }
   return { regions, label }
+}
+
+// Mirrors SplitRouting.IsValidProcessName in Netch.Core/Services/SplitRouting.cs.
+const PROCESS_NAME_RE = /^[A-Za-z0-9 _.+\-()[\]]{1,100}\.exe$/i
+
+export function isValidProcessName(s: string): boolean {
+  if (!s) return false
+  if (s.includes('/') || s.includes('\\')) return false
+  return PROCESS_NAME_RE.test(s)
 }
 
 class MockBackend implements Backend {
@@ -356,7 +366,8 @@ class MockBackend implements Backend {
     language: 'System',
     minimizeToTray: true,
     rulesUrl: '',
-    autoAccelerate: true
+    autoAccelerate: true,
+    extraApps: []
   }
 
   async addServerFromLink(link: string): Promise<Server[]> {
@@ -462,6 +473,18 @@ class MockBackend implements Backend {
     return structuredClone(this.mockSettings)
   }
   async setSettings(patch: Partial<EngineSettings>): Promise<EngineSettings> {
+    if (patch.extraApps) {
+      const seen = new Set<string>()
+      for (const app of patch.extraApps) {
+        const process = (app.process ?? '').trim()
+        if (!isValidProcessName(process)) {
+          throw new Error(`无效的进程名：${process}（应为 xxx.exe）`)
+        }
+        const key = process.toLowerCase()
+        if (seen.has(key)) throw new Error(`进程 ${process} 重复`)
+        seen.add(key)
+      }
+    }
     this.mockSettings = { ...this.mockSettings, ...patch }
     return structuredClone(this.mockSettings)
   }

@@ -8,6 +8,7 @@ using Netch.Core.Enums;
 using Netch.Core.Models.Games;
 using Netch.Core.Models.Modes;
 using Netch.Core.Models.Servers;
+using Netch.Core.Models.Settings;
 
 namespace Netch.Core.Services;
 
@@ -31,6 +32,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     private readonly Queue<int> _samples = new();
     private readonly ISystemProxyService _systemProxy;
     private readonly EffectMonitor? _effect;
+    private readonly Func<IReadOnlyList<ExtraApp>>? _extraApps;
 
     private IServerController? _controller;
     private IModeController? _modeController;
@@ -53,13 +55,15 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     private AccelerationState _state = AccelerationState.Idle;
 
     public AcceleratorService(ILogService log, Func<Server, IServerController> controllerFactory,
-        ISystemProxyService systemProxy, IModeControllerFactory modeControllerFactory, EffectMonitor? effect = null)
+        ISystemProxyService systemProxy, IModeControllerFactory modeControllerFactory, EffectMonitor? effect = null,
+        Func<IReadOnlyList<ExtraApp>>? extraApps = null)
     {
         _log = log;
         _controllerFactory = controllerFactory;
         _systemProxy = systemProxy;
         _modeControllerFactory = modeControllerFactory;
         _effect = effect;
+        _extraApps = extraApps;
     }
 
     /// <summary>Convenience overload using the default <see cref="ModeControllerFactory" /> (real drivers).</summary>
@@ -169,8 +173,16 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             try
             {
                 _modeController = _modeControllerFactory.Create(ModeType.ProcessMode);
-                await _modeController.StartAsync(socks5, BuildMode(ModeType.ProcessMode, game.ProxyProcesses), ct);
+                var extras = _extraApps?.Invoke() ?? Array.Empty<ExtraApp>();
+                var mode = SplitRouting.BuildProcessMode(game.ProxyProcesses, extras);
+                await _modeController.StartAsync(socks5, mode, ct);
                 Status.CaptureMode = "process";
+
+                var extraProxy = extras.Count(a => a is { Enabled: true, Mode: ExtraAppMode.Proxy });
+                var extraBypass = extras.Count(a => a is { Enabled: true, Mode: ExtraAppMode.Bypass });
+                if (extraProxy > 0 || extraBypass > 0)
+                    _log.Log(LogLevel.Info, $"分应用分流：额外代理 {extraProxy} 个，绕过 {extraBypass} 个");
+
                 _log.Log(LogLevel.Info,
                     $"Capturing {game.ProxyProcesses.Count} process(es) via {_modeController.Name} → {node.Hostname}");
                 return;

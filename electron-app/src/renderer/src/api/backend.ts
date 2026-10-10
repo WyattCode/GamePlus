@@ -1,12 +1,16 @@
 import type {
   AccelStatus,
+  DetectedGame,
   DiagnosticReport,
   EffectReport,
   EngineSettings,
   Game,
+  LibraryScanResult,
   LogEntry,
   NodeRanking,
   RankedNode,
+  RulesStatus,
+  RulesUpdateResult,
   Server,
   Subscription,
   UpdateInfo
@@ -54,6 +58,10 @@ export interface Backend {
     error?: string | null
   }): Promise<DiagnosticReport>
   fixDiagnostic(action: string): Promise<{ fixed: boolean }>
+  scanLibrary(): Promise<LibraryScanResult>
+  addDetectedGame(name: string, executables: string[], source?: string): Promise<Game[]>
+  rulesStatus(): Promise<RulesStatus>
+  updateRules(): Promise<RulesUpdateResult>
 }
 
 // Re-exported so callers can open the connection gate without importing the transport directly.
@@ -439,6 +447,123 @@ class MockBackend implements Backend {
   async setSettings(patch: Partial<EngineSettings>): Promise<EngineSettings> {
     this.mockSettings = { ...this.mockSettings, ...patch }
     return structuredClone(this.mockSettings)
+  }
+
+  async scanLibrary(): Promise<LibraryScanResult> {
+    await new Promise((r) => setTimeout(r, 900))
+    // Match two of the detected games to sample library entries (by process / by name).
+    const byProcess = this.mockGames.find((g) => g.id === 'valorant') ?? this.mockGames[0] ?? null
+    const byName = this.mockGames.find((g) => g.id === 'gtao') ?? this.mockGames[1] ?? null
+
+    const games: DetectedGame[] = []
+    if (byProcess) {
+      games.push({
+        source: 'Riot',
+        sourceId: 'valorant',
+        name: byProcess.name,
+        installDir: 'C:\\Riot Games\\VALORANT',
+        executables: ['VALORANT.exe', 'RiotClientServices.exe'],
+        gameId: byProcess.id,
+        gameName: byProcess.name,
+        matchedBy: 'process'
+      })
+    }
+    if (byName) {
+      games.push({
+        source: 'Steam',
+        sourceId: '271590',
+        name: byName.name,
+        installDir: 'D:\\SteamLibrary\\steamapps\\common\\GTAV',
+        executables: ['GTA5.exe', 'PlayGTAV.exe'],
+        gameId: byName.id,
+        gameName: byName.name,
+        matchedBy: 'name'
+      })
+    }
+    games.push({
+      source: 'Steam',
+      sourceId: '367520',
+      name: 'Hollow Knight',
+      installDir: 'D:\\SteamLibrary\\steamapps\\common\\Hollow Knight',
+      executables: ['hollow_knight.exe'],
+      gameId: null,
+      gameName: null,
+      matchedBy: null
+    })
+    games.push({
+      source: 'Battle.net',
+      sourceId: 'diablo4',
+      name: 'Diablo IV',
+      installDir: 'C:\\Program Files (x86)\\Diablo IV',
+      executables: ['Diablo IV.exe'],
+      gameId: null,
+      gameName: null,
+      matchedBy: null
+    })
+
+    return { games, errors: [], scannedAt: new Date().toISOString() }
+  }
+
+  async addDetectedGame(name: string, executables: string[], source?: string): Promise<Game[]> {
+    const id = 'custom-' + crypto.randomUUID().slice(0, 8)
+    this.mockGames.push({
+      id,
+      name,
+      icon: '🎮',
+      accent: '',
+      regionText: '',
+      ruleCount: 0,
+      categories: ['PC'],
+      favorite: false,
+      custom: true,
+      englishName: source || '',
+      aliases: [],
+      category: 'PC',
+      regions: [],
+      platforms: ['PC'],
+      proxyDomains: [],
+      proxyIps: [],
+      proxyProcesses: [...executables]
+    })
+    return structuredClone(this.mockGames)
+  }
+
+  private mockRules: RulesStatus = {
+    version: '1',
+    source: 'bundled',
+    gameCount: sampleGames.length,
+    lastCheck: null,
+    lastError: null,
+    lastResult: null,
+    url: ''
+  }
+
+  async rulesStatus(): Promise<RulesStatus> {
+    return { ...this.mockRules, url: this.mockSettings.rulesUrl }
+  }
+
+  async updateRules(): Promise<RulesUpdateResult> {
+    await new Promise((r) => setTimeout(r, 700))
+    if (!this.mockSettings.rulesUrl) {
+      return {
+        status: 'failed',
+        message: '未配置规则更新地址',
+        version: this.mockRules.version,
+        games: structuredClone(this.mockGames)
+      }
+    }
+    this.mockRules = {
+      ...this.mockRules,
+      lastCheck: new Date().toISOString(),
+      lastResult: '已是最新版本',
+      lastError: null
+    }
+    return {
+      status: 'upToDate',
+      message: '已是最新版本',
+      version: this.mockRules.version,
+      games: structuredClone(this.mockGames)
+    }
   }
 
   async runDiagnostics(opts: {

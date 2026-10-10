@@ -3,13 +3,17 @@ import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { useAppStore } from '@/stores/app'
 import { useDiagnosticsStore } from '@/stores/diagnostics'
+import { useLibraryStore } from '@/stores/library'
 import { useOnboardingStore } from '@/stores/onboarding'
+import { useToastStore, errorMessage } from '@/stores/toast'
 import { backend } from '@/api/backend'
 import type { EngineSettings, UpdateInfo } from '@shared/types'
 
 const app = useAppStore()
 const diagnostics = useDiagnosticsStore()
+const library = useLibraryStore()
 const onboarding = useOnboardingStore()
+const toast = useToastStore()
 const themes = [
   { v: 'light', label: '浅色', icon: 'sun' },
   { v: 'dark', label: '深色', icon: 'moon' },
@@ -65,6 +69,72 @@ const updateText = computed<string | null>(() => {
       return `无法检查更新：${u.error ?? '未知错误'}`
   }
 })
+
+// --- 游戏规则库 ---
+const rulesUrl = ref('')
+const rulesSaving = ref(false)
+const rulesChecking = ref(false)
+
+const rulesSourceLabel = computed<string>(() => {
+  switch (library.rulesStatus?.source) {
+    case 'bundled':
+      return '内置'
+    case 'cached':
+      return '本地缓存'
+    case 'remote':
+      return '在线更新'
+    default:
+      return '内置'
+  }
+})
+
+const rulesLastCheck = computed<string | null>(() => {
+  const t = library.rulesStatus?.lastCheck
+  if (!t) return null
+  const d = new Date(t)
+  return Number.isNaN(d.getTime()) ? t : d.toLocaleString()
+})
+
+onMounted(async () => {
+  try {
+    settings.value = settings.value ?? (await backend.getSettings())
+    rulesUrl.value = settings.value?.rulesUrl ?? ''
+  } catch {
+    // backend not reachable (e.g. browser preview)
+  }
+  try {
+    await library.refreshRulesStatus()
+  } catch {
+    // ignore
+  }
+})
+
+async function saveRulesUrl(): Promise<void> {
+  rulesSaving.value = true
+  try {
+    settings.value = await backend.setSettings({ rulesUrl: rulesUrl.value.trim() })
+    rulesUrl.value = settings.value.rulesUrl
+    toast.info('已保存')
+    await library.refreshRulesStatus()
+  } catch (e) {
+    toast.error('保存失败：' + errorMessage(e))
+  } finally {
+    rulesSaving.value = false
+  }
+}
+
+async function checkRules(): Promise<void> {
+  rulesChecking.value = true
+  try {
+    const result = await library.updateRules()
+    if (result.status === 'failed') toast.error(result.message)
+    else toast.info(result.message)
+  } catch (e) {
+    toast.error('检查失败：' + errorMessage(e))
+  } finally {
+    rulesChecking.value = false
+  }
+}
 </script>
 
 <template>
@@ -115,6 +185,45 @@ const updateText = computed<string | null>(() => {
           <div class="muted small">重新查看首次使用的引导步骤</div>
         </div>
         <button class="btn diag-btn" @click="onboarding.reopen()">重新查看新手引导</button>
+      </div>
+    </div>
+
+    <div class="card group">
+      <div class="g-title">游戏规则库</div>
+      <div class="setting">
+        <div>
+          <div class="s-name">
+            当前版本：v{{ library.rulesStatus?.version ?? '—' }}（{{ rulesSourceLabel }}）
+          </div>
+          <div class="muted small">{{ library.rulesStatus?.gameCount ?? 0 }} 个游戏</div>
+          <div v-if="rulesLastCheck" class="muted small">上次检查：{{ rulesLastCheck }}</div>
+          <div v-if="library.rulesStatus?.lastError" class="small danger">
+            {{ library.rulesStatus.lastError }}
+          </div>
+          <div v-else-if="library.rulesStatus?.lastResult" class="muted small">
+            {{ library.rulesStatus.lastResult }}
+          </div>
+        </div>
+      </div>
+      <div class="setting">
+        <div class="rules-input">
+          <div class="s-name">规则更新地址</div>
+          <input
+            v-model="rulesUrl"
+            class="input"
+            placeholder="https://…/game-rules.json，留空则不联网更新"
+          />
+        </div>
+        <div class="rules-actions">
+          <button class="btn diag-btn" :disabled="rulesSaving" @click="saveRulesUrl">保存</button>
+          <button
+            class="btn btn-primary diag-btn"
+            :disabled="!rulesUrl.trim() || rulesChecking"
+            @click="checkRules"
+          >
+            {{ rulesChecking ? '检查中…' : '立即检查' }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -194,6 +303,9 @@ const updateText = computed<string | null>(() => {
 .warn {
   color: var(--warn);
 }
+.danger {
+  color: var(--danger);
+}
 .diag-btn {
   flex: none;
   height: 36px;
@@ -256,6 +368,20 @@ const updateText = computed<string | null>(() => {
 }
 .switch input:checked + .track .thumb {
   transform: translateX(18px);
+}
+.rules-input {
+  flex: 1;
+  min-width: 0;
+  margin-right: 14px;
+}
+.rules-input .input {
+  margin-top: 8px;
+  width: 100%;
+}
+.rules-actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
 }
 .about {
   display: flex;

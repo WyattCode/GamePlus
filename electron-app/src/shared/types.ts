@@ -205,3 +205,59 @@ export interface UiPrefs {
   /** True once the user has completed (or skipped) the first-run onboarding. */
   onboardingDone: boolean
 }
+
+/** One game found by scanning the local machine's launchers/registries. */
+export interface DetectedGame {
+  /** Launcher the game was found in, e.g. "Steam", "Epic", "Battle.net". */
+  source: string
+  /** Launcher-specific id (appid, catalog item id, …). */
+  sourceId: string
+  /** Name as reported by the launcher. */
+  name: string
+  /** Install directory, when known. */
+  installDir: string | null
+  /** Executable file names (no path) that identify the game. */
+  executables: string[]
+  /** Matched library game id, or null when the game is not in the library yet. */
+  gameId: string | null
+  /** Matched library game name, or null when unmatched. */
+  gameName: string | null
+  /** How the match was made: "process" (进程) or "name" (名称); null when unmatched. */
+  matchedBy: 'process' | 'name' | null
+}
+
+/** Result of a local game-library scan. */
+export interface LibraryScanResult {
+  games: DetectedGame[]
+  /** Non-fatal errors (unreadable registry keys, missing launchers, …). */
+  errors: string[]
+  /** ISO timestamp of the scan. */
+  scannedAt: string
+}
+
+/** Where the active game-rules set came from. */
+export type RulesSource = 'bundled' | 'cached' | 'remote'
+
+/** Current state of the game-rules library. */
+export interface RulesStatus {
+  version: string
+  source: RulesSource
+  gameCount: number
+  /** ISO timestamp of the last successful check, or null. */
+  lastCheck: string | null
+  /** Short user-facing reason for the last failure, or null. */
+  lastError: string | null
+  /** Short user-facing result of the last check, or null. */
+  lastResult: string | null
+  /** Configured remote URL; empty = disabled. */
+  url: string
+}
+
+/** Result of a rules update check. */
+export interface RulesUpdateResult {
+  status: 'updated' | 'upToDate' | 'failed'
+  message: string
+  version: string
+  /** Full game list after the update (unchanged when status is not "updated"). */
+  games: Game[]
+}

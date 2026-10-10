@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
 import GameEditorDialog from '@/components/GameEditorDialog.vue'
+import LibraryScanDialog from '@/components/LibraryScanDialog.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useAccelStore } from '@/stores/accel'
 import { useToastStore, errorMessage } from '@/stores/toast'
@@ -20,6 +21,7 @@ const activeCat = ref('全部')
 
 const editorOpen = ref(false)
 const editing = ref<Game | null>(null)
+const scanOpen = ref(false)
 
 function openAdd(): void {
   editing.value = null
@@ -91,7 +93,10 @@ function pick(g: Game): void {
         <h1 class="page-title">游戏库</h1>
         <p class="page-sub">{{ library.games.length }} 款游戏 · 点击卡片开始加速</p>
       </div>
-      <button class="btn btn-primary" @click="openAdd"><AppIcon name="plus" :size="18" /> 添加游戏</button>
+      <div class="head-actions">
+        <button class="btn" @click="scanOpen = true"><AppIcon name="search" :size="18" /> 扫描本机游戏</button>
+        <button class="btn btn-primary" @click="openAdd"><AppIcon name="plus" :size="18" /> 添加游戏</button>
+      </div>
     </div>
 
     <div class="toolbar">
@@ -135,6 +140,7 @@ function pick(g: Game): void {
     </div>
 
     <GameEditorDialog :open="editorOpen" :game="editing" @close="editorOpen = false" @save="onSave" />
+    <LibraryScanDialog :open="scanOpen" @close="scanOpen = false" />
   </div>
 </template>
 
@@ -147,6 +153,10 @@ function pick(g: Game): void {
   align-items: flex-end;
   justify-content: space-between;
   margin-bottom: 18px;
+}
+.head-actions {
+  display: flex;
+  gap: 10px;
 }
 .toolbar {
   margin-bottom: 14px;

@@ -4,8 +4,11 @@ import type {
   EffectReport,
   EngineSettings,
   Game,
+  LibraryScanResult,
   LogEntry,
   NodeRanking,
+  RulesStatus,
+  RulesUpdateResult,
   Server,
   Subscription,
   UpdateInfo
@@ -20,7 +23,9 @@ const METHOD_TIMEOUTS: Record<string, number> = {
   'servers.ping': 60_000,
   'nodes.rank': 60_000,
   'accel.start': 60_000,
-  'diag.run': 30_000
+  'diag.run': 30_000,
+  'library.scan': 60_000,
+  'rules.update': 30_000
 }
 
 // Module-level gate: nothing may spawn/elevate the sidecar until the app explicitly allows it. The
@@ -292,5 +297,21 @@ export class WebSocketBackend implements Backend {
 
   fixDiagnostic(action: string): Promise<{ fixed: boolean }> {
     return this.call('diag.fix', { action })
+  }
+
+  scanLibrary(): Promise<LibraryScanResult> {
+    return this.call('library.scan')
+  }
+
+  addDetectedGame(name: string, executables: string[], source?: string): Promise<Game[]> {
+    return this.call('library.addDetected', { name, executables, source: source ?? null })
+  }
+
+  rulesStatus(): Promise<RulesStatus> {
+    return this.call('rules.status')
+  }
+
+  updateRules(): Promise<RulesUpdateResult> {
+    return this.call('rules.update')
   }
 }

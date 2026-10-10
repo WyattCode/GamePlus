@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { Game, Server, Subscription } from '@shared/types'
+import type {
+  DetectedGame,
+  Game,
+  LibraryScanResult,
+  RulesStatus,
+  RulesUpdateResult,
+  Server,
+  Subscription
+} from '@shared/types'
 import { backend } from '@/api/backend'
 
 export const useLibraryStore = defineStore('library', () => {
@@ -9,6 +17,10 @@ export const useLibraryStore = defineStore('library', () => {
   const subscriptions = ref<Subscription[]>([])
   const loaded = ref(false)
   const pinging = ref(false)
+
+  const scanResult = ref<LibraryScanResult | null>(null)
+  const scanning = ref(false)
+  const rulesStatus = ref<RulesStatus | null>(null)
 
   async function load(): Promise<void> {
     if (loaded.value) return
@@ -112,12 +124,44 @@ export const useLibraryStore = defineStore('library', () => {
     return failed
   }
 
+  /** Scans the local machine for installed games. Result is kept in `scanResult`. */
+  async function scan(): Promise<LibraryScanResult> {
+    scanning.value = true
+    try {
+      const result = await backend.scanLibrary()
+      scanResult.value = result
+      return result
+    } finally {
+      scanning.value = false
+    }
+  }
+
+  /** Adds a detected game to the library and refreshes the game list. */
+  async function addDetected(d: DetectedGame): Promise<void> {
+    games.value = await backend.addDetectedGame(d.name, d.executables, d.source)
+  }
+
+  async function refreshRulesStatus(): Promise<void> {
+    rulesStatus.value = await backend.rulesStatus()
+  }
+
+  /** Checks the remote rules source; replaces the game list when the rules were updated. */
+  async function updateRules(): Promise<RulesUpdateResult> {
+    const result = await backend.updateRules()
+    if (result.status === 'updated') games.value = result.games
+    await refreshRulesStatus()
+    return result
+  }
+
   return {
     games,
     servers,
     subscriptions,
     loaded,
     pinging,
+    scanResult,
+    scanning,
+    rulesStatus,
     sortedGames,
     load,
     reloadServers,
@@ -132,6 +176,10 @@ export const useLibraryStore = defineStore('library', () => {
     addSubscription,
     removeSubscription,
     updateSubscription,
-    updateAllSubscriptions
+    updateAllSubscriptions,
+    scan,
+    addDetected,
+    refreshRulesStatus,
+    updateRules
   }
 })

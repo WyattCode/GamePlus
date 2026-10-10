@@ -34,9 +34,18 @@ win:
   #   Leave unset to skip signing (installer will trigger a SmartScreen "unknown publisher" warning).
   forceCodeSigning: false
 nsis:
+  # Per-machine install into Program Files: the app registers a highest-privileges logon scheduled
+  # task (\Game+\AutoStart) that runs Game+.exe. A per-user install would live in a user-writable
+  # folder, so any user-level process could replace the exe and gain admin at next logon. Installing
+  # under Program Files (admin-only writable) is what makes the autostart task safe.
   oneClick: false
-  perMachine: false
+  perMachine: true
+  allowElevation: true
+  # Choosing a folder outside Program Files still works, but disables 开机启动 (the backend refuses
+  # to create the autostart task for a user-writable exe path).
   allowToChangeInstallationDirectory: true
+  # Custom NSIS hooks: detect/clean up an older per-user install and its stale autostart task.
+  include: build/installer.nsh
   shortcutName: Game+
   # Show the GPL-3.0 licence in the installer.
   license: ../LICENSE

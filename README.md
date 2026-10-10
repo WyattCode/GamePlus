@@ -88,6 +88,28 @@ user-supplied. Auto update accepts either a manifest JSON or GitHub Releases; th
 in [`NetchModern/docs/game-rules.md`](NetchModern/docs/game-rules.md). The project plans to host the
 manifest and rules on a public release repo or OSS later.
 
+## 安装位置与开机启动 / Install location & launch at login
+
+安装程序会为**所有用户**安装，默认目录是 `C:\Program Files\Game+`，安装过程需要一次管理员权限
+（UAC 提示）。安装时可以在安装向导中更改安装目录，但「开机启动」依赖一个以**最高权限**在登录时
+运行的 Windows **计划任务**（`\Game+\AutoStart`），它直接运行 `Game+.exe`。只有把程序放在
+Program Files 这类**仅管理员可写**的目录里，才能保证普通用户进程无法替换该 exe 并借此在下次登录
+时获得管理员权限；因此后端只在这种情况下才允许创建/保留该计划任务。如果你在安装时选择了
+Program Files 之外的目录，或者使用解压版/便携版运行，**开机启动**开关会被禁用并给出说明。从旧的
+按用户安装（`%LOCALAPPDATA%\Programs\Game+`）升级时，安装程序会自动卸载旧版本并删除其旧的自动
+启动任务，升级完成后请在 **设置** 中重新开启开机启动。程序启动时也会自动删除指向其他路径或用户
+可写路径的自动启动任务；卸载时会一并删除该任务。
+
+The installer installs for **all users** into `C:\Program Files\Game+` and requires administrator
+rights (one UAC prompt). 开机启动 (launch at login) uses a Windows **scheduled task** that runs with
+highest privileges at logon — so there is no UAC prompt at each login — and is therefore only allowed
+when Game+ is installed in an admin-only-writable folder under Program Files. If you choose another
+folder during install, or run the unpacked/portable build, the 开机启动 switch is disabled with an
+explanation. When upgrading from an older per-user install (`%LOCALAPPDATA%\Programs\Game+`), the
+installer automatically uninstalls the old copy and removes its old autostart task — re-enable
+开机启动 in Settings afterwards. At startup the app also removes any autostart task that points at a
+different or user-writable path, and uninstalling removes the task.
+
 ## 安装包未签名 / Unsigned installer
 
 安装包**没有代码签名**。首次运行时 Windows SmartScreen 会提示「Windows 已保护你的电脑」：

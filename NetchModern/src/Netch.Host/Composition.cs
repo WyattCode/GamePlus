@@ -8,6 +8,7 @@ using Netch.Core.Models.Servers;
 using Netch.Core.Services;
 using Netch.Core.Services.AutoStart;
 using Netch.Core.Services.Diagnostics;
+using Netch.Core.Services.History;
 using Netch.Core.Services.Library;
 using Netch.Core.Services.Rules;
 
@@ -79,6 +80,18 @@ internal static class Composition
             () => sp.GetRequiredService<ISettingsService>().Settings.Advanced,
             sp.GetRequiredService<IBaselineStore>()));
 
+        // Per-game acceleration history. The store owns its own lock; the recorder subscribes to the
+        // accelerator's StateChanged and appends one session per completed acceleration. GameServerChoice
+        // is a ConcurrentDictionary, so the recorder can read it lock-free from the accelerator thread.
+        services.AddSingleton<IAccelHistoryStore>(_ =>
+            new JsonAccelHistoryStore(Path.Combine(AppPaths.DataDirectory, "accel-history.json")));
+        services.AddSingleton(sp => new AccelHistoryRecorder(
+            sp.GetRequiredService<IAcceleratorService>(),
+            sp.GetRequiredService<IAccelHistoryStore>(),
+            () => DateTime.Now,
+            gameId => sp.GetRequiredService<ISettingsService>().Settings.GameServerChoice.GetValueOrDefault(gameId),
+            sp.GetRequiredService<ILogService>()));
+
         // One-click diagnostics: environment checks + plain-Chinese explanations.
         services.AddSingleton<IDiagnosticEnvironment>(_ =>
             new WindowsDiagnosticEnvironment(new WindowsProxySettingsStore()));
@@ -117,7 +130,13 @@ internal static class Composition
             CurrentUserName,
             Path.GetTempPath()));
 
-        return services.BuildServiceProvider();
+        var provider = services.BuildServiceProvider();
+
+        // Instantiate the recorder eagerly so it subscribes to StateChanged before the first
+        // acceleration starts (otherwise the first session would be missed).
+        provider.GetRequiredService<AccelHistoryRecorder>();
+
+        return provider;
     }
 
     /// <summary>

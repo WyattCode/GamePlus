@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import AppIcon from './AppIcon.vue'
 import { useAppStore } from '@/stores/app'
 import { useAccelStore } from '@/stores/accel'
+import { useI18n } from '@/i18n'
 
 const app = useAppStore()
 const accel = useAccelStore()
+const { t } = useI18n()
 const maximized = ref(false)
 
 const inElectron = typeof window !== 'undefined' && !!window.gameplus
@@ -35,12 +37,18 @@ function closeWindow(): void {
   window.gameplus.window.close()
 }
 
-const statusText = {
-  idle: '未连接',
-  connecting: '连接中',
-  accelerating: '加速中',
-  stopping: '停止中'
-} as const
+const statusText = computed(() => {
+  switch (accel.status.state) {
+    case 'connecting':
+      return t('status.connecting')
+    case 'accelerating':
+      return t('status.accelerating')
+    case 'stopping':
+      return t('status.stopping')
+    default:
+      return t('status.idle')
+  }
+})
 
 function cycleTheme(): void {
   app.setTheme(app.effective() === 'dark' ? 'light' : 'dark')
@@ -53,23 +61,23 @@ function cycleTheme(): void {
       <div class="logo"><AppIcon name="bolt" :size="17" /></div>
       <span class="name">Game+</span>
       <span class="dot" :class="accel.status.state" />
-      <span class="status">{{ statusText[accel.status.state] }}</span>
+      <span class="status">{{ statusText }}</span>
     </div>
 
     <div class="drag-spacer" />
 
     <div class="controls">
-      <button class="tb-btn" title="切换主题" @click="cycleTheme">
+      <button class="tb-btn" :title="t('titlebar.theme.toggle')" @click="cycleTheme">
         <AppIcon :name="app.effective() === 'dark' ? 'sun' : 'moon'" :size="17" />
       </button>
       <template v-if="inElectron">
-        <button class="tb-btn" title="最小化" @click="minimize">
+        <button class="tb-btn" :title="t('titlebar.window.minimize')" @click="minimize">
           <AppIcon name="minimize" :size="16" />
         </button>
-        <button class="tb-btn" title="最大化" @click="toggleMaximize">
+        <button class="tb-btn" :title="t('titlebar.window.maximize')" @click="toggleMaximize">
           <AppIcon :name="maximized ? 'restore' : 'maximize'" :size="15" />
         </button>
-        <button class="tb-btn close" title="关闭" @click="closeWindow">
+        <button class="tb-btn close" :title="t('titlebar.window.close')" @click="closeWindow">
           <AppIcon name="close" :size="16" />
         </button>
       </template>

@@ -5,6 +5,7 @@ using Netch.Core.Models.Servers;
 using Netch.Core.Models.Settings;
 using Netch.Core.Services;
 using Netch.Core.Services.Diagnostics;
+using Netch.Core.Services.History;
 using Netch.Core.Services.Library;
 
 namespace Netch.Host;
@@ -62,6 +63,10 @@ internal record RulesStatusDto(int Version, string Source, int GameCount, string
     string? LastError, string? LastResult, string Url);
 
 internal record RulesUpdateDto(string Status, string Message, int Version, GameDto[] Games);
+
+internal record AccelSessionDto(string Id, string GameId, string GameName, string? NodeName,
+    string? Mode, string? ServerChoice, string StartedAt, string? EndedAt, int DurationSec,
+    int? BaselineMs, int? AcceleratedMs, int? LatencyPct, string? Summary);
 
 internal static class Mapping
 {
@@ -285,6 +290,11 @@ internal static class Mapping
 
     public static LibraryScanDto ToDto(ScanResult r) =>
         new(r.Games.Select(ToDto).ToArray(), r.Errors.ToArray(), r.ScannedAtUtc.ToString("o"));
+
+    public static AccelSessionDto ToDto(AccelSession s) =>
+        new(s.Id, s.GameId, s.GameName, s.NodeName, s.Mode, s.ServerChoice,
+            s.StartedAt.ToString("o"), s.EndedAt?.ToString("o"), s.DurationSec,
+            s.BaselineMs, s.AcceleratedMs, s.LatencyPct, s.Summary);
 
     private static string StatusName(DiagnosticStatus s) => s switch
     {

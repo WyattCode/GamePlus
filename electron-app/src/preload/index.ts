@@ -57,6 +57,17 @@ const api = {
       return () => ipcRenderer.removeListener('tray:action', listener)
     }
   },
+  mini: {
+    // Returns an unsubscribe function so callers can detach the listener.
+    onInfo: (cb: (info: TrayInfo) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, info: TrayInfo): void => cb(info)
+      ipcRenderer.on('mini:info', listener)
+      return () => ipcRenderer.removeListener('mini:info', listener)
+    },
+    action: (a: TrayAction): Promise<void> => ipcRenderer.invoke('mini:action', a),
+    openMain: (): Promise<void> => ipcRenderer.invoke('mini:open-main'),
+    hide: (): Promise<void> => ipcRenderer.invoke('mini:hide')
+  },
   update: {
     getState: (): Promise<UpdateState | null> => ipcRenderer.invoke('update:get-state'),
     check: (): Promise<UpdateState | null> => ipcRenderer.invoke('update:check'),

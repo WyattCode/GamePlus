@@ -8,6 +8,7 @@ using Netch.Core.Models.Settings;
 using Netch.Core.Services;
 using Netch.Core.Services.AutoStart;
 using Netch.Core.Services.Diagnostics;
+using Netch.Core.Services.History;
 using Netch.Core.Services.Library;
 using Netch.Core.Services.Rules;
 
@@ -49,6 +50,7 @@ internal sealed class RpcRouter
     private GameLibraryScanner LibraryScanner => _sp.GetRequiredService<GameLibraryScanner>();
     private GameRulesService Rules => _sp.GetRequiredService<GameRulesService>();
     private AutoStartService AutoStart => _sp.GetRequiredService<AutoStartService>();
+    private IAccelHistoryStore History => _sp.GetRequiredService<IAccelHistoryStore>();
 
     /// <summary>Current acceleration state (used by the auto-acceleration policy).</summary>
     internal AccelerationState CurrentAccelState => Accel.State;
@@ -75,6 +77,23 @@ internal sealed class RpcRouter
             case "logs.recent":
                 // LogService.Recent is thread-safe (ConcurrentQueue snapshot), so no state lock needed.
                 return Logs.Recent.Select(Mapping.ToDto).ToArray();
+
+            case "history.list":
+            {
+                // The store has its own lock; do not take the state lock.
+                var gameId = JsonParams.OptionalString(@params, "gameId");
+                var limit = JsonParams.OptionalInt(@params, "limit") ?? 50;
+                if (limit <= 0) limit = 50;
+                if (limit > JsonAccelHistoryStore.MaxSessions) limit = JsonAccelHistoryStore.MaxSessions;
+                return History.List(gameId, limit).Select(Mapping.ToDto).ToArray();
+            }
+
+            case "history.clear":
+            {
+                var gameId = JsonParams.OptionalString(@params, "gameId");
+                History.Clear(gameId);
+                return new { ok = true };
+            }
 
             case "servers.ping":
             {
@@ -103,9 +122,10 @@ internal sealed class RpcRouter
                     ? null
                     : await WithStateValue(() => Games.Games.FirstOrDefault(g => g.Id == gameId), ct);
 
-                // Read the penalty + per-game server choice under the state lock: GameServerChoice is a
-                // plain Dictionary written by games.setServer under the same lock, so reading it outside
-                // would race with a concurrent write. No network I/O happens inside this block.
+                // Read the penalty + per-game server choice under the state lock. GameServerChoice is a
+                // ConcurrentDictionary (written by games.setServer under the same lock, read lock-free by
+                // the accelerator's history recorder), so reads here are safe either way. No network I/O
+                // happens inside this block.
                 var (penalty, choice) = await WithStateValue(() =>
                 {
                     var p = SettingsSvc.Settings.Advanced.RegionPenaltyMs;
@@ -873,8 +893,10 @@ internal sealed class RpcRouter
             pool = await WithStateValue(() => Servers.Servers.ToList(), ct);
         }
 
-        // Read the penalty + per-game server choice under the state lock (GameServerChoice is a plain
-        // Dictionary written by games.setServer under the same lock). No network I/O inside this block.
+        // Read the penalty + per-game server choice under the state lock. GameServerChoice is a
+        // ConcurrentDictionary (written by games.setServer under the same lock, read lock-free by the
+        // accelerator's history recorder), so reads here are safe either way. No network I/O inside
+        // this block.
         var (penalty, choice) = await WithStateValue(() =>
         {
             var p = SettingsSvc.Settings.Advanced.RegionPenaltyMs;

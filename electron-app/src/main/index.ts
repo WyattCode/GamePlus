@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, nativeTheme, Tray, Menu, nativeImage, Notification } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, nativeTheme, Tray, Menu, nativeImage, Notification, screen } from 'electron'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -13,12 +13,16 @@ import {
   startTelemetry,
   stopTelemetry
 } from './telemetry'
-import type { TrayInfo, UpdateConfig } from '../shared/types'
+import type { TrayAction, TrayInfo, UpdateConfig } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
+let miniWindow: BrowserWindow | null = null
+let miniHiddenAt = 0
 let tray: Tray | null = null
 let isQuitting = false
 let updater: Updater | null = null
+// Last status snapshot received from the renderer via `tray:update`; replayed to the mini window on load.
+let lastTrayInfo: TrayInfo | null = null
 
 // Crash handlers must be installed before app.whenReady() so early failures are captured.
 installCrashHandlers()
@@ -93,6 +97,7 @@ function updateTray(info: TrayInfo | null): void {
         }
       },
       { type: 'separator' },
+      { label: '迷你窗口', click: () => showMiniWindow() },
       { label: '显示 Game+', click: showMainWindow },
       {
         label: '退出',
@@ -105,12 +110,139 @@ function updateTray(info: TrayInfo | null): void {
   )
 }
 
+/** Forwards the latest status snapshot to the mini window (if it exists). */
+function pushMiniInfo(info: TrayInfo | null): void {
+  if (!info) return
+  if (miniWindow && !miniWindow.isDestroyed()) {
+    miniWindow.webContents.send('mini:info', info)
+  }
+}
+
+/** Positions the mini window just above (or below) the tray icon, clamped to the display work area. */
+function positionMiniWindow(): void {
+  if (!miniWindow || !tray) return
+  const trayBounds = tray.getBounds()
+  const winBounds = miniWindow.getBounds()
+  const display = screen.getDisplayNearestPoint({
+    x: Math.round(trayBounds.x + trayBounds.width / 2),
+    y: Math.round(trayBounds.y + trayBounds.height / 2)
+  })
+  const work = display.workArea
+  const gap = 8
+
+  let x = Math.round(trayBounds.x + trayBounds.width / 2 - winBounds.width / 2)
+  // Windows taskbar is usually at the bottom: place the window above the icon when there is room.
+  const spaceAbove = trayBounds.y - work.y
+  let y =
+    spaceAbove >= winBounds.height + gap
+      ? trayBounds.y - winBounds.height - gap
+      : trayBounds.y + trayBounds.height + gap
+
+  x = Math.min(Math.max(x, work.x), work.x + work.width - winBounds.width)
+  y = Math.min(Math.max(y, work.y), work.y + work.height - winBounds.height)
+  miniWindow.setPosition(x, y)
+}
+
+/** Shows (creating if needed) the mini window near the tray icon. */
+function showMiniWindow(): void {
+  if (!miniWindow || miniWindow.isDestroyed()) {
+    createMiniWindow()
+    return
+  }
+  positionMiniWindow()
+  miniWindow.show()
+  miniWindow.focus()
+}
+
+/** Toggles the mini window: hide when visible, otherwise show near the tray icon. */
+function toggleMiniWindow(): void {
+  // Clicking the tray icon blurs (and so hides) a visible mini window first; don't re-open it.
+  if (Date.now() - miniHiddenAt < 300) return
+  if (miniWindow && !miniWindow.isDestroyed() && miniWindow.isVisible()) {
+    miniWindow.hide()
+    return
+  }
+  showMiniWindow()
+}
+
+function createMiniWindow(): void {
+  if (miniWindow && !miniWindow.isDestroyed()) return
+  const win = new BrowserWindow({
+    width: 300,
+    height: 190,
+    frame: false,
+    resizable: false,
+    show: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    transparent: false,
+    backgroundColor: '#f5f6f8',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: true,
+      contextIsolation: true
+    }
+  })
+  miniWindow = win
+
+  win.on('blur', () => {
+    miniHiddenAt = Date.now()
+    if (!win.isDestroyed()) win.hide()
+  })
+  // First open: show once the page is ready (later opens go through showMiniWindow()).
+  win.once('ready-to-show', () => {
+    positionMiniWindow()
+    win.show()
+    win.focus()
+  })
+  win.on('closed', () => {
+    if (miniWindow === win) miniWindow = null
+  })
+
+  win.webContents.setWindowOpenHandler((details) => {
+    openExternalIfAllowed(details.url)
+    return { action: 'deny' }
+  })
+
+  // Block in-app navigation away from our own renderer; open allowed http(s) links externally instead.
+  win.webContents.on('will-navigate', (e, url) => {
+    const current = win.webContents.getURL()
+    if (url === current) return
+    try {
+      const target = new URL(url)
+      const base = new URL(current)
+      if (target.origin === base.origin && target.protocol !== 'file:') return
+      if (target.protocol === 'file:' && base.protocol === 'file:') return
+    } catch {
+      // fall through to deny
+    }
+    e.preventDefault()
+    openExternalIfAllowed(url)
+  })
+
+  // Replay the last known status once the mini renderer is ready to receive it.
+  win.webContents.on('did-finish-load', () => {
+    if (lastTrayInfo) win.webContents.send('mini:info', lastTrayInfo)
+  })
+
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/mini.html`)
+  } else {
+    win.loadFile(join(__dirname, '../renderer/mini.html'))
+  }
+}
+
 function createTray(): void {
   if (tray) return
   tray = new Tray(nativeImage.createFromDataURL(trayIcon32))
   updateTray(null)
-  tray.on('click', showMainWindow)
-  tray.on('double-click', showMainWindow)
+  // Single left click toggles the mini window; double-click opens the main window.
+  tray.on('click', () => toggleMiniWindow())
+  tray.on('double-click', () => {
+    if (miniWindow && !miniWindow.isDestroyed()) miniWindow.hide()
+    showMainWindow()
+  })
 }
 
 /** Open an http(s) URL externally; ignore anything else (file:, javascript:, custom schemes). */
@@ -240,7 +372,26 @@ function registerWindowControls(): void {
     if (state !== 'idle' && state !== 'connecting' && state !== 'accelerating' && state !== 'stopping') return
     const gameName = typeof i.gameName === 'string' && i.gameName.length <= 100 ? i.gameName : null
     const latency = typeof i.latency === 'number' && Number.isFinite(i.latency) ? i.latency : 0
-    updateTray({ state, gameName, latency })
+    const snapshot: TrayInfo = { state, gameName, latency }
+    lastTrayInfo = snapshot
+    updateTray(snapshot)
+    pushMiniInfo(snapshot)
+  })
+
+  // --- Mini window IPC (only accepted from the mini window's own webContents) ---
+  ipcMain.handle('mini:action', (event, action: unknown) => {
+    if (event.sender !== miniWindow?.webContents) return
+    if (action !== 'toggle' && action !== 'diagnose') return
+    sendTrayAction(action as TrayAction)
+  })
+  ipcMain.handle('mini:open-main', (event) => {
+    if (event.sender !== miniWindow?.webContents) return
+    miniWindow?.hide()
+    showMainWindow()
+  })
+  ipcMain.handle('mini:hide', (event) => {
+    if (event.sender !== miniWindow?.webContents) return
+    miniWindow?.hide()
   })
 
   // --- Client auto-update ---
@@ -340,6 +491,10 @@ if (!gotSingleInstanceLock) {
     e.preventDefault()
     if (quitStarted) return
     quitStarted = true
+    if (miniWindow && !miniWindow.isDestroyed()) {
+      miniWindow.destroy()
+      miniWindow = null
+    }
     stopSidecar().finally(() => app.exit(0))
   })
 

@@ -33,6 +33,14 @@ export default defineConfig({
         '@shared': resolve('src/shared')
       }
     },
-    plugins: [vue()]
+    plugins: [vue()],
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/renderer/index.html'),
+          mini: resolve('src/renderer/mini.html')
+        }
+      }
+    }
   }
 })

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import AccelHistoryCard from '@/components/AccelHistoryCard.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import EffectChart from '@/components/EffectChart.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
@@ -244,6 +245,19 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
     error.value = errorMessage(e)
   }
 }
+
+// --- acceleration history (per-game) ---
+
+// Bumped whenever a session finishes (accelerating/stopping → idle) so the history card reloads.
+const historyRefreshKey = ref(0)
+watch(
+  () => accel.status.state,
+  (state, prev) => {
+    if (state === 'idle' && (prev === 'accelerating' || prev === 'stopping')) {
+      historyRefreshKey.value++
+    }
+  }
+)
 </script>
 
 <template>
@@ -469,6 +483,13 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
           </button>
         </div>
       </div>
+
+      <!-- Per-game acceleration history -->
+      <AccelHistoryCard
+        :game-id="accel.selectedGame.id"
+        :game-name="accel.selectedGame.name"
+        :refresh-key="historyRefreshKey"
+      />
 
       <!-- Traffic -->
       <div class="traffic">

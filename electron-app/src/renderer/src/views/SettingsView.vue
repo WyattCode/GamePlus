@@ -13,6 +13,7 @@ import { useToastStore, errorMessage } from '@/stores/toast'
 import { backend } from '@/api/backend'
 import { getPrefs, setPrefs } from '@/api/prefs'
 import { DEFAULT_RELEASE_CHANNEL } from '@shared/release-channel'
+import { useI18n, type Locale } from '@/i18n'
 import type { AutoStartState, EngineSettings } from '@shared/types'
 
 const app = useAppStore()
@@ -21,11 +22,20 @@ const library = useLibraryStore()
 const onboarding = useOnboardingStore()
 const toast = useToastStore()
 const router = useRouter()
-const themes = [
-  { v: 'light', label: '浅色', icon: 'sun' },
-  { v: 'dark', label: '深色', icon: 'moon' },
-  { v: 'system', label: '跟随系统', icon: 'globe' }
-] as const
+const { t, locale, setLocale } = useI18n()
+
+const themes = computed(
+  () =>
+    [
+      { v: 'light', label: t('settings.theme.light'), icon: 'sun' },
+      { v: 'dark', label: t('settings.theme.dark'), icon: 'moon' },
+      { v: 'system', label: t('settings.theme.system'), icon: 'globe' }
+    ] as const
+)
+
+function onLocaleChange(e: Event): void {
+  setLocale((e.target as HTMLSelectElement).value as Locale)
+}
 
 const settings = ref<EngineSettings | null>(null)
 
@@ -52,21 +62,21 @@ const rulesChecking = ref(false)
 const rulesSourceLabel = computed<string>(() => {
   switch (library.rulesStatus?.source) {
     case 'bundled':
-      return '内置'
+      return t('settings.rules.source.bundled')
     case 'cached':
-      return '本地缓存'
+      return t('settings.rules.source.cached')
     case 'remote':
-      return '在线更新'
+      return t('settings.rules.source.remote')
     default:
-      return '内置'
+      return t('settings.rules.source.bundled')
   }
 })
 
 const rulesLastCheck = computed<string | null>(() => {
-  const t = library.rulesStatus?.lastCheck
-  if (!t) return null
-  const d = new Date(t)
-  return Number.isNaN(d.getTime()) ? t : d.toLocaleString()
+  const time = library.rulesStatus?.lastCheck
+  if (!time) return null
+  const d = new Date(time)
+  return Number.isNaN(d.getTime()) ? time : d.toLocaleString()
 })
 
 const rulesDefaultApplied = computed(
@@ -96,10 +106,10 @@ async function saveRulesUrl(): Promise<void> {
   try {
     settings.value = await backend.setSettings({ rulesUrl: rulesUrl.value.trim() })
     rulesUrl.value = settings.value.rulesUrl
-    toast.info('已保存')
+    toast.info(t('toast.saved'))
     await library.refreshRulesStatus()
   } catch (e) {
-    toast.error('保存失败：' + errorMessage(e))
+    toast.error(t('toast.saveFailed', { error: errorMessage(e) }))
   } finally {
     rulesSaving.value = false
   }
@@ -112,7 +122,7 @@ async function checkRules(): Promise<void> {
     if (result.status === 'failed') toast.error(result.message)
     else toast.info(result.message)
   } catch (e) {
-    toast.error('检查失败：' + errorMessage(e))
+    toast.error(t('toast.checkFailed', { error: errorMessage(e) }))
   } finally {
     rulesChecking.value = false
   }
@@ -132,7 +142,7 @@ onMounted(async () => {
   try {
     autoStart.value = await backend.getAutoStart()
   } catch {
-    autoStart.value = { enabled: false, supported: false, reason: '无法连接后台服务' }
+    autoStart.value = { enabled: false, supported: false, reason: t('error.backendUnreachable') }
   }
 })
 
@@ -143,7 +153,7 @@ async function toggleAutoStart(enabled: boolean): Promise<void> {
       toast.info(autoStart.value.reason)
     }
   } catch (e) {
-    toast.error('设置失败：' + errorMessage(e))
+    toast.error(t('toast.setFailed', { error: errorMessage(e) }))
     try {
       autoStart.value = await backend.getAutoStart()
     } catch {
@@ -157,42 +167,56 @@ async function toggleStartHidden(v: boolean): Promise<void> {
   try {
     await setPrefs({ startHidden: v })
   } catch (e) {
-    toast.error('保存失败：' + errorMessage(e))
+    toast.error(t('toast.saveFailed', { error: errorMessage(e) }))
   }
 }
 </script>
 
 <template>
   <div class="page">
-    <h1 class="page-title">设置</h1>
+    <h1 class="page-title">{{ t('settings.title') }}</h1>
 
     <div class="card group">
-      <div class="g-title">外观</div>
+      <div class="g-title">{{ t('settings.language.title') }}</div>
       <div class="setting">
         <div>
-          <div class="s-name">主题</div>
-          <div class="muted small">选择浅色 / 深色，或跟随系统</div>
+          <div class="s-name">{{ t('settings.language.name') }}</div>
+          <div class="muted small">{{ t('settings.language.desc') }}</div>
+        </div>
+        <select class="input" :value="locale" @change="onLocaleChange">
+          <option value="zh-CN">{{ t('settings.language.zhCN') }}</option>
+          <option value="en">{{ t('settings.language.en') }}</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="card group">
+      <div class="g-title">{{ t('settings.appearance.title') }}</div>
+      <div class="setting">
+        <div>
+          <div class="s-name">{{ t('settings.theme.name') }}</div>
+          <div class="muted small">{{ t('settings.theme.desc') }}</div>
         </div>
         <div class="seg">
           <button
-            v-for="t in themes"
-            :key="t.v"
+            v-for="th in themes"
+            :key="th.v"
             class="seg-btn"
-            :class="{ active: app.theme === t.v }"
-            @click="app.setTheme(t.v)"
+            :class="{ active: app.theme === th.v }"
+            @click="app.setTheme(th.v)"
           >
-            <AppIcon :name="t.icon" :size="16" /> {{ t.label }}
+            <AppIcon :name="th.icon" :size="16" /> {{ th.label }}
           </button>
         </div>
       </div>
     </div>
 
     <div class="card group">
-      <div class="g-title">通用</div>
+      <div class="g-title">{{ t('settings.general.title') }}</div>
       <div class="setting">
         <div>
-          <div class="s-name">最小化到托盘</div>
-          <div class="muted small">点击关闭时隐藏到系统托盘而非退出</div>
+          <div class="s-name">{{ t('settings.minimizeToTray.name') }}</div>
+          <div class="muted small">{{ t('settings.minimizeToTray.desc') }}</div>
         </div>
         <label class="switch" :class="{ disabled: !settings }">
           <input
@@ -206,21 +230,21 @@ async function toggleStartHidden(v: boolean): Promise<void> {
       </div>
       <div class="setting">
         <div>
-          <div class="s-name">新手引导</div>
-          <div class="muted small">重新查看首次使用的引导步骤</div>
+          <div class="s-name">{{ t('settings.onboarding.name') }}</div>
+          <div class="muted small">{{ t('settings.onboarding.desc') }}</div>
         </div>
-        <button class="btn diag-btn" @click="onboarding.reopen()">重新查看新手引导</button>
+        <button class="btn diag-btn" @click="onboarding.reopen()">
+          {{ t('settings.onboarding.button') }}
+        </button>
       </div>
     </div>
 
     <div class="card group">
-      <div class="g-title">启动与托盘</div>
+      <div class="g-title">{{ t('settings.startup.title') }}</div>
       <div class="setting">
         <div>
-          <div class="s-name">开机自动启动</div>
-          <div class="muted small">
-            通过 Windows 计划任务以管理员权限启动，登录时不再弹出权限确认。
-          </div>
+          <div class="s-name">{{ t('settings.autoStart.name') }}</div>
+          <div class="muted small">{{ t('settings.autoStart.desc') }}</div>
           <div v-if="!autoStart.supported && autoStart.reason" class="muted small">
             {{ autoStart.reason }}
           </div>
@@ -237,8 +261,8 @@ async function toggleStartHidden(v: boolean): Promise<void> {
       </div>
       <div class="setting">
         <div>
-          <div class="s-name">开机启动时最小化到托盘</div>
-          <div class="muted small">开机启动后不显示主窗口，仅在托盘运行</div>
+          <div class="s-name">{{ t('settings.startHidden.name') }}</div>
+          <div class="muted small">{{ t('settings.startHidden.desc') }}</div>
         </div>
         <label class="switch" :class="{ disabled: !autoStart.enabled }">
           <input
@@ -252,8 +276,8 @@ async function toggleStartHidden(v: boolean): Promise<void> {
       </div>
       <div class="setting">
         <div>
-          <div class="s-name">游戏启动时自动加速（总开关）</div>
-          <div class="muted small">关闭后所有游戏的自动加速都不会生效</div>
+          <div class="s-name">{{ t('settings.autoAccelerate.name') }}</div>
+          <div class="muted small">{{ t('settings.autoAccelerate.desc') }}</div>
         </div>
         <label class="switch" :class="{ disabled: !settings }">
           <input
@@ -270,14 +294,23 @@ async function toggleStartHidden(v: boolean): Promise<void> {
     <SplitRoutingCard />
 
     <div class="card group">
-      <div class="g-title">游戏规则库</div>
+      <div class="g-title">{{ t('settings.rules.title') }}</div>
       <div class="setting">
         <div>
           <div class="s-name">
-            当前版本：v{{ library.rulesStatus?.version ?? '—' }}（{{ rulesSourceLabel }}）
+            {{
+              t('settings.rules.version', {
+                version: library.rulesStatus?.version ?? '—',
+                source: rulesSourceLabel
+              })
+            }}
           </div>
-          <div class="muted small">{{ library.rulesStatus?.gameCount ?? 0 }} 个游戏</div>
-          <div v-if="rulesLastCheck" class="muted small">上次检查：{{ rulesLastCheck }}</div>
+          <div class="muted small">
+            {{ t('settings.rules.gameCount', { count: library.rulesStatus?.gameCount ?? 0 }) }}
+          </div>
+          <div v-if="rulesLastCheck" class="muted small">
+            {{ t('settings.rules.lastCheck', { time: rulesLastCheck }) }}
+          </div>
           <div v-if="library.rulesStatus?.lastError" class="small danger">
             {{ library.rulesStatus.lastError }}
           </div>
@@ -288,11 +321,11 @@ async function toggleStartHidden(v: boolean): Promise<void> {
       </div>
       <div class="setting">
         <div class="rules-input">
-          <div class="s-name">规则更新地址</div>
+          <div class="s-name">{{ t('settings.rules.url.name') }}</div>
           <input
             v-model="rulesUrl"
             class="input"
-            placeholder="https://…/game-rules.json，留空则不联网更新"
+            :placeholder="t('settings.rules.url.placeholder')"
           />
         </div>
         <div class="rules-actions">
@@ -301,39 +334,45 @@ async function toggleStartHidden(v: boolean): Promise<void> {
             :disabled="rulesDefaultApplied"
             @click="useDefaultRulesSource"
           >
-            使用默认发布源
+            {{ t('settings.rules.useDefault') }}
           </button>
-          <button class="btn diag-btn" :disabled="rulesSaving" @click="saveRulesUrl">保存</button>
+          <button class="btn diag-btn" :disabled="rulesSaving" @click="saveRulesUrl">
+            {{ t('settings.rules.save') }}
+          </button>
           <button
             class="btn btn-primary diag-btn"
             :disabled="!rulesUrl.trim() || rulesChecking"
             @click="checkRules"
           >
-            {{ rulesChecking ? '检查中…' : '立即检查' }}
+            {{ rulesChecking ? t('settings.rules.checking') : t('settings.rules.check') }}
           </button>
         </div>
       </div>
     </div>
 
     <div class="card group">
-      <div class="g-title">诊断</div>
+      <div class="g-title">{{ t('settings.diagnostics.title') }}</div>
       <div class="setting">
         <div>
-          <div class="s-name">网络诊断</div>
-          <div class="muted small">检查驱动、权限、端口、线路和 DNS 等常见问题</div>
+          <div class="s-name">{{ t('settings.diagnostics.name') }}</div>
+          <div class="muted small">{{ t('settings.diagnostics.desc') }}</div>
         </div>
-        <button class="btn btn-primary diag-btn" @click="diagnostics.open()">开始诊断</button>
+        <button class="btn btn-primary diag-btn" @click="diagnostics.open()">
+          {{ t('settings.diagnostics.button') }}
+        </button>
       </div>
     </div>
 
     <div class="card group">
-      <div class="g-title">高级</div>
+      <div class="g-title">{{ t('settings.advanced.title') }}</div>
       <div class="setting">
         <div>
-          <div class="s-name">高级设置</div>
-          <div class="muted small">TUN DNS、本地端口、选路策略等进阶选项</div>
+          <div class="s-name">{{ t('settings.advanced.name') }}</div>
+          <div class="muted small">{{ t('settings.advanced.desc') }}</div>
         </div>
-        <button class="btn diag-btn" @click="router.push('/settings/advanced')">打开</button>
+        <button class="btn diag-btn" @click="router.push('/settings/advanced')">
+          {{ t('settings.advanced.button') }}
+        </button>
       </div>
     </div>
 
@@ -342,12 +381,12 @@ async function toggleStartHidden(v: boolean): Promise<void> {
     <UpdateCard />
 
     <div class="card group">
-      <div class="g-title">关于</div>
+      <div class="g-title">{{ t('settings.about.title') }}</div>
       <div class="about">
         <div class="logo"><AppIcon name="bolt" :size="22" /></div>
         <div>
           <div class="s-name">Game+ <span class="muted">v{{ version }}</span></div>
-          <div class="muted small">Electron + Vue 3 · 游戏加速器</div>
+          <div class="muted small">{{ t('settings.about.desc') }}</div>
         </div>
       </div>
     </div>

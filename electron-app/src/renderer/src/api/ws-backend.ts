@@ -1,4 +1,5 @@
 import type {
+  AccelSession,
   AccelStatus,
   AutoAccelEvent,
   AutoStartState,
@@ -348,5 +349,13 @@ export class WebSocketBackend implements Backend {
 
   setAutoStart(enabled: boolean): Promise<AutoStartState> {
     return this.call('autostart.set', { enabled })
+  }
+
+  listHistory(gameId?: string, limit?: number): Promise<AccelSession[]> {
+    return this.call('history.list', { gameId: gameId ?? null, limit: limit ?? null })
+  }
+
+  async clearHistory(gameId?: string): Promise<void> {
+    await this.call('history.clear', { gameId: gameId ?? null })
   }
 }

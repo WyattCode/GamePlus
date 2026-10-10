@@ -38,8 +38,10 @@ public partial class AppSettings : ObservableObject
     /// <summary>
     ///     Per-game server choice for games that have both 国服 and 国际服 (gameId → "cn" | "intl").
     ///     A missing entry means "intl" (the default).
+    ///     Concurrent so the accelerator's history recorder can read it lock-free while the RPC path
+    ///     writes it under the state lock.
     /// </summary>
-    public Dictionary<string, string> GameServerChoice { get; set; } = new();
+    public ConcurrentDictionary<string, string> GameServerChoice { get; set; } = new();
 
     /// <summary>
     ///     Extra applications that are additionally proxied or explicitly bypassed in process-capture

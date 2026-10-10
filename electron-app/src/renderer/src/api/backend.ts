@@ -1,4 +1,5 @@
 import type {
+  AccelSession,
   AccelStatus,
   AdvancedSettings,
   AutoAccelEvent,
@@ -76,6 +77,10 @@ export interface Backend {
   updateRules(): Promise<RulesUpdateResult>
   getAutoStart(): Promise<AutoStartState>
   setAutoStart(enabled: boolean): Promise<AutoStartState>
+  /** Per-game acceleration history, newest first. */
+  listHistory(gameId?: string, limit?: number): Promise<AccelSession[]>
+  /** Clears all history, or only one game's when gameId is given. */
+  clearHistory(gameId?: string): Promise<void>
 }
 
 // Re-exported so callers can open the connection gate without importing the transport directly.
@@ -434,6 +439,52 @@ class MockBackend implements Backend {
   }
 
   private mockAutoStart: AutoStartState = { enabled: false, supported: true, reason: null }
+
+  // Deterministic fake history: 6 sessions for the requested game (or a default game id).
+  private mockHistory: AccelSession[] = []
+
+  private buildMockHistory(gameId: string): AccelSession[] {
+    const nodes = ['香港 01', '日本 02', '新加坡 03', '美国 04', '台湾 05', '韩国 06']
+    const durations = [1240, 860, 2450, 320, 1780, 640]
+    const baselines = [128, 142, 96, 210, 118, 155]
+    const accelerated = [62, 71, 58, 88, 66, 74]
+    const base = Date.UTC(2025, 0, 15, 12, 0, 0)
+    const sessions: AccelSession[] = []
+    for (let i = 0; i < 6; i++) {
+      const startedAt = new Date(base - i * 3_600_000)
+      const endedAt = new Date(startedAt.getTime() + durations[i] * 1000)
+      const pct = Math.round((100 * (baselines[i] - accelerated[i])) / baselines[i])
+      sessions.push({
+        id: `mock-${gameId}-${i}`,
+        gameId,
+        gameName: gameId,
+        nodeName: nodes[i],
+        mode: i % 2 === 0 ? 'process' : 'tun',
+        serverChoice: i % 3 === 0 ? 'intl' : null,
+        startedAt: startedAt.toISOString(),
+        endedAt: endedAt.toISOString(),
+        durationSec: durations[i],
+        baselineMs: baselines[i],
+        acceleratedMs: accelerated[i],
+        latencyPct: pct,
+        summary: `参考延迟降低 ${pct}%`
+      })
+    }
+    return sessions
+  }
+
+  async listHistory(gameId?: string, limit?: number): Promise<AccelSession[]> {
+    const id = gameId ?? 'valorant'
+    if (this.mockHistory.length === 0) this.mockHistory = this.buildMockHistory(id)
+    const filtered = gameId ? this.mockHistory.filter((s) => s.gameId === gameId) : this.mockHistory
+    const capped = limit && limit > 0 ? filtered.slice(0, limit) : filtered
+    return structuredClone(capped)
+  }
+
+  async clearHistory(gameId?: string): Promise<void> {
+    if (gameId) this.mockHistory = this.mockHistory.filter((s) => s.gameId !== gameId)
+    else this.mockHistory = []
+  }
 
   async addServerFromLink(link: string): Promise<Server[]> {
     this.mockServers.push({

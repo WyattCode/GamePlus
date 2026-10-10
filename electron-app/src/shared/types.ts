@@ -431,3 +431,29 @@ export interface TrayInfo {
 
 /** Quick action triggered from the tray context menu. */
 export type TrayAction = 'toggle' | 'diagnose'
+
+/** One completed acceleration session (per-game history). */
+export interface AccelSession {
+  id: string
+  gameId: string
+  gameName: string
+  /** Node display name (Remark); never a host/port. */
+  nodeName: string | null
+  /** Capture mode used, e.g. "process" / "tun" / "proxy". */
+  mode: string | null
+  /** Per-game server choice ("cn" | "intl"); null when the game has no choice. */
+  serverChoice: string | null
+  /** ISO timestamp of when acceleration started. */
+  startedAt: string
+  /** ISO timestamp of when acceleration ended; null while still running. */
+  endedAt: string | null
+  durationSec: number
+  /** Direct-connection baseline latency in ms; null when not measured. */
+  baselineMs: number | null
+  /** Accelerated latency in ms; null when not measured. */
+  acceleratedMs: number | null
+  /** Latency improvement percentage; null when not enough data. */
+  latencyPct: number | null
+  /** One-line Chinese summary of the effect measurement. */
+  summary: string | null
+}

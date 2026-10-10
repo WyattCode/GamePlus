@@ -1,5 +1,7 @@
 appId: com.gameplus.app
 productName: Game+
+# Personal-use build: never publish/upload artifacts from a build.
+publish: null
 directories:
   output: dist
   buildResources: build
@@ -24,10 +26,13 @@ win:
     - dir
     - nsis
   artifactName: ${productName}-${version}-${arch}.${ext}
-  # Code signing is wired via the standard electron-builder env vars so no certificate path is baked in:
+  # Signing is optional and never required: without CSC_LINK the installer is simply unsigned and
+  # Windows SmartScreen will warn on first run. Code signing is wired via the standard
+  # electron-builder env vars so no certificate path is baked in:
   #   set CSC_LINK=<path to .pfx or base64 of the cert> and CSC_KEY_PASSWORD=<pw> before `npm run dist`.
   #   When both are set, electron-builder signs Game+.exe, the backend exe/dll and the NSIS installer.
   #   Leave unset to skip signing (installer will trigger a SmartScreen "unknown publisher" warning).
+  forceCodeSigning: false
 nsis:
   oneClick: false
   perMachine: false

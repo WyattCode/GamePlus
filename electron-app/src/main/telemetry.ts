@@ -26,6 +26,10 @@ import type { CrashFileInfo, TelemetryConfig, TelemetryEvent } from '../shared/t
 // the user opts in AND an endpoint is configured. Local crash files are always written (they never
 // leave the machine unless uploaded under the same opt-in rule).
 
+// Personal-use build: uploading is hard-disabled. The uploader code below is kept for a possible
+// future opt-in build; flip this to true to re-enable it.
+const UPLOAD_SUPPORTED = false
+
 const MAX_EVENTS_PER_BATCH = 500
 const MAX_EVENT_LOG_BYTES = 1024 * 1024
 const UPLOAD_TIMEOUT_MS = 10_000
@@ -101,7 +105,8 @@ export function getTelemetryConfig(): TelemetryConfig {
   const t = getPrefs().telemetry
   return {
     enabled: t.enabled,
-    endpoint: t.endpoint,
+    // Personal-use build: no upload endpoint is ever exposed.
+    endpoint: '',
     installId: t.enabled ? readInstallId() : null
   }
 }
@@ -110,7 +115,7 @@ export function getTelemetryConfig(): TelemetryConfig {
 export function setTelemetryConfig(patch: Partial<TelemetryConfig>): TelemetryConfig {
   const clean: Partial<TelemetryConfig> = {}
   if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled
-  if (typeof patch.endpoint === 'string' && isAllowedEndpoint(patch.endpoint)) clean.endpoint = patch.endpoint
+  // The `endpoint` prefs field is kept for compatibility but ignored: this build never uploads.
   setPrefs({ telemetry: clean as TelemetryConfig })
   return getTelemetryConfig()
 }
@@ -343,6 +348,8 @@ export async function openCrashFolder(): Promise<void> {
 
 /** Uploads pending events and crash files. No-op when disabled or no endpoint is configured. */
 export async function flush(): Promise<void> {
+  // Personal-use build: uploading is hard-disabled, nothing ever leaves the machine.
+  if (!UPLOAD_SUPPORTED) return
   const t = getPrefs().telemetry
   if (!t.enabled || t.endpoint.length === 0) return
   const installId = ensureInstallId()
@@ -489,6 +496,10 @@ export function startTelemetry(): void {
   }
   if (flushTimer) clearTimeout(flushTimer)
   if (flushInterval) clearInterval(flushInterval)
+  flushTimer = null
+  flushInterval = null
+  // Personal-use build: no upload timers are scheduled when uploading is unsupported.
+  if (!UPLOAD_SUPPORTED) return
   flushTimer = setTimeout(() => {
     void flush()
   }, FLUSH_INITIAL_DELAY_MS)

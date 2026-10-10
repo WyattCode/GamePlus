@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import AppIcon from '@/components/AppIcon.vue'
 import { useToastStore, errorMessage } from '@/stores/toast'
 import type { CrashFileInfo, TelemetryConfig, TelemetryEvent } from '@shared/types'
 
@@ -12,9 +11,6 @@ const config = ref<TelemetryConfig>({ enabled: false, endpoint: '', installId: n
 const loaded = ref(false)
 const saving = ref(false)
 
-const advancedOpen = ref(false)
-const endpointDraft = ref('')
-
 const eventsOpen = ref(false)
 const events = ref<TelemetryEvent[]>([])
 const eventsLoading = ref(false)
@@ -22,12 +18,10 @@ const eventsLoading = ref(false)
 const crashes = ref<CrashFileInfo[]>([])
 
 const PRIVACY_TEXT =
-  '开启后，Game+ 会在本机记录加速成功/失败、使用的加速模式、失败原因（已去除 IP、域名、路径和用户名）以及崩溃报告。不会收集游戏名称、节点信息、账号或浏览内容。只有在配置了上报地址时才会发送，当前版本默认不配置上报地址，数据只保存在本机。关闭后不再记录。'
+  '开启后，Game+ 只在本机记录加速成功/失败、使用的加速模式和失败原因（已去除 IP、域名、路径和用户名），方便排查问题。Game+ 不会上传任何数据，也没有账号系统；不会收集游戏名称、节点信息或浏览内容。关闭后不再记录。'
 
 const CONFIRM_TEXT =
-  '开启后，Game+ 会在本机记录加速成功/失败、使用的加速模式、失败原因（已去除 IP、域名、路径和用户名）以及崩溃报告。不会收集游戏名称、节点信息、账号或浏览内容。只有在配置了上报地址时才会发送，当前版本默认不配置上报地址，数据只保存在本机。是否开启？'
-
-const endpointEmpty = computed(() => !config.value.endpoint.trim())
+  '开启后，Game+ 只在本机记录加速成功/失败、使用的加速模式和失败原因（已去除 IP、域名、路径和用户名），方便排查问题。Game+ 不会上传任何数据，也没有账号系统。是否开启？'
 
 onMounted(async () => {
   if (!supported.value) {
@@ -36,7 +30,6 @@ onMounted(async () => {
   }
   try {
     config.value = await window.gameplus!.telemetry!.getConfig()
-    endpointDraft.value = config.value.endpoint
   } catch {
     // ignore — keep defaults
   }
@@ -52,7 +45,6 @@ async function persist(patch: Partial<TelemetryConfig>): Promise<void> {
   saving.value = true
   try {
     config.value = await window.gameplus!.telemetry!.setConfig(patch)
-    endpointDraft.value = config.value.endpoint
   } catch (e) {
     toast.error('保存失败：' + errorMessage(e))
   } finally {
@@ -66,37 +58,6 @@ async function toggleEnabled(enabled: boolean): Promise<void> {
     if (!ok) return
   }
   await persist({ enabled })
-}
-
-/** Validates the endpoint: empty is allowed; https always; http only for loopback hosts. */
-function validateEndpoint(raw: string): string | null {
-  const v = raw.trim()
-  if (!v) return null
-  let url: URL
-  try {
-    url = new URL(v)
-  } catch {
-    return '地址格式无效'
-  }
-  if (url.protocol === 'https:') return null
-  if (url.protocol === 'http:') {
-    const host = url.hostname.toLowerCase()
-    const loopback =
-      host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
-    if (loopback) return null
-    return '仅允许 https，或本机回环地址的 http'
-  }
-  return '仅支持 https 地址'
-}
-
-async function saveEndpoint(): Promise<void> {
-  const err = validateEndpoint(endpointDraft.value)
-  if (err) {
-    toast.error(err)
-    return
-  }
-  await persist({ endpoint: endpointDraft.value.trim() })
-  toast.info('已保存')
 }
 
 async function toggleEvents(): Promise<void> {
@@ -147,7 +108,7 @@ function formatEvent(e: TelemetryEvent): string {
 
 <template>
   <div class="card group">
-    <div class="g-title">隐私与诊断数据</div>
+    <div class="g-title">本地诊断记录</div>
 
     <div v-if="!supported" class="setting">
       <div class="muted small">仅桌面版支持</div>
@@ -156,7 +117,7 @@ function formatEvent(e: TelemetryEvent): string {
     <template v-else>
       <div class="setting">
         <div class="privacy-info">
-          <div class="s-name">帮助改进 Game+（匿名使用统计与崩溃报告）</div>
+          <div class="s-name">记录本地诊断数据</div>
           <div class="muted small">{{ PRIVACY_TEXT }}</div>
         </div>
         <label class="switch" :class="{ disabled: saving || !loaded }">
@@ -168,28 +129,6 @@ function formatEvent(e: TelemetryEvent): string {
           />
           <span class="track"><span class="thumb" /></span>
         </label>
-      </div>
-
-      <div class="setting">
-        <div class="adv-head">
-          <button class="btn diag-btn" @click="advancedOpen = !advancedOpen">
-            <AppIcon :name="advancedOpen ? 'chevron-down' : 'chevron-right'" :size="14" /> 高级
-          </button>
-        </div>
-      </div>
-
-      <div v-if="advancedOpen" class="setting">
-        <div class="endpoint-input">
-          <div class="s-name">上报地址</div>
-          <input
-            v-model="endpointDraft"
-            class="input"
-            placeholder="https://…，留空则不上报"
-            :disabled="saving"
-          />
-          <div v-if="endpointEmpty" class="muted small">未配置上报地址：数据不会离开本机</div>
-        </div>
-        <button class="btn diag-btn" :disabled="saving" @click="saveEndpoint">保存</button>
       </div>
 
       <div class="setting">
@@ -219,7 +158,7 @@ function formatEvent(e: TelemetryEvent): string {
         <div>
           <div class="s-name">崩溃报告</div>
           <div class="muted small">
-            本机已保存 {{ crashes.length }} 个崩溃报告文件。崩溃报告始终仅保存在本机，除非你开启上方选项且配置了上报地址。
+            本机已保存 {{ crashes.length }} 个崩溃报告文件。崩溃报告只保存在本机，不会上传。可在提交问题时手动附上。
           </div>
         </div>
         <button class="btn diag-btn" @click="openCrashFolder">打开文件夹</button>
@@ -263,19 +202,6 @@ function formatEvent(e: TelemetryEvent): string {
   flex: 1;
   min-width: 0;
   margin-right: 14px;
-}
-.adv-head {
-  display: flex;
-  align-items: center;
-}
-.endpoint-input {
-  flex: 1;
-  min-width: 0;
-  margin-right: 14px;
-}
-.endpoint-input .input {
-  margin-top: 8px;
-  width: 100%;
 }
 .row-actions {
   display: flex;

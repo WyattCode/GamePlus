@@ -11,6 +11,7 @@ public sealed class AutoStartService
     private readonly IProcessRunner _runner;
     private readonly Func<bool> _isElevated;
     private readonly Func<string?> _resolveExe;
+    private readonly Func<string, string?> _untrustedReason;
     private readonly Func<string> _currentUser;
     private readonly string _tempDirectory;
     private readonly Func<string, FileMode, FileAccess, FileShare, Stream> _openTempFile;
@@ -19,6 +20,7 @@ public sealed class AutoStartService
         IProcessRunner runner,
         Func<bool> isElevated,
         Func<string?> resolveExe,
+        Func<string, string?> untrustedReason,
         Func<string> currentUser,
         string tempDirectory,
         Func<string, FileMode, FileAccess, FileShare, Stream>? openTempFile = null)
@@ -26,6 +28,7 @@ public sealed class AutoStartService
         _runner = runner;
         _isElevated = isElevated;
         _resolveExe = resolveExe;
+        _untrustedReason = untrustedReason;
         _currentUser = currentUser;
         _tempDirectory = tempDirectory;
         _openTempFile = openTempFile ?? DefaultOpenTempFile;
@@ -49,12 +52,23 @@ public sealed class AutoStartService
         if (exe is null)
             return new AutoStartState(false, false, "仅安装版支持开机启动");
 
-        var (exitCode, _) = await _runner.RunAsync(
+        var reason = _untrustedReason(exe);
+
+        var (exitCode, output) = await _runner.RunAsync(
             "schtasks.exe",
-            new[] { "/Query", "/TN", AutoStartTask.TaskName },
+            new[] { "/Query", "/TN", AutoStartTask.TaskName, "/XML" },
             ct);
 
-        return new AutoStartState(exitCode == 0, true, null);
+        var enabled = false;
+        if (exitCode == 0)
+        {
+            var command = AutoStartTask.ParseCommand(output);
+            enabled = CommandMatches(command, exe);
+        }
+
+        return reason is not null
+            ? new AutoStartState(enabled, false, reason)
+            : new AutoStartState(enabled, true, null);
     }
 
     /// <summary>Enables or disables the auto-start task. Requires elevation.</summary>
@@ -67,6 +81,12 @@ public sealed class AutoStartService
         {
             var exe = _resolveExe()
                       ?? throw new InvalidOperationException("未找到 Game+ 主程序（仅安装版支持开机启动）");
+
+            // Refuse before writing anything: a highest-privileges task must only point at an exe that
+            // a normal user cannot replace.
+            var reason = _untrustedReason(exe);
+            if (reason is not null)
+                throw new InvalidOperationException(reason);
 
             var xml = AutoStartTask.BuildXml(exe, _currentUser());
             var tempFile = Path.Combine(_tempDirectory, $"gameplus-autostart-{Guid.NewGuid():N}.xml");
@@ -151,5 +171,92 @@ public sealed class AutoStartService
         }
 
         return await GetAsync(ct);
+    }
+
+    /// <summary>
+    ///     Removes a stale auto-start task: one that points at a different exe, or at an exe that is no
+    ///     longer in an admin-only-writable location. Returns a short English log message when a task
+    ///     was removed (or when the cleanup itself failed), otherwise null. Never throws for schtasks
+    ///     failures; cancellation is honoured.
+    /// </summary>
+    public async Task<string?> ReconcileAsync(CancellationToken ct)
+    {
+        if (!_isElevated())
+            return null;
+
+        ct.ThrowIfCancellationRequested();
+
+        int queryExit;
+        string queryOutput;
+        try
+        {
+            (queryExit, queryOutput) = await _runner.RunAsync(
+                "schtasks.exe",
+                new[] { "/Query", "/TN", AutoStartTask.TaskName, "/XML" },
+                ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            return "autostart reconcile: query failed: " + e.Message;
+        }
+
+        if (queryExit != 0)
+            return null; // task does not exist
+
+        var exe = _resolveExe();
+        string? reason;
+        if (exe is null)
+        {
+            reason = "installed exe not found";
+        }
+        else
+        {
+            reason = _untrustedReason(exe);
+            if (reason is null)
+            {
+                var command = AutoStartTask.ParseCommand(queryOutput);
+                if (!CommandMatches(command, exe))
+                    reason = "task points at a different executable";
+            }
+        }
+
+        if (reason is null)
+            return null;
+
+        try
+        {
+            var (deleteExit, deleteOutput) = await _runner.RunAsync(
+                "schtasks.exe",
+                new[] { "/Delete", "/TN", AutoStartTask.TaskName, "/F" },
+                ct);
+            if (deleteExit != 0)
+                return "autostart reconcile: delete failed: " + deleteOutput.Trim();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            return "autostart reconcile: delete failed: " + e.Message;
+        }
+
+        return "removed stale autostart task: " + reason;
+    }
+
+    /// <summary>
+    ///     True when a task's action command equals the expected exe path, ignoring surrounding quotes
+    ///     and whitespace and comparing case-insensitively.
+    /// </summary>
+    private static bool CommandMatches(string? command, string exe)
+    {
+        if (command is null)
+            return false;
+        var trimmed = command.Trim().Trim('"').Trim();
+        return string.Equals(trimmed, exe.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 }

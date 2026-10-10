@@ -108,14 +108,38 @@ internal static class Composition
         // Launch-at-login scheduled task. The host runs elevated, so it can create a
         // highest-privileges task without a UAC prompt at each logon. Windows-only APIs are guarded
         // so the host still builds/runs on other platforms (where the feature reports unsupported).
+        // The task is only created/kept when Game+.exe lives in an admin-only-writable location.
         services.AddSingleton(_ => new AutoStartService(
             new SystemProcessRunner(),
             IsElevated,
             () => AutoStartTask.ResolveAppExe(AppContext.BaseDirectory, File.Exists),
+            exe => InstallLocationPolicy.GetUntrustedReason(exe, TrustedRoots(), new WindowsPathSecurityInspector()),
             CurrentUserName,
             Path.GetTempPath()));
 
         return services.BuildServiceProvider();
+    }
+
+    /// <summary>
+    ///     Directories that only administrators can write to. The auto-start task is only allowed when
+    ///     Game+.exe lives strictly under one of these.
+    /// </summary>
+    private static IReadOnlyList<string> TrustedRoots()
+    {
+        var roots = new List<string>();
+        void Add(string? value)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                roots.Add(value);
+        }
+
+        Add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
+        Add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86));
+        Add(Environment.GetEnvironmentVariable("ProgramW6432"));
+
+        return roots
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     /// <summary>True when the current process runs with administrator rights (false on non-Windows).</summary>

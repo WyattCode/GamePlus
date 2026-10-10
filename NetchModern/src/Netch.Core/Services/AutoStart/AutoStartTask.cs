@@ -1,5 +1,6 @@
 using System.Security;
 using System.Text;
+using System.Xml.Linq;
 
 namespace Netch.Core.Services.AutoStart;
 
@@ -74,6 +75,28 @@ public static class AutoStartTask
         sb.Append("  </Actions>\r\n");
         sb.Append("</Task>\r\n");
         return sb.ToString();
+    }
+
+    /// <summary>
+    ///     Extracts the action command path from a Task Scheduler XML document. Namespace-agnostic:
+    ///     returns the value of the first element whose local name is "Command". Returns null when the
+    ///     XML cannot be parsed or contains no command.
+    /// </summary>
+    public static string? ParseCommand(string xml)
+    {
+        if (string.IsNullOrWhiteSpace(xml))
+            return null;
+        try
+        {
+            var doc = XDocument.Parse(xml);
+            var command = doc.Descendants()
+                .FirstOrDefault(e => e.Name.LocalName == "Command");
+            return command?.Value;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>

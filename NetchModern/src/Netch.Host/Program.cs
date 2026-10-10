@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Netch.Core;
 using Netch.Core.Abstractions;
 using Netch.Core.Services;
+using Netch.Core.Services.AutoStart;
 using Netch.Host;
 
 // Headless Game+ backend. Electron spawns this, reads the "GAMEPLUS_READY {port,pid}" line from stdout,
@@ -54,6 +55,31 @@ catch (Exception e)
 {
     Console.Error.WriteLine("orphan cleanup failed: " + e.Message);
 }
+
+// Remove a stale "launch at login" task: one that points at a different exe, or at an exe that is no
+// longer in an admin-only-writable location. Fire-and-forget so startup is never delayed.
+_ = Task.Run(async () =>
+{
+    try
+    {
+        var message = await services.GetRequiredService<AutoStartService>()
+            .ReconcileAsync(CancellationToken.None);
+        if (message is not null)
+            services.GetRequiredService<ILogService>().Log(Netch.Core.Enums.LogLevel.Warning, message);
+    }
+    catch (Exception e)
+    {
+        try
+        {
+            services.GetRequiredService<ILogService>()
+                .Log(Netch.Core.Enums.LogLevel.Warning, "autostart reconcile failed: " + e.Message);
+        }
+        catch
+        {
+            // best effort
+        }
+    }
+});
 
 // When elevated via UAC we lose the stdin/stdout pipe to the parent, so the handshake goes through a
 // file (--conn-file) and lifecycle is bound to the parent's PID (--parent-pid) instead of stdin EOF.

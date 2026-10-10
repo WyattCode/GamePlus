@@ -65,6 +65,22 @@ public class AutoStartTests
         Assert.Equal("Game+ 开机自动启动", desc);
     }
 
+    // --- ParseCommand ---
+
+    [Fact]
+    public void ParseCommand_ExtractsCommand()
+    {
+        var xml = AutoStartTask.BuildXml(@"C:\App\Game+.exe", @"DOMAIN\user");
+        Assert.True(AutoStartTask.ParseCommand(xml) is not null);
+        Assert.Equal(@"C:\App\Game+.exe", AutoStartTask.ParseCommand(xml));
+    }
+
+    [Fact]
+    public void ParseCommand_InvalidXml_ReturnsNull()
+    {
+        Assert.Null(AutoStartTask.ParseCommand("not xml"));
+    }
+
     // --- ResolveAppExe ---
 
     [Fact]
@@ -105,21 +121,26 @@ public class AutoStartTests
         string? exe = @"C:\App\Game+.exe",
         string user = @"DOMAIN\user",
         string? tempDir = null,
-        Func<string, FileMode, FileAccess, FileShare, Stream>? openTempFile = null)
+        Func<string, FileMode, FileAccess, FileShare, Stream>? openTempFile = null,
+        Func<string, string?>? untrustedReason = null)
     {
         return new AutoStartService(
             runner,
             () => elevated,
             () => exe,
+            untrustedReason ?? (_ => null),
             () => user,
             tempDir ?? Path.GetTempPath(),
             openTempFile);
     }
 
+    private static string TaskXml(string command) =>
+        AutoStartTask.BuildXml(command, @"DOMAIN\user");
+
     [Fact]
     public async Task Get_QueryExitZero_Enabled()
     {
-        var runner = new FakeRunner { Handler = (_, _) => (0, "") };
+        var runner = new FakeRunner { Handler = (_, _) => (0, TaskXml(@"C:\App\Game+.exe")) };
         var svc = MakeService(runner);
         var state = await svc.GetAsync(CancellationToken.None);
         Assert.True(state.Enabled);
@@ -127,7 +148,17 @@ public class AutoStartTests
         Assert.Null(state.Reason);
         Assert.Single(runner.Calls);
         Assert.Equal("schtasks.exe", runner.Calls[0].FileName);
-        Assert.Equal(new[] { "/Query", "/TN", AutoStartTask.TaskName }, runner.Calls[0].Args);
+        Assert.Equal(new[] { "/Query", "/TN", AutoStartTask.TaskName, "/XML" }, runner.Calls[0].Args);
+    }
+
+    [Fact]
+    public async Task Get_QueryExitZero_CommandElsewhere_Disabled()
+    {
+        var runner = new FakeRunner { Handler = (_, _) => (0, TaskXml(@"C:\Other\Game+.exe")) };
+        var svc = MakeService(runner);
+        var state = await svc.GetAsync(CancellationToken.None);
+        Assert.False(state.Enabled);
+        Assert.True(state.Supported);
     }
 
     [Fact]
@@ -153,12 +184,52 @@ public class AutoStartTests
     }
 
     [Fact]
+    public async Task Get_UntrustedExe_UnsupportedWithReason()
+    {
+        var runner = new FakeRunner { Handler = (_, _) => (0, TaskXml(@"C:\App\Game+.exe")) };
+        var svc = MakeService(runner, untrustedReason: _ => "bad location");
+        var state = await svc.GetAsync(CancellationToken.None);
+        Assert.False(state.Supported);
+        Assert.Equal("bad location", state.Reason);
+    }
+
+    [Fact]
     public async Task Set_NotElevated_ThrowsAndRunsNothing()
     {
         var runner = new FakeRunner();
         var svc = MakeService(runner, elevated: false);
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => svc.SetAsync(true, CancellationToken.None));
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public async Task Set_Enable_UntrustedExe_ThrowsAndRunsNothing()
+    {
+        var runner = new FakeRunner();
+        var svc = MakeService(runner, untrustedReason: _ => "bad location");
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => svc.SetAsync(true, CancellationToken.None));
+        Assert.Equal("bad location", ex.Message);
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public async Task Set_Enable_UntrustedExe_OpensNoTempFile()
+    {
+        var runner = new FakeRunner();
+        var opened = false;
+        var svc = MakeService(
+            runner,
+            untrustedReason: _ => "bad location",
+            openTempFile: (_, _, _, _) =>
+            {
+                opened = true;
+                return new MemoryStream();
+            });
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => svc.SetAsync(true, CancellationToken.None));
+        Assert.False(opened);
         Assert.Empty(runner.Calls);
     }
 
@@ -182,7 +253,7 @@ public class AutoStartTests
                     xmlBytes = File.ReadAllBytes(xmlPath);
                     return (0, "");
                 }
-                return (0, "");
+                return (0, TaskXml(@"C:\App\Game+.exe"));
             };
 
             var svc = MakeService(runner, tempDir: tempDir);
@@ -214,7 +285,7 @@ public class AutoStartTests
     {
         var runner = new FakeRunner();
         runner.Handler = (_, args) =>
-            args.Count > 0 && args[0] == "/Create" ? (1, "ERROR: access denied") : (0, "");
+            args.Count > 0 && args[0] == "/Create" ? (1, "ERROR: access denied") : (0, TaskXml(@"C:\App\Game+.exe"));
         var svc = MakeService(runner);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => svc.SetAsync(true, CancellationToken.None));
@@ -247,6 +318,18 @@ public class AutoStartTests
     }
 
     [Fact]
+    public async Task Set_Disable_UntrustedExe_StillDeletes()
+    {
+        var runner = new FakeRunner();
+        runner.Handler = (_, args) =>
+            args.Count > 0 && args[0] == "/Delete" ? (0, "") : (1, "");
+        var svc = MakeService(runner, untrustedReason: _ => "bad location");
+        var state = await svc.SetAsync(false, CancellationToken.None);
+        Assert.False(state.Enabled);
+        Assert.Contains(runner.Calls, c => c.Args.Count > 0 && c.Args[0] == "/Delete");
+    }
+
+    [Fact]
     public async Task Set_Disable_NotFound_TreatedAsSuccess()
     {
         var runner = new FakeRunner();
@@ -273,10 +356,82 @@ public class AutoStartTests
     {
         // Sanity: the runner receives args as a list, never a concatenated command line.
         var runner = new FakeRunner();
-        runner.Handler = (_, _) => (0, "");
+        runner.Handler = (_, _) => (0, TaskXml(@"C:\App\Game+.exe"));
         var svc = MakeService(runner);
         _ = svc.GetAsync(CancellationToken.None).Result;
         Assert.All(runner.Calls, c => Assert.IsAssignableFrom<IReadOnlyList<string>>(c.Args));
+    }
+
+    // --- ReconcileAsync ---
+
+    [Fact]
+    public async Task Reconcile_NotElevated_DoesNothing()
+    {
+        var runner = new FakeRunner();
+        var svc = MakeService(runner, elevated: false);
+        var message = await svc.ReconcileAsync(CancellationToken.None);
+        Assert.Null(message);
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public async Task Reconcile_TaskMissing_DoesNothing()
+    {
+        var runner = new FakeRunner { Handler = (_, _) => (1, "not found") };
+        var svc = MakeService(runner);
+        var message = await svc.ReconcileAsync(CancellationToken.None);
+        Assert.Null(message);
+        Assert.DoesNotContain(runner.Calls, c => c.Args.Count > 0 && c.Args[0] == "/Delete");
+    }
+
+    [Fact]
+    public async Task Reconcile_TaskPointsElsewhere_Deletes()
+    {
+        var runner = new FakeRunner();
+        runner.Handler = (_, args) =>
+        {
+            if (args.Count > 0 && args[0] == "/Query")
+                return (0, TaskXml(@"C:\Other\Game+.exe"));
+            return (0, "");
+        };
+        var svc = MakeService(runner);
+        var message = await svc.ReconcileAsync(CancellationToken.None);
+        Assert.NotNull(message);
+        Assert.Contains("removed stale autostart task", message);
+        Assert.Contains(runner.Calls, c => c.Args.Count > 0 && c.Args[0] == "/Delete");
+    }
+
+    [Fact]
+    public async Task Reconcile_UntrustedExe_Deletes()
+    {
+        var runner = new FakeRunner();
+        runner.Handler = (_, args) =>
+        {
+            if (args.Count > 0 && args[0] == "/Query")
+                return (0, TaskXml(@"C:\App\Game+.exe"));
+            return (0, "");
+        };
+        var svc = MakeService(runner, untrustedReason: _ => "bad location");
+        var message = await svc.ReconcileAsync(CancellationToken.None);
+        Assert.NotNull(message);
+        Assert.Contains("removed stale autostart task", message);
+        Assert.Contains(runner.Calls, c => c.Args.Count > 0 && c.Args[0] == "/Delete");
+    }
+
+    [Fact]
+    public async Task Reconcile_MatchingTrustedTask_Keeps()
+    {
+        var runner = new FakeRunner();
+        runner.Handler = (_, args) =>
+        {
+            if (args.Count > 0 && args[0] == "/Query")
+                return (0, TaskXml(@"C:\App\Game+.exe"));
+            return (0, "");
+        };
+        var svc = MakeService(runner);
+        var message = await svc.ReconcileAsync(CancellationToken.None);
+        Assert.Null(message);
+        Assert.DoesNotContain(runner.Calls, c => c.Args.Count > 0 && c.Args[0] == "/Delete");
     }
 
     // --- Security: temp file handle must stay open across the schtasks call ---

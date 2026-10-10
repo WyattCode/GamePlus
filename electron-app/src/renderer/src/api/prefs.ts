@@ -6,7 +6,8 @@ import type { UiPrefs } from '@shared/types'
 const STORAGE_KEY = 'gameplus.prefs'
 
 const DEFAULTS: UiPrefs = {
-  onboardingDone: false
+  onboardingDone: false,
+  startHidden: false
 }
 
 function readLocal(): UiPrefs {
@@ -14,7 +15,10 @@ function readLocal(): UiPrefs {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return { ...DEFAULTS }
     const parsed = JSON.parse(raw) as Partial<UiPrefs>
-    return { onboardingDone: typeof parsed.onboardingDone === 'boolean' ? parsed.onboardingDone : false }
+    return {
+      onboardingDone: typeof parsed.onboardingDone === 'boolean' ? parsed.onboardingDone : false,
+      startHidden: typeof parsed.startHidden === 'boolean' ? parsed.startHidden : false
+    }
   } catch {
     return { ...DEFAULTS }
   }

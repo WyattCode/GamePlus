@@ -62,6 +62,10 @@ export const useLibraryStore = defineStore('library', () => {
     games.value = await backend.toggleFavorite(id)
   }
 
+  async function setGameAuto(id: string, enabled: boolean): Promise<void> {
+    games.value = await backend.setGameAuto(id, enabled)
+  }
+
   async function addGame(data: Partial<Game>): Promise<void> {
     games.value = await backend.addGame(data)
   }
@@ -167,6 +171,7 @@ export const useLibraryStore = defineStore('library', () => {
     reloadServers,
     pingAll,
     toggleFavorite,
+    setGameAuto,
     addGame,
     updateGame,
     removeGame,

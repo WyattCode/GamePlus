@@ -1,5 +1,6 @@
 import type {
   AccelStatus,
+  AutoAccelEvent,
   DetectedGame,
   DiagnosticReport,
   EffectReport,
@@ -43,6 +44,8 @@ export interface Backend {
   removeSubscription(id: string): Promise<SubMutation>
   updateSubscription(id: string): Promise<SubMutation>
   toggleFavorite(id: string): Promise<Game[]>
+  setGameAuto(id: string, enabled: boolean): Promise<Game[]>
+  onAutoAccel(cb: (e: AutoAccelEvent) => void): () => void
   addGame(data: Partial<Game>): Promise<Game[]>
   updateGame(id: string, data: Partial<Game>): Promise<Game[]>
   removeGame(id: string): Promise<Game[]>
@@ -396,6 +399,19 @@ class MockBackend implements Backend {
     const g = this.mockGames.find((x) => x.id === id)
     if (g) g.favorite = !g.favorite
     return structuredClone(this.mockGames)
+  }
+  async setGameAuto(id: string, enabled: boolean): Promise<Game[]> {
+    const g = this.mockGames.find((x) => x.id === id)
+    if (!g) throw new Error('游戏不存在')
+    if (!g.proxyProcesses || g.proxyProcesses.length === 0) {
+      throw new Error('该游戏没有配置进程规则，无法自动加速')
+    }
+    g.autoAccelerate = enabled
+    return structuredClone(this.mockGames)
+  }
+  onAutoAccel(_cb: (e: AutoAccelEvent) => void): () => void {
+    // The mock never detects real game processes, so this event never fires.
+    return () => {}
   }
   async addGame(data: Partial<Game>): Promise<Game[]> {
     const id = 'custom-' + crypto.randomUUID().slice(0, 8)

@@ -8,12 +8,13 @@ import { gameColor } from '@/utils/gameIcon'
 import { useAccelStore } from '@/stores/accel'
 import { useDiagnosticsStore } from '@/stores/diagnostics'
 import { useLibraryStore } from '@/stores/library'
-import { errorMessage } from '@/stores/toast'
+import { errorMessage, useToastStore } from '@/stores/toast'
 import { fmtDelay, fmtDuration, fmtLatency, fmtRate } from '@/utils/format'
 
 const accel = useAccelStore()
 const diagnostics = useDiagnosticsStore()
 const library = useLibraryStore()
+const toast = useToastStore()
 const router = useRouter()
 
 const error = ref<string | null>(null)
@@ -165,6 +166,30 @@ async function toggle(): Promise<void> {
     busy.value = false
   }
 }
+
+// --- auto-accelerate (P6b) ---
+
+// The selected game object is a snapshot; look it up in the library so the toggle reflects the
+// latest autoAccelerate flag after setGameAuto replaces the game list.
+const selectedGame = computed(() => {
+  const id = accel.selectedGame?.id
+  if (!id) return null
+  return library.games.find((g) => g.id === id) ?? accel.selectedGame
+})
+
+const hasProcessRules = computed(
+  () => (selectedGame.value?.proxyProcesses?.length ?? 0) > 0
+)
+
+async function toggleAuto(enabled: boolean): Promise<void> {
+  const g = selectedGame.value
+  if (!g) return
+  try {
+    await library.setGameAuto(g.id, enabled)
+  } catch (e) {
+    toast.error(errorMessage(e))
+  }
+}
 </script>
 
 <template>
@@ -292,6 +317,29 @@ async function toggle(): Promise<void> {
         <div v-if="accel.nodeUnavailable" class="capture-hint warn">
           <AppIcon name="info" :size="14" />
           之前选择的线路已不存在，已切换为智能选路
+        </div>
+
+        <!-- Auto-accelerate for the selected game -->
+        <div class="row auto-row">
+          <div>
+            <div class="row-title">游戏启动时自动加速</div>
+            <div class="muted small">
+              {{
+                hasProcessRules
+                  ? '检测到游戏进程后自动开始，游戏退出后自动停止'
+                  : '该游戏没有进程规则，无法自动加速'
+              }}
+            </div>
+          </div>
+          <label class="switch" :class="{ disabled: !hasProcessRules }">
+            <input
+              type="checkbox"
+              :checked="selectedGame?.autoAccelerate ?? false"
+              :disabled="!hasProcessRules"
+              @change="toggleAuto(($event.target as HTMLInputElement).checked)"
+            />
+            <span class="track"><span class="thumb" /></span>
+          </label>
         </div>
 
         <button class="action" :class="{ stop: running }" :disabled="busy" @click="toggle">
@@ -496,6 +544,11 @@ async function toggle(): Promise<void> {
   width: 100%;
   margin-top: 14px;
   cursor: pointer;
+}
+.auto-row {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
 }
 .action {
   width: 100%;
@@ -761,6 +814,9 @@ async function toggle(): Promise<void> {
 /* switch */
 .switch input {
   display: none;
+}
+.switch.disabled {
+  opacity: 0.5;
 }
 .track {
   display: block;

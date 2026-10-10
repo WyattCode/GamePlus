@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { UiPrefs } from '../shared/types'
+import type { LoginItemState, TrayAction, TrayInfo, UiPrefs } from '../shared/types'
 
 // Minimal, typed surface exposed to the renderer. Window chrome + theme now; the
 // backend RPC channel to the C# sidecar will be added here as it comes online.
@@ -33,6 +33,22 @@ const api = {
   prefs: {
     get: (): Promise<UiPrefs> => ipcRenderer.invoke('prefs:get'),
     set: (patch: Partial<UiPrefs>): Promise<UiPrefs> => ipcRenderer.invoke('prefs:set', patch)
+  },
+  app: {
+    getLoginItem: (): Promise<LoginItemState> => ipcRenderer.invoke('app:get-login-item'),
+    setLoginItem: (openAtLogin: boolean): Promise<LoginItemState> =>
+      ipcRenderer.invoke('app:set-login-item', openAtLogin),
+    notify: (title: string, body: string): Promise<void> =>
+      ipcRenderer.invoke('app:notify', title, body)
+  },
+  tray: {
+    update: (info: TrayInfo): Promise<void> => ipcRenderer.invoke('tray:update', info),
+    // Returns an unsubscribe function so callers can detach the listener.
+    onAction: (cb: (action: TrayAction) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, action: TrayAction): void => cb(action)
+      ipcRenderer.on('tray:action', listener)
+      return () => ipcRenderer.removeListener('tray:action', listener)
+    }
   }
 }
 

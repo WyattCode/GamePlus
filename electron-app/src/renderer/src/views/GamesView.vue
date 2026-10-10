@@ -63,6 +63,14 @@ async function onToggleFavorite(id: string): Promise<void> {
   }
 }
 
+async function onToggleAuto(g: Game): Promise<void> {
+  try {
+    await library.setGameAuto(g.id, !g.autoAccelerate)
+  } catch (e) {
+    toast.error(errorMessage(e))
+  }
+}
+
 const categories = computed(() => {
   const set = new Set<string>()
   library.games.forEach((g) => g.categories.forEach((c) => set.add(c)))
@@ -136,6 +144,19 @@ function pick(g: Game): void {
           <span v-if="g.custom" class="tag custom">自定义</span>
           <span v-for="c in g.categories.slice(0, 2)" :key="c" class="tag">{{ c }}</span>
         </div>
+        <button
+          class="auto-chip"
+          :class="{ on: g.autoAccelerate, disabled: !g.proxyProcesses || g.proxyProcesses.length === 0 }"
+          :title="
+            !g.proxyProcesses || g.proxyProcesses.length === 0
+              ? '该游戏没有进程规则，无法自动加速'
+              : '游戏启动时自动加速'
+          "
+          :disabled="!g.proxyProcesses || g.proxyProcesses.length === 0"
+          @click.stop="onToggleAuto(g)"
+        >
+          <AppIcon name="bolt" :size="12" /> 自动加速
+        </button>
       </div>
     </div>
 
@@ -299,5 +320,30 @@ function pick(g: Game): void {
 .tag.custom {
   background: var(--brand-soft);
   color: var(--brand-600);
+}
+.auto-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  background: var(--surface-2);
+  color: var(--text-3);
+  transition: all 0.14s;
+}
+.auto-chip:hover:not(:disabled) {
+  color: var(--text);
+}
+.auto-chip.on {
+  background: var(--brand-soft);
+  color: var(--brand-600);
+  font-weight: 600;
+}
+.auto-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

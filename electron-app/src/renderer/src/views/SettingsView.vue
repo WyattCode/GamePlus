@@ -7,7 +7,8 @@ import { useLibraryStore } from '@/stores/library'
 import { useOnboardingStore } from '@/stores/onboarding'
 import { useToastStore, errorMessage } from '@/stores/toast'
 import { backend } from '@/api/backend'
-import type { EngineSettings, UpdateInfo } from '@shared/types'
+import { getPrefs, setPrefs } from '@/api/prefs'
+import type { EngineSettings, LoginItemState, UpdateInfo } from '@shared/types'
 
 const app = useAppStore()
 const diagnostics = useDiagnosticsStore()
@@ -135,6 +136,55 @@ async function checkRules(): Promise<void> {
     rulesChecking.value = false
   }
 }
+
+// --- 启动与托盘 ---
+const loginItem = ref<LoginItemState>({ openAtLogin: false })
+const loginUnsupported = ref(false)
+const startHidden = ref(false)
+
+onMounted(async () => {
+  try {
+    const p = await getPrefs()
+    startHidden.value = p.startHidden
+  } catch {
+    // ignore
+  }
+  try {
+    const state = await window.gameplus?.app?.getLoginItem?.()
+    if (state) {
+      loginItem.value = state
+      loginUnsupported.value = !!state.unsupported
+    } else {
+      loginUnsupported.value = true
+    }
+  } catch {
+    loginUnsupported.value = true
+  }
+})
+
+async function toggleLoginItem(openAtLogin: boolean): Promise<void> {
+  try {
+    const state = await window.gameplus?.app?.setLoginItem?.(openAtLogin)
+    if (state) {
+      loginItem.value = state
+      loginUnsupported.value = !!state.unsupported
+    }
+    if (loginUnsupported.value) {
+      toast.info('当前版本不支持开机自启（仅安装版可用）')
+    }
+  } catch (e) {
+    toast.error('设置失败：' + errorMessage(e))
+  }
+}
+
+async function toggleStartHidden(v: boolean): Promise<void> {
+  startHidden.value = v
+  try {
+    await setPrefs({ startHidden: v })
+  } catch (e) {
+    toast.error('保存失败：' + errorMessage(e))
+  }
+}
 </script>
 
 <template>
@@ -185,6 +235,55 @@ async function checkRules(): Promise<void> {
           <div class="muted small">重新查看首次使用的引导步骤</div>
         </div>
         <button class="btn diag-btn" @click="onboarding.reopen()">重新查看新手引导</button>
+      </div>
+    </div>
+
+    <div class="card group">
+      <div class="g-title">启动与托盘</div>
+      <div class="setting">
+        <div>
+          <div class="s-name">开机自动启动</div>
+          <div class="muted small">由于加速需要管理员权限，开机启动时 Windows 可能会弹出权限确认。</div>
+        </div>
+        <label class="switch" :class="{ disabled: loginUnsupported }">
+          <input
+            type="checkbox"
+            :checked="loginItem.openAtLogin"
+            :disabled="loginUnsupported"
+            @change="toggleLoginItem(($event.target as HTMLInputElement).checked)"
+          />
+          <span class="track"><span class="thumb" /></span>
+        </label>
+      </div>
+      <div class="setting">
+        <div>
+          <div class="s-name">开机启动时最小化到托盘</div>
+          <div class="muted small">开机启动后不显示主窗口，仅在托盘运行</div>
+        </div>
+        <label class="switch" :class="{ disabled: !loginItem.openAtLogin }">
+          <input
+            type="checkbox"
+            :checked="startHidden"
+            :disabled="!loginItem.openAtLogin"
+            @change="toggleStartHidden(($event.target as HTMLInputElement).checked)"
+          />
+          <span class="track"><span class="thumb" /></span>
+        </label>
+      </div>
+      <div class="setting">
+        <div>
+          <div class="s-name">游戏启动时自动加速（总开关）</div>
+          <div class="muted small">关闭后所有游戏的自动加速都不会生效</div>
+        </div>
+        <label class="switch" :class="{ disabled: !settings }">
+          <input
+            type="checkbox"
+            :checked="settings?.autoAccelerate ?? false"
+            :disabled="!settings"
+            @change="patch({ autoAccelerate: ($event.target as HTMLInputElement).checked })"
+          />
+          <span class="track"><span class="thumb" /></span>
+        </label>
       </div>
     </div>
 

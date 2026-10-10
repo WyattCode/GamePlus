@@ -208,6 +208,8 @@ export interface DiagnosticReport {
 export interface UiPrefs {
   /** True once the user has completed (or skipped) the first-run onboarding. */
   onboardingDone: boolean
+  /** True when the app was launched at login and should start minimized to the tray. */
+  startHidden: boolean
 }
 
 /** One game found by scanning the local machine's launchers/registries. */
@@ -265,3 +267,28 @@ export interface RulesUpdateResult {
   /** Full game list after the update (unchanged when status is not "updated"). */
   games: Game[]
 }
+
+/** Push event emitted by the backend when auto-acceleration reacts to a game process. */
+export interface AutoAccelEvent {
+  kind: 'started' | 'stopped' | 'failed' | 'skipped'
+  gameId: string | null
+  gameName: string
+  message: string
+}
+
+/** Login-item state reported by the Electron main process. */
+export interface LoginItemState {
+  openAtLogin: boolean
+  /** True when the platform/build does not support login items (e.g. dev builds). */
+  unsupported?: boolean
+}
+
+/** Tray status snapshot pushed from the renderer to the main process. */
+export interface TrayInfo {
+  state: AccelState
+  gameName: string | null
+  latency: number
+}
+
+/** Quick action triggered from the tray context menu. */
+export type TrayAction = 'toggle' | 'diagnose'

@@ -1,10 +1,11 @@
-import { app, shell, BrowserWindow, ipcMain, nativeTheme, Tray, Menu, nativeImage } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, nativeTheme, Tray, Menu, nativeImage, Notification } from 'electron'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { startSidecar, stopSidecar } from './sidecar'
 import { getPrefs, setPrefs } from './prefs'
 import { trayIcon32 } from './trayIcon'
+import type { TrayInfo } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -30,14 +31,57 @@ function showMainWindow(): void {
   mainWindow.focus()
 }
 
-function createTray(): void {
-  if (tray) return
-  tray = new Tray(nativeImage.createFromDataURL(trayIcon32))
-  tray.setToolTip('Game+ 游戏加速器')
+/** Sends a tray quick action to the renderer (which owns the accel/diagnostics stores). */
+function sendTrayAction(action: 'toggle' | 'diagnose'): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('tray:action', action)
+  }
+}
+
+/** Human-readable status line shared by the tray menu and tooltip. */
+function trayStatusLine(info: TrayInfo | null): string {
+  if (!info) return '未加速'
+  if (info.state === 'connecting') return '连接中…'
+  if (info.state === 'accelerating' || info.state === 'stopping') {
+    const name = info.gameName ?? '游戏'
+    const latency = info.latency > 0 ? ` · ${info.latency} ms` : ''
+    return `加速中：${name}${latency}`
+  }
+  return '未加速'
+}
+
+/** Rebuilds the tray context menu from the latest renderer status snapshot. */
+function updateTray(info: TrayInfo | null): void {
+  if (!tray) return
+  const status = trayStatusLine(info)
+  tray.setToolTip(`Game+ 游戏加速器 · ${status}`)
+
+  const active = info?.state === 'accelerating' || info?.state === 'connecting' || info?.state === 'stopping'
+  const hasGame = !!info?.gameName
+  const toggleLabel = active
+    ? '停止加速'
+    : hasGame
+      ? `开始加速 ${info!.gameName}`
+      : '开始加速（请先选择游戏）'
+
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: '显示 Game+', click: showMainWindow },
+      { label: status, enabled: false },
       { type: 'separator' },
+      {
+        label: toggleLabel,
+        enabled: active || hasGame,
+        click: () => sendTrayAction('toggle')
+      },
+      {
+        label: '网络诊断',
+        click: () => {
+          showMainWindow()
+          sendTrayAction('diagnose')
+        }
+      },
+      { type: 'separator' },
+      { label: '显示 Game+', click: showMainWindow },
       {
         label: '退出',
         click: () => {
@@ -47,6 +91,12 @@ function createTray(): void {
       }
     ])
   )
+}
+
+function createTray(): void {
+  if (tray) return
+  tray = new Tray(nativeImage.createFromDataURL(trayIcon32))
+  updateTray(null)
   tray.on('click', showMainWindow)
   tray.on('double-click', showMainWindow)
 }
@@ -83,7 +133,11 @@ function createWindow(): void {
   })
   mainWindow = win
 
-  win.on('ready-to-show', () => win.show())
+  // When launched at login with "start hidden" enabled, keep the window in the tray only.
+  const startHidden = process.argv.includes('--hidden') && getPrefs().startHidden
+  win.on('ready-to-show', () => {
+    if (!startHidden) win.show()
+  })
 
   // Close button hides to the tray (unless the user turned MinimizeToTray off, or is really quitting).
   win.on('close', (e) => {
@@ -154,6 +208,48 @@ function registerWindowControls(): void {
   // Renderer-only UI prefs (onboarding etc.).
   ipcMain.handle('prefs:get', () => getPrefs())
   ipcMain.handle('prefs:set', (_e, patch) => setPrefs(patch ?? {}))
+
+  // --- Login item (auto-start at login) ---
+  ipcMain.handle('app:get-login-item', () => {
+    if (!app.isPackaged) return { openAtLogin: false, unsupported: true }
+    try {
+      return { openAtLogin: app.getLoginItemSettings().openAtLogin }
+    } catch {
+      return { openAtLogin: false, unsupported: true }
+    }
+  })
+  ipcMain.handle('app:set-login-item', (_e, openAtLogin: unknown) => {
+    if (typeof openAtLogin !== 'boolean') return { openAtLogin: false, unsupported: true }
+    if (!app.isPackaged) return { openAtLogin: false, unsupported: true }
+    try {
+      app.setLoginItemSettings({ openAtLogin, args: ['--hidden'] })
+      return { openAtLogin: app.getLoginItemSettings().openAtLogin }
+    } catch {
+      return { openAtLogin: false, unsupported: true }
+    }
+  })
+
+  // --- Desktop notifications (only when the window isn't visible/focused) ---
+  ipcMain.handle('app:notify', (_e, title: unknown, body: unknown) => {
+    if (typeof title !== 'string' || typeof body !== 'string') return
+    if (title.length === 0 || title.length > 200 || body.length > 500) return
+    if (!Notification.isSupported()) return
+    const win = mainWindow
+    const visible = !!win && !win.isDestroyed() && win.isVisible() && win.isFocused()
+    if (visible) return
+    new Notification({ title, body }).show()
+  })
+
+  // --- Tray status sync from the renderer ---
+  ipcMain.handle('tray:update', (_e, info: unknown) => {
+    if (!info || typeof info !== 'object') return
+    const i = info as Record<string, unknown>
+    const state = i.state
+    if (state !== 'idle' && state !== 'connecting' && state !== 'accelerating' && state !== 'stopping') return
+    const gameName = typeof i.gameName === 'string' && i.gameName.length <= 100 ? i.gameName : null
+    const latency = typeof i.latency === 'number' && Number.isFinite(i.latency) ? i.latency : 0
+    updateTray({ state, gameName, latency })
+  })
 }
 
 // Single-instance: a second launch must not spawn another sidecar / proxy chain. Focus the running

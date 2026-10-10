@@ -1,5 +1,6 @@
 import type {
   AccelStatus,
+  AutoAccelEvent,
   DiagnosticReport,
   EffectReport,
   EngineSettings,
@@ -53,6 +54,7 @@ export class WebSocketBackend implements Backend {
   private readonly statusCbs = new Set<(s: AccelStatus) => void>()
   private readonly logCbs = new Set<(l: LogEntry) => void>()
   private readonly effectCbs = new Set<(r: EffectReport) => void>()
+  private readonly autoAccelCbs = new Set<(e: AutoAccelEvent) => void>()
   private lastStatus: AccelStatus | null = null
   private lastEffect: EffectReport | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -160,6 +162,9 @@ export class WebSocketBackend implements Backend {
       } else if (msg.event === 'effect') {
         this.lastEffect = msg.data as EffectReport
         this.effectCbs.forEach((cb) => cb(this.lastEffect!))
+      } else if (msg.event === 'auto.accel') {
+        const e = msg.data as AutoAccelEvent
+        this.autoAccelCbs.forEach((cb) => cb(e))
       }
       return
     }
@@ -243,6 +248,13 @@ export class WebSocketBackend implements Backend {
     return () => this.effectCbs.delete(cb)
   }
 
+  onAutoAccel(cb: (e: AutoAccelEvent) => void): () => void {
+    this.autoAccelCbs.add(cb)
+    // Make sure we're connected so events start flowing even before the first RPC.
+    this.ensure().catch(() => this.onDisconnected())
+    return () => this.autoAccelCbs.delete(cb)
+  }
+
   addServerFromLink(link: string): Promise<Server[]> {
     return this.call('servers.add', { link })
   }
@@ -260,6 +272,9 @@ export class WebSocketBackend implements Backend {
   }
   toggleFavorite(id: string): Promise<Game[]> {
     return this.call('games.toggleFavorite', { id })
+  }
+  setGameAuto(id: string, enabled: boolean): Promise<Game[]> {
+    return this.call('games.setAuto', { id, enabled })
   }
   addGame(data: Partial<Game>): Promise<Game[]> {
     return this.call('games.add', data)

@@ -6,6 +6,7 @@ import Toast from './components/Toast.vue'
 import DiagnosticsDialog from './components/DiagnosticsDialog.vue'
 import OnboardingDialog from './components/OnboardingDialog.vue'
 import { useAppStore } from './stores/app'
+import { useAutoStore } from './stores/auto'
 import { useLibraryStore } from './stores/library'
 import { useLogsStore } from './stores/logs'
 import { useOnboardingStore } from './stores/onboarding'
@@ -13,6 +14,7 @@ import { useToastStore, errorMessage } from './stores/toast'
 import { allowBackendConnection } from './api/backend'
 
 const app = useAppStore()
+const auto = useAutoStore()
 const library = useLibraryStore()
 const logs = useLogsStore()
 const onboarding = useOnboardingStore()
@@ -27,6 +29,7 @@ function startApp(): void {
   started = true
   allowBackendConnection()
   logs.init()
+  auto.start()
   library.load().catch((e) => toast.error('加载数据失败：' + errorMessage(e)))
 }
 

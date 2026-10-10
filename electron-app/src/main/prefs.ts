@@ -8,13 +8,15 @@ import type { UiPrefs } from '../shared/types'
 // Read once (sync) on first access, then cached; writes are atomic (temp file + rename).
 
 const DEFAULTS: UiPrefs = {
-  onboardingDone: false
+  onboardingDone: false,
+  startHidden: false
 }
 
 // Per-key validation table — extend here when UiPrefs grows. Unknown keys are ignored.
 type Validator = (v: unknown) => boolean
 const VALIDATORS: { [K in keyof UiPrefs]: Validator } = {
-  onboardingDone: (v) => typeof v === 'boolean'
+  onboardingDone: (v) => typeof v === 'boolean',
+  startHidden: (v) => typeof v === 'boolean'
 }
 
 let cache: UiPrefs | null = null

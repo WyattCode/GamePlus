@@ -20,6 +20,8 @@ import type {
   LogEntry,
   NodeRanking,
   RankedNode,
+  RuleExport,
+  RuleImportResult,
   RulesStatus,
   RulesUpdateResult,
   Server,
@@ -58,6 +60,10 @@ export interface Backend {
   updateSubscription(id: string): Promise<SubMutation>
   /** Imports nodes from pasted text (share links, subscription blob, Clash YAML or a subscription URL). */
   importNodes(text: string): Promise<ImportResult>
+  /** Exports one game's rules as pretty JSON + a gameplus-rule: share string. */
+  exportGameRule(id: string): Promise<RuleExport>
+  /** Imports a single-game rule (JSON text or gameplus-rule: share string). */
+  importGameRule(text: string, onConflict?: 'ask' | 'replace' | 'copy'): Promise<RuleImportResult>
   toggleFavorite(id: string): Promise<Game[]>
   setGameAuto(id: string, enabled: boolean): Promise<Game[]>
   setGameServer(id: string, server: 'cn' | 'intl'): Promise<Game[]>
@@ -222,6 +228,27 @@ export function isValidProcessName(s: string): boolean {
 
 // Schemes the mock recognises when pretending to import pasted share links.
 const IMPORT_SCHEMES = ['ss://', 'vmess://', 'trojan://', 'vless://', 'hysteria2://', 'socks://', 'socks5://']
+
+// Single-game rule export/import (mirrors the C# RuleShareService contract).
+const RULE_SHARE_PREFIX = 'gameplus-rule:v1:'
+const RULE_MAX_BYTES = 64 * 1024
+const RULE_UNRECOGNIZED = '无法识别的规则内容（需要 Game+ 规则 JSON 或 gameplus-rule: 分享串）'
+
+/** UTF-8 safe base64url (no padding) of a string. */
+function toBase64Url(s: string): string {
+  return btoa(unescape(encodeURIComponent(s)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
+}
+
+/** Inverse of toBase64Url; throws when the input is not valid base64url. */
+function fromBase64Url(s: string): string {
+  let b64 = s.replace(/-/g, '+').replace(/_/g, '/')
+  while (b64.length % 4 !== 0) b64 += '='
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) throw new Error('bad base64')
+  return decodeURIComponent(escape(atob(b64)))
+}
 
 /** Capture methods available for a game's rules (mirrors the backend's GameDto.AvailableModes). */
 export function availableModesFor(game: Game): CaptureModeKind[] {
@@ -682,6 +709,161 @@ class MockBackend implements Backend {
     }
   }
 
+  async exportGameRule(id: string): Promise<RuleExport> {
+    const g = this.mockGames.find((x) => x.id === id)
+    if (!g) throw new Error('游戏不存在')
+    // Rules ids can't start with "custom-": exported custom games get "user-" + rest.
+    const exportId = g.id.startsWith('custom-') ? 'user-' + g.id.slice('custom-'.length) : g.id
+    const game = {
+      id: exportId,
+      name: g.name,
+      englishName: g.englishName ?? '',
+      aliases: g.aliases ?? [],
+      icon: g.icon,
+      accentColor: g.accent,
+      category: g.category ?? 'PC',
+      regions: g.regions ?? [],
+      platforms: g.platforms ?? [],
+      proxyDomains: g.proxyDomains ?? [],
+      proxyIps: g.proxyIps ?? [],
+      proxyProcesses: g.proxyProcesses ?? [],
+      downloadDomains: g.downloadDomains ?? []
+    }
+    const file = {
+      format: 'gameplus-game-rule',
+      schema: 1,
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      games: [game]
+    }
+    const json = JSON.stringify(file, null, 2)
+    const share = RULE_SHARE_PREFIX + toBase64Url(JSON.stringify(file))
+    return { json, share, fileName: `${exportId}.gameplus-rule.json` }
+  }
+
+  async importGameRule(text: string, onConflict: 'ask' | 'replace' | 'copy' = 'ask'): Promise<RuleImportResult> {
+    const trimmed = (text ?? '').trim()
+    if (!trimmed) throw new Error(RULE_UNRECOGNIZED)
+    if (trimmed.length > RULE_MAX_BYTES) throw new Error('规则内容过大')
+
+    let raw = trimmed
+    if (trimmed.startsWith(RULE_SHARE_PREFIX)) {
+      try {
+        raw = fromBase64Url(trimmed.slice(RULE_SHARE_PREFIX.length))
+      } catch {
+        throw new Error('规则分享串已损坏')
+      }
+      if (raw.length > RULE_MAX_BYTES) throw new Error('规则内容过大')
+    }
+
+    let file: { format?: string; schema?: number; version?: number; games?: unknown }
+    try {
+      file = JSON.parse(raw)
+    } catch {
+      throw new Error(trimmed.startsWith(RULE_SHARE_PREFIX) ? '规则分享串已损坏' : RULE_UNRECOGNIZED)
+    }
+    if (!file || typeof file !== 'object' || file.format !== 'gameplus-game-rule' || file.schema !== 1 || file.version !== 1) {
+      throw new Error('规则文件格式不正确（需要 format=gameplus-game-rule、schema=1、version=1）')
+    }
+    if (!Array.isArray(file.games) || file.games.length !== 1) {
+      throw new Error('规则文件必须包含且仅包含一个游戏')
+    }
+    const incoming = file.games[0] as Record<string, unknown>
+    const incomingName = typeof incoming.name === 'string' ? incoming.name.trim() : ''
+    const rawId = typeof incoming.id === 'string' ? incoming.id.trim() : ''
+    if (!incomingName) throw new Error('规则文件中的游戏缺少名称')
+    if (!rawId) throw new Error('规则文件中的游戏缺少 id')
+
+    // Target id = "custom-" + incomingId (strip a leading "user-"; cut to max 64 chars).
+    const incomingId = rawId.startsWith('user-') ? rawId.slice('user-'.length) : rawId
+    const targetId = ('custom-' + incomingId).slice(0, 64)
+    const lowerName = incomingName.toLowerCase()
+
+    let copyId: string | null = null
+    let copyName = incomingName
+
+    const builtin = this.mockGames.find(
+      (g) => !g.custom && (g.id === incomingId || g.name.toLowerCase() === lowerName)
+    )
+    if (builtin) {
+      if (onConflict === 'replace') throw new Error('内置游戏不能被替换，请选择「另存为副本」')
+      if (onConflict === 'ask') {
+        return {
+          status: 'conflict',
+          conflict: { kind: 'builtin', existingId: builtin.id, existingName: builtin.name, incomingName }
+        }
+      }
+      copyId = this.uniqueCopyId(targetId)
+      copyName = incomingName + '（导入）'
+    } else {
+      const existing = this.mockGames.find(
+        (g) => g.custom && (g.id === targetId || g.name.toLowerCase() === lowerName)
+      )
+      if (existing) {
+        if (onConflict === 'ask') {
+          return {
+            status: 'conflict',
+            conflict: { kind: 'custom', existingId: existing.id, existingName: existing.name, incomingName }
+          }
+        }
+        if (onConflict === 'replace') {
+          // Overwrite the existing custom game's rules/name but keep its id and favorite flag.
+          Object.assign(existing, this.gameFromRule(incoming, existing.id, incomingName), {
+            favorite: existing.favorite
+          })
+          return { status: 'imported', importedId: existing.id, games: structuredClone(this.gamesWithModes()) }
+        }
+        copyId = this.uniqueCopyId(targetId)
+        copyName = incomingName + '（导入）'
+      }
+    }
+
+    const newId = copyId ?? targetId
+    this.mockGames.push(this.gameFromRule(incoming, newId, copyName))
+    return { status: 'imported', importedId: newId, games: structuredClone(this.gamesWithModes()) }
+  }
+
+  /** First free id among base, base-2, base-3, … */
+  private uniqueCopyId(base: string): string {
+    if (!this.mockGames.some((g) => g.id === base)) return base
+    for (let i = 2; ; i++) {
+      const candidate = `${base}-${i}`
+      if (!this.mockGames.some((g) => g.id === candidate)) return candidate
+    }
+  }
+
+  /** Maps an imported rule game object (GameRulesFile shape) onto a custom Game. */
+  private gameFromRule(incoming: Record<string, unknown>, id: string, name: string): Game {
+    const strList = (v: unknown): string[] =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+    const category = typeof incoming.category === 'string' && incoming.category ? incoming.category : 'PC'
+    const platforms = strList(incoming.platforms)
+    const regions = strList(incoming.regions)
+    const proxyDomains = strList(incoming.proxyDomains)
+    const proxyIps = strList(incoming.proxyIps)
+    const proxyProcesses = strList(incoming.proxyProcesses)
+    return {
+      id,
+      name,
+      icon: typeof incoming.icon === 'string' && incoming.icon ? incoming.icon : '🎮',
+      accent: typeof incoming.accentColor === 'string' ? incoming.accentColor : '',
+      regionText: regions.join(' · '),
+      ruleCount: proxyDomains.length + proxyIps.length + proxyProcesses.length,
+      categories: [category, ...platforms],
+      favorite: false,
+      custom: true,
+      englishName: typeof incoming.englishName === 'string' ? incoming.englishName : '',
+      aliases: strList(incoming.aliases),
+      category,
+      regions,
+      platforms,
+      proxyDomains,
+      proxyIps,
+      proxyProcesses,
+      downloadDomains: strList(incoming.downloadDomains)
+    }
+  }
+
   async toggleFavorite(id: string): Promise<Game[]> {
     const g = this.mockGames.find((x) => x.id === id)
     if (g) g.favorite = !g.favorite
@@ -811,7 +993,7 @@ class MockBackend implements Backend {
   }
   async setSettings(patch: SettingsPatch): Promise<EngineSettings> {
     if (patch.extraApps) {
-      const seen = new Set<string>()
+      const seen = new Set()
       for (const app of patch.extraApps) {
         const process = (app.process ?? '').trim()
         if (!isValidProcessName(process)) {
@@ -862,7 +1044,7 @@ class MockBackend implements Backend {
         throw new Error('自动切换冷却时间必须在 10–600 秒之间')
       }
       if (adv.autoSwitchMaxSwitches !== undefined && (adv.autoSwitchMaxSwitches < 1 || adv.autoSwitchMaxSwitches > 10)) {
-        throw new Error('自动切换次数必须在 1–10 次之间')
+        throw new Error('自动切换次数必须在 1–10 之间')
       }
       this.mockSettings = {
         ...this.mockSettings,

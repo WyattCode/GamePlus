@@ -527,3 +527,23 @@ export interface AccelSession {
   /** One-line Chinese summary of the effect measurement. */
   summary: string | null
 }
+
+/** Result of games.exportRule: pretty-printed rule JSON, a share string and a suggested file name. */
+export interface RuleExport {
+  json: string
+  share: string
+  fileName: string
+}
+
+/** Conflict reported by games.importRule when the incoming rule matches an existing game. */
+export interface RuleConflict {
+  kind: 'builtin' | 'custom'
+  existingId: string
+  existingName: string
+  incomingName: string
+}
+
+/** Result of games.importRule: either imported (with the refreshed game list) or a conflict. */
+export type RuleImportResult =
+  | { status: 'imported'; importedId: string; games: Game[] }
+  | { status: 'conflict'; conflict: RuleConflict }

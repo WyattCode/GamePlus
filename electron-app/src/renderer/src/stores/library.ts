@@ -6,6 +6,8 @@ import type {
   Game,
   ImportResult,
   LibraryScanResult,
+  RuleExport,
+  RuleImportResult,
   RulesStatus,
   RulesUpdateResult,
   Server,
@@ -202,6 +204,21 @@ export const useLibraryStore = defineStore('library', () => {
     return result
   }
 
+  /** Exports one game's rules (JSON + share string) without touching local state. */
+  async function exportGameRule(id: string): Promise<RuleExport> {
+    return backend.exportGameRule(id)
+  }
+
+  /** Imports a single-game rule; refreshes the game list when something was imported. */
+  async function importGameRule(
+    text: string,
+    onConflict?: 'ask' | 'replace' | 'copy'
+  ): Promise<RuleImportResult> {
+    const result = await backend.importGameRule(text, onConflict)
+    if (result.status === 'imported') games.value = result.games
+    return result
+  }
+
   /** Scans the local machine for installed games. Result is kept in `scanResult`. */
   async function scan(): Promise<LibraryScanResult> {
     scanning.value = true
@@ -261,6 +278,8 @@ export const useLibraryStore = defineStore('library', () => {
     updateSubscription,
     updateAllSubscriptions,
     importNodes,
+    exportGameRule,
+    importGameRule,
     scan,
     addDetected,
     refreshRulesStatus,

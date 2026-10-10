@@ -15,6 +15,8 @@ import type {
   LibraryScanResult,
   LogEntry,
   NodeRanking,
+  RuleExport,
+  RuleImportResult,
   RulesStatus,
   RulesUpdateResult,
   Server,
@@ -301,6 +303,12 @@ export class WebSocketBackend implements Backend {
   }
   importNodes(text: string): Promise<ImportResult> {
     return this.call('servers.import', { text })
+  }
+  exportGameRule(id: string): Promise<RuleExport> {
+    return this.call('games.exportRule', { id })
+  }
+  importGameRule(text: string, onConflict?: 'ask' | 'replace' | 'copy'): Promise<RuleImportResult> {
+    return this.call('games.importRule', { text, onConflict: onConflict ?? 'ask' })
   }
   toggleFavorite(id: string): Promise<Game[]> {
     return this.call('games.toggleFavorite', { id })

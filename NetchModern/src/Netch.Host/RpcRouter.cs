@@ -518,6 +518,33 @@ internal sealed class RpcRouter
                 }, ct);
             }
 
+            case "games.exportRule":
+            {
+                // Snapshot the game under the lock; serialization is pure CPU so it stays inside.
+                var id = JsonParams.RequiredString(@params, "id");
+                return await WithStateValue(() =>
+                {
+                    var game = Games.Games.FirstOrDefault(g => g.Id == id)
+                               ?? throw new InvalidOperationException("游戏不存在");
+                    var now = DateTime.UtcNow;
+                    return new
+                    {
+                        json = SingleGameRule.ToJson(game, now),
+                        share = SingleGameRule.ToShareString(game, now),
+                        fileName = $"{SingleGameRule.ExportId(game)}.gameplus-rule.json"
+                    };
+                }, ct);
+            }
+
+            case "games.importRule":
+            {
+                var text = JsonParams.RequiredString(@params, "text");
+                var onConflict = (JsonParams.OptionalString(@params, "onConflict") ?? "ask").Trim().ToLowerInvariant();
+                if (onConflict is not ("ask" or "replace" or "copy"))
+                    throw new InvalidOperationException("无效的冲突处理方式（可选：ask / replace / copy）");
+                return await ImportGameRuleAsync(text, onConflict, ct);
+            }
+
             case "library.scan":
             {
                 // Snapshot the library under the lock, then run the scan OUTSIDE it (file I/O can take
@@ -947,6 +974,127 @@ internal sealed class RpcRouter
             return false;
         return uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
     }
+
+    /// <summary>
+    ///     Implements games.importRule: parses the payload (Game+ rule JSON or gameplus-rule: share
+    ///     string) OUTSIDE the state lock, then detects conflicts + applies the import under it. The
+    ///     result is always a CUSTOM game (id "custom-" + incoming id) — built-in games are never
+    ///     modified.
+    /// </summary>
+    private async Task<object> ImportGameRuleAsync(string text, string onConflict, CancellationToken ct)
+    {
+        var incoming = SingleGameRule.Parse(text);
+        return await WithStateValueAsync(
+            () => Task.FromResult(ImportGameRuleUnderLock(incoming, onConflict)), ct);
+    }
+
+    /// <summary>Conflict detection + apply for games.importRule. Runs under the state lock.</summary>
+    private object ImportGameRuleUnderLock(Game incoming, string onConflict)
+    {
+        // Exported custom games carry a "user-" id (rules ids can't start with "custom-"); strip it
+        // and re-prefix with "custom-" for the in-library id.
+        var baseId = incoming.Id.StartsWith("user-", StringComparison.Ordinal)
+            ? incoming.Id["user-".Length..]
+            : incoming.Id;
+        var targetId = SingleGameRule.TargetCustomId(incoming.Id);
+
+        // Built-in conflict: same id or same display name (case-insensitive).
+        var builtin = Games.Games.FirstOrDefault(g => !g.IsCustom &&
+            (g.Id == baseId || string.Equals(g.Name, incoming.Name, StringComparison.OrdinalIgnoreCase)));
+        if (builtin is not null)
+        {
+            if (onConflict == "replace")
+                throw new InvalidOperationException("内置游戏不能被替换，请选择「另存为副本」");
+            if (onConflict == "ask")
+                return ConflictResult("builtin", builtin.Id, builtin.Name, incoming.Name);
+            return ImportRuleCopy(FreeCustomId(targetId), $"{incoming.Name}（导入）", incoming);
+        }
+
+        // Custom conflict: an existing custom game with the target id or the same name.
+        var custom = Games.Games.FirstOrDefault(g => g.IsCustom &&
+            (g.Id == targetId || string.Equals(g.Name, incoming.Name, StringComparison.OrdinalIgnoreCase)));
+        if (custom is not null)
+        {
+            switch (onConflict)
+            {
+                case "ask":
+                    return ConflictResult("custom", custom.Id, custom.Name, incoming.Name);
+                case "replace":
+                    // Overwrite in place: keep the existing id + favorite flag, take the incoming rules.
+                    CopyRuleFields(custom, incoming);
+                    custom.IsCustom = true;
+                    Games.UpdateCustomGame(custom);
+                    return ImportedResult(custom.Id);
+                default: // "copy"
+                    return ImportRuleCopy(FreeCustomId(targetId), $"{incoming.Name}（导入）", incoming);
+            }
+        }
+
+        // No conflict → add directly under the target id.
+        return ImportRuleCopy(targetId, incoming.Name, incoming);
+    }
+
+    /// <summary>Adds the incoming rule set as a new custom game and returns the imported result.</summary>
+    private object ImportRuleCopy(string id, string name, Game incoming)
+    {
+        var game = new Game
+        {
+            Id = id,
+            Name = name,
+            EnglishName = incoming.EnglishName,
+            Aliases = new List<string>(incoming.Aliases),
+            Icon = incoming.Icon,
+            AccentColor = incoming.AccentColor,
+            Category = incoming.Category,
+            Regions = new List<string>(incoming.Regions),
+            Platforms = new List<string>(incoming.Platforms),
+            ProxyDomains = new List<string>(incoming.ProxyDomains),
+            ProxyIps = new List<string>(incoming.ProxyIps),
+            ProxyProcesses = new List<string>(incoming.ProxyProcesses),
+            DownloadDomains = new List<string>(incoming.DownloadDomains),
+            IsCustom = true,
+            IsFavorite = false
+        };
+        Games.AddCustomGame(game);
+        return ImportedResult(game.Id);
+    }
+
+    /// <summary>Copies the importable rule/name fields onto an existing custom game (id + favorite kept).</summary>
+    private static void CopyRuleFields(Game target, Game incoming)
+    {
+        target.Name = incoming.Name;
+        target.EnglishName = incoming.EnglishName;
+        target.Aliases = new List<string>(incoming.Aliases);
+        target.Icon = incoming.Icon;
+        target.AccentColor = incoming.AccentColor;
+        target.Category = incoming.Category;
+        target.Regions = new List<string>(incoming.Regions);
+        target.Platforms = new List<string>(incoming.Platforms);
+        target.ProxyDomains = new List<string>(incoming.ProxyDomains);
+        target.ProxyIps = new List<string>(incoming.ProxyIps);
+        target.ProxyProcesses = new List<string>(incoming.ProxyProcesses);
+        target.DownloadDomains = new List<string>(incoming.DownloadDomains);
+    }
+
+    /// <summary>Returns candidate, or the first free "candidate-2", "candidate-3" … variant.</summary>
+    private string FreeCustomId(string candidate)
+    {
+        var taken = Games.Games.Select(g => g.Id).ToHashSet(StringComparer.Ordinal);
+        if (!taken.Contains(candidate))
+            return candidate;
+        for (var n = 2; ; n++)
+        {
+            var next = $"{candidate}-{n}";
+            if (!taken.Contains(next))
+                return next;
+        }
+    }
+
+    private static object ConflictResult(string kind, string existingId, string existingName, string incomingName) =>
+        new { status = "conflict", conflict = new { kind, existingId, existingName, incomingName } };
+
+    private object ImportedResult(string importedId) =>
+        new { status = "imported", importedId, games = GameList() };
 
     /// <summary>Builds the effect report DTO, or an empty "not started" report when no monitor is wired up.</summary>
     private EffectReportDto EffectDto()

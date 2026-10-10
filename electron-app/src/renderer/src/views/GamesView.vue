@@ -5,6 +5,8 @@ import AppIcon from '@/components/AppIcon.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
 import GameEditorDialog from '@/components/GameEditorDialog.vue'
 import LibraryScanDialog from '@/components/LibraryScanDialog.vue'
+import RuleExportDialog from '@/components/RuleExportDialog.vue'
+import RuleImportDialog from '@/components/RuleImportDialog.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useAccelStore } from '@/stores/accel'
 import { useToastStore, errorMessage } from '@/stores/toast'
@@ -22,6 +24,9 @@ const activeCat = ref('全部')
 const editorOpen = ref(false)
 const editing = ref<Game | null>(null)
 const scanOpen = ref(false)
+const importOpen = ref(false)
+const exportOpen = ref(false)
+const exporting = ref<Game | null>(null)
 
 function openAdd(): void {
   editing.value = null
@@ -31,6 +36,11 @@ function openAdd(): void {
 function openEdit(g: Game): void {
   editing.value = g
   editorOpen.value = true
+}
+
+function openExport(g: Game): void {
+  exporting.value = g
+  exportOpen.value = true
 }
 
 async function onSave(data: Partial<Game>): Promise<void> {
@@ -111,6 +121,7 @@ function pick(g: Game): void {
         <p class="page-sub">{{ library.games.length }} 款游戏 · 点击卡片开始加速</p>
       </div>
       <div class="head-actions">
+        <button class="btn" @click="importOpen = true"><AppIcon name="plus" :size="18" /> 导入规则</button>
         <button class="btn" @click="scanOpen = true"><AppIcon name="search" :size="18" /> 扫描本机游戏</button>
         <button class="btn btn-primary" @click="openAdd"><AppIcon name="plus" :size="18" /> 添加游戏</button>
       </div>
@@ -140,9 +151,12 @@ function pick(g: Game): void {
         <button class="fav" :class="{ on: g.favorite }" @click.stop="onToggleFavorite(g.id)">
           <AppIcon name="star" :size="16" />
         </button>
-        <div v-if="g.custom" class="tile-actions" @click.stop>
-          <button class="tile-btn" title="编辑" @click="openEdit(g)"><AppIcon name="edit" :size="14" /></button>
-          <button class="tile-btn danger" title="删除" @click="onRemove(g)"><AppIcon name="trash" :size="14" /></button>
+        <div class="tile-actions" @click.stop>
+          <button class="tile-btn" title="导出规则" @click="openExport(g)"><AppIcon name="copy" :size="14" /></button>
+          <template v-if="g.custom">
+            <button class="tile-btn" title="编辑" @click="openEdit(g)"><AppIcon name="edit" :size="14" /></button>
+            <button class="tile-btn danger" title="删除" @click="onRemove(g)"><AppIcon name="trash" :size="14" /></button>
+          </template>
         </div>
         <div class="tile-glyph" :style="{ '--a': gameColor(g.id) }">
           <GameGlyph :id="g.id" :name="g.name" :size="34" />
@@ -179,6 +193,8 @@ function pick(g: Game): void {
 
     <GameEditorDialog :open="editorOpen" :game="editing" @close="editorOpen = false" @save="onSave" />
     <LibraryScanDialog :open="scanOpen" @close="scanOpen = false" />
+    <RuleImportDialog :open="importOpen" @close="importOpen = false" />
+    <RuleExportDialog :open="exportOpen" :game="exporting" @close="exportOpen = false" />
   </div>
 </template>
 

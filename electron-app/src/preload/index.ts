@@ -95,6 +95,11 @@ const api = {
     clear: (): Promise<void> => ipcRenderer.invoke('telemetry:clear'),
     listCrashes: (): Promise<CrashFileInfo[]> => ipcRenderer.invoke('telemetry:list-crashes'),
     openCrashFolder: (): Promise<void> => ipcRenderer.invoke('telemetry:open-crash-folder')
+  },
+  diag: {
+    collectClient: (): Promise<unknown> => ipcRenderer.invoke('diag:collect-client'),
+    saveBundle: (fileName: string, base64: string): Promise<string | null> =>
+      ipcRenderer.invoke('diag:save-bundle', fileName, base64)
   }
 }
 

@@ -1,6 +1,10 @@
+using System.Globalization;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
+using Netch.Core;
 using Netch.Core.Abstractions;
 using Netch.Core.Models.Games;
 using Netch.Core.Models.Servers;
@@ -12,6 +16,7 @@ using Netch.Core.Services.History;
 using Netch.Core.Services.Import;
 using Netch.Core.Services.Library;
 using Netch.Core.Services.Rules;
+using Netch.Core.Utils;
 
 namespace Netch.Host;
 
@@ -19,6 +24,7 @@ namespace Netch.Host;
 internal sealed class RpcRouter
 {
     private readonly IServiceProvider _sp;
+    private readonly DateTime _startedAt = DateTime.UtcNow;
 
     public RpcRouter(IServiceProvider sp) => _sp = sp;
 
@@ -189,25 +195,18 @@ internal sealed class RpcRouter
                 var nodeId = JsonParams.OptionalString(@params, "nodeId");
                 var error = JsonParams.OptionalString(@params, "error");
 
-                // Snapshot game/node/servers + accelerating flag under the lock, then run the checks
-                // OUTSIDE it (DNS + node probes are network I/O and can take seconds).
-                var (game, node, servers, accelerating) = await WithStateValue(() =>
-                {
-                    var g = string.IsNullOrEmpty(gameId)
-                        ? null
-                        : Games.Games.FirstOrDefault(x => x.Id == gameId);
-                    var pool = Servers.Servers.ToList();
-                    var n = string.IsNullOrEmpty(nodeId)
-                        ? null
-                        : ServerIds.Resolve(nodeId!, pool);
-                    var accel = Accel.State == AccelerationState.Accelerating
-                                || Accel.State == AccelerationState.Connecting;
-                    return (g, n, pool, accel);
-                }, ct);
-
-                var ctx = new DiagnosticContext(game, node, servers, accelerating, error);
-                var report = await Diagnostics.RunAsync(ctx, ct);
+                var report = await RunDiagnosticsAsync(gameId, nodeId, error, ct);
                 return Mapping.ToDto(report);
+            }
+
+            case "diag.bundle":
+            {
+                var client = @params.ValueKind == JsonValueKind.Object
+                             && @params.TryGetProperty("client", out var clientEl)
+                    ? clientEl
+                    : (JsonElement?)null;
+
+                return await BuildDiagnosticBundleAsync(client, ct);
             }
 
             case "diag.fix":
@@ -386,7 +385,7 @@ internal sealed class RpcRouter
                         catch
                         {
                             // Roll back the in-memory swap so the list stays consistent with the store.
-                            Games.Games[index] = existing;
+                            Games.Games[index] = updated;
                             throw;
                         }
                     }
@@ -526,6 +525,170 @@ internal sealed class RpcRouter
 
             default:
                 throw new InvalidOperationException($"unknown method: {method}");
+        }
+    }
+
+    /// <summary>
+    ///     Runs the diagnostics checks for the given game/node/error. Snapshots game/node/servers +
+    ///     accelerating flag under the state lock, then runs the checks OUTSIDE it (DNS + node probes
+    ///     are network I/O and can take seconds). Shared by diag.run and diag.bundle.
+    /// </summary>
+    private async Task<DiagnosticReport> RunDiagnosticsAsync(
+        string? gameId, string? nodeId, string? error, CancellationToken ct)
+    {
+        var (game, node, servers, accelerating) = await WithStateValue(() =>
+        {
+            var g = string.IsNullOrEmpty(gameId)
+                ? null
+                : Games.Games.FirstOrDefault(x => x.Id == gameId);
+            var pool = Servers.Servers.ToList();
+            var n = string.IsNullOrEmpty(nodeId)
+                ? null
+                : ServerIds.Resolve(nodeId!, pool);
+            var accel = Accel.State == AccelerationState.Accelerating
+                        || Accel.State == AccelerationState.Connecting;
+            return (g, n, pool, accel);
+        }, ct);
+
+        var ctx = new DiagnosticContext(game, node, servers, accelerating, error);
+        return await Diagnostics.RunAsync(ctx, ct);
+    }
+
+    /// <summary>
+    ///     Builds the one-click diagnostic bundle: snapshots settings/servers/subscriptions under the
+    ///     state lock, runs diagnostics OUTSIDE it, then zips everything in memory and returns base64.
+    /// </summary>
+    private async Task<object> BuildDiagnosticBundleAsync(JsonElement? client, CancellationToken ct)
+    {
+        var now = DateTime.Now;
+
+        // Snapshot everything that touches shared state under the lock. Servers are reduced to a
+        // non-identifying summary (no host, no credentials); subscription links are redacted.
+        var (settingsNode, servers, subscriptions, logLines, crashFiles) = await WithStateValue(() =>
+        {
+            var settings = JsonSerializer.SerializeToNode(SettingsSvc.Settings);
+
+            var serverList = Servers.Servers
+                .Select(s => (object)new
+                {
+                    type = s.Type.ToString(),
+                    remark = s.Remark,
+                    port = s.Port,
+                    group = s.Group
+                })
+                .ToList();
+
+            var subList = Subs.Subscriptions
+                .Select(s => (object)new
+                {
+                    remark = s.Remark,
+                    serverCount = s.ServerCount,
+                    lastUpdated = s.LastUpdated?.ToString("o"),
+                    host = SecretRedactor.RedactUrl(s.Link ?? "")
+                })
+                .ToList();
+
+            var logs = Logs.Recent
+                .Select(l => $"{l.Timestamp:yyyy-MM-dd HH:mm:ss} {l.Level} {l.Message}")
+                .ToList();
+
+            var crashes = ReadCrashFiles();
+
+            return (settings, (IReadOnlyList<object>)serverList, (IReadOnlyList<object>)subList,
+                (IReadOnlyList<string>)logs, crashes);
+        }, ct);
+
+        // Diagnostics run OUTSIDE the lock (network I/O), exactly like diag.run with no game/node.
+        var report = await RunDiagnosticsAsync(null, null, null, ct);
+        var diagnostics = Mapping.ToDto(report);
+
+        JsonNode? clientNode = null;
+        if (client is { } el && el.ValueKind == JsonValueKind.Object)
+            clientNode = JsonNode.Parse(el.GetRawText());
+
+        var env = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["os"] = RuntimeInformation.OSDescription,
+            ["osArchitecture"] = RuntimeInformation.OSArchitecture.ToString(),
+            ["processArchitecture"] = RuntimeInformation.ProcessArchitecture.ToString(),
+            ["dotnet"] = Environment.Version.ToString(),
+            ["elevated"] = IsElevated().ToString(),
+            ["culture"] = CultureInfo.CurrentCulture.Name,
+            ["timeZone"] = TimeZoneInfo.Local.Id,
+            ["uptimeSeconds"] = ((long)(DateTime.UtcNow - _startedAt).TotalSeconds).ToString(CultureInfo.InvariantCulture)
+        };
+
+        var hostVersion = typeof(RpcRouter).Assembly.GetName().Version?.ToString() ?? "unknown";
+        var appVersion = hostVersion;
+
+        var input = new BundleInput(
+            appVersion,
+            hostVersion,
+            env,
+            settingsNode,
+            servers,
+            subscriptions,
+            logLines,
+            crashFiles,
+            diagnostics,
+            clientNode);
+
+        var bytes = DiagnosticBundleBuilder.Build(input, now);
+        var fileName = $"GamePlus-diagnostics-{now:yyyyMMdd-HHmmss}.zip";
+        return new
+        {
+            fileName,
+            base64 = Convert.ToBase64String(bytes),
+            size = bytes.Length
+        };
+    }
+
+    /// <summary>Reads the newest crash-host-*.txt files (max 10) from the crash directory.</summary>
+    private IReadOnlyList<(string Name, string Content)> ReadCrashFiles()
+    {
+        var result = new List<(string Name, string Content)>();
+        try
+        {
+            var dir = Path.Combine(AppPaths.DataDirectory, "crashes");
+            if (!System.IO.Directory.Exists(dir))
+                return result;
+
+            var files = System.IO.Directory.GetFiles(dir, "crash-host-*.txt");
+            Array.Sort(files, StringComparer.Ordinal);
+            var take = Math.Min(files.Length, 10);
+            for (var i = files.Length - take; i < files.Length; i++)
+            {
+                try
+                {
+                    var content = File.ReadAllText(files[i]);
+                    result.Add((Path.GetFileName(files[i]), content));
+                }
+                catch
+                {
+                    // best effort
+                }
+            }
+        }
+        catch
+        {
+            // best effort
+        }
+        return result;
+    }
+
+    private static bool IsElevated()
+    {
+        if (!OperatingSystem.IsWindows())
+            return false;
+        try
+        {
+            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            return new System.Security.Principal.WindowsPrincipal(identity)
+                .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+        }
+        catch
+        {
+            return false;
         }
     }
 

@@ -1,5 +1,6 @@
-import { app, shell, BrowserWindow, ipcMain, nativeTheme, Tray, Menu, nativeImage, Notification, screen } from 'electron'
-import { readFileSync } from 'fs'
+import { app, shell, BrowserWindow, ipcMain, nativeTheme, Tray, Menu, nativeImage, Notification, screen, dialog } from 'electron'
+import { readFileSync, writeFileSync } from 'fs'
+import { release as osRelease } from 'os'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { startSidecar, stopSidecar } from './sidecar'
@@ -11,7 +12,8 @@ import {
   installCrashHandlers,
   registerTelemetryIpc,
   startTelemetry,
-  stopTelemetry
+  stopTelemetry,
+  getRecentEvents
 } from './telemetry'
 import type { TrayAction, TrayInfo, UpdateConfig } from '../shared/types'
 
@@ -422,6 +424,37 @@ function registerWindowControls(): void {
     } catch {
       return false
     }
+  })
+
+  // --- One-click diagnostic bundle ---
+  ipcMain.handle('diag:collect-client', () => ({
+    appVersion: app.getVersion(),
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+    platform: process.platform,
+    osRelease: osRelease(),
+    arch: process.arch,
+    locale: app.getLocale(),
+    recentEvents: getRecentEvents(200)
+  }))
+
+  ipcMain.handle('diag:save-bundle', async (_e, fileName: unknown, base64: unknown) => {
+    if (typeof fileName !== 'string' || !/^GamePlus-diagnostics-\d{8}-\d{6}\.zip$/.test(fileName)) {
+      throw new Error('无效的文件名')
+    }
+    if (typeof base64 !== 'string' || base64.length > 40 * 1024 * 1024) {
+      throw new Error('无效的诊断包数据')
+    }
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+    const result = await dialog.showSaveDialog(win as BrowserWindow, {
+      defaultPath: join(app.getPath('documents'), fileName),
+      filters: [{ name: 'ZIP', extensions: ['zip'] }]
+    })
+    if (result.canceled || !result.filePath) return null
+    const buffer = Buffer.from(base64, 'base64')
+    writeFileSync(result.filePath, buffer)
+    return result.filePath
   })
 
   // --- Telemetry ---

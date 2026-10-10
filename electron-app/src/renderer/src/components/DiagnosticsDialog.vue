@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { useDiagnosticsStore } from '@/stores/diagnostics'
-import { useToastStore } from '@/stores/toast'
+import { useToastStore, errorMessage } from '@/stores/toast'
+import { exportDiagnosticBundle } from '@/utils/diagBundle'
 import type { DiagnosticItem, DiagnosticStatus } from '@shared/types'
 
 const diag = useDiagnosticsStore()
 const toast = useToastStore()
+
+const exporting = ref(false)
 
 const statusIcon: Record<DiagnosticStatus, string> = {
   ok: 'check',
@@ -55,6 +58,20 @@ async function copy(): Promise<void> {
     toast.error('复制失败')
   }
 }
+
+async function exportBundle(): Promise<void> {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const path = await exportDiagnosticBundle()
+    if (path) toast.info(`诊断包已保存：${path}`)
+    else toast.info('已取消')
+  } catch (e) {
+    toast.error('导出失败：' + errorMessage(e))
+  } finally {
+    exporting.value = false
+  }
+}
 </script>
 
 <template>
@@ -99,10 +116,18 @@ async function copy(): Promise<void> {
         </div>
 
         <div class="d-foot">
-          <button class="btn" @click="copy">复制报告</button>
-          <button class="btn btn-primary" :disabled="diag.running" @click="diag.rerun()">
-            {{ diag.running ? '检测中…' : '重新检测' }}
-          </button>
+          <div class="hint muted small">
+            包含日志、诊断结果与脱敏后的配置（已移除密码、密钥与订阅链接），分享前请自行检查
+          </div>
+          <div class="foot-actions">
+            <button class="btn" @click="copy">复制报告</button>
+            <button class="btn" :disabled="exporting" @click="exportBundle">
+              {{ exporting ? '导出中…' : '导出诊断包' }}
+            </button>
+            <button class="btn btn-primary" :disabled="diag.running" @click="diag.rerun()">
+              {{ diag.running ? '检测中…' : '重新检测' }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -221,10 +246,21 @@ async function copy(): Promise<void> {
 }
 .d-foot {
   display: flex;
-  justify-content: flex-end;
-  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 14px 20px;
   border-top: 1px solid var(--border);
+}
+.hint {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+.foot-actions {
+  display: flex;
+  gap: 10px;
+  flex: none;
 }
 .btn {
   height: 38px;

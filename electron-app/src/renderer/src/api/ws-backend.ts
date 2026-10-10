@@ -3,6 +3,7 @@ import type {
   AccelStatus,
   AutoAccelEvent,
   AutoStartState,
+  DiagnosticBundle,
   DiagnosticReport,
   EffectReport,
   EngineSettings,
@@ -30,6 +31,7 @@ const METHOD_TIMEOUTS: Record<string, number> = {
   'nodes.rank': 60_000,
   'accel.start': 60_000,
   'diag.run': 30_000,
+  'diag.bundle': 60_000,
   'library.scan': 60_000,
   'rules.update': 30_000
 }
@@ -330,6 +332,10 @@ export class WebSocketBackend implements Backend {
 
   fixDiagnostic(action: string): Promise<{ fixed: boolean }> {
     return this.call('diag.fix', { action })
+  }
+
+  exportDiagnosticBundle(client: unknown): Promise<DiagnosticBundle> {
+    return this.call('diag.bundle', { client: client ?? null })
   }
 
   scanLibrary(): Promise<LibraryScanResult> {

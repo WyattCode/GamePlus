@@ -163,7 +163,7 @@ export interface UpdateInfo {
   status: UpdateCheckStatus
   /** Running version, e.g. "3.0.0". */
   current: string
-  /** Latest version parsed from the update source, when available. */
+  /** Latest version parsed from the update source. */
   latest: string | null
   /** Raw tag from the update source, when available. */
   tag: string | null
@@ -261,6 +261,13 @@ export interface DiagnosticReport {
   ranAt: string
   /** Plain-Chinese explanation of the last error, when one was supplied. */
   errorExplanation: string | null
+}
+
+/** A one-click diagnostic bundle produced by the backend and saved by the client. */
+export interface DiagnosticBundle {
+  fileName: string
+  base64: string
+  size: number
 }
 
 /** Where the client auto-updater fetches releases from. */
@@ -429,7 +436,7 @@ export interface AutoAccelEvent {
 /** State of the "launch at login" scheduled task, reported by the C# host. */
 export interface AutoStartState {
   enabled: boolean
-  /** False when the app is not running from an installed layout. */
+  /** False when the app is not running from an installed location. */
   supported: boolean
   /** Short user-facing reason when unsupported (or null). */
   reason: string | null

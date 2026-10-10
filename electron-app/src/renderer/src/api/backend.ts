@@ -5,6 +5,7 @@ import type {
   AutoAccelEvent,
   AutoStartState,
   DetectedGame,
+  DiagnosticBundle,
   DiagnosticReport,
   EffectReport,
   EngineSettings,
@@ -74,6 +75,8 @@ export interface Backend {
     error?: string | null
   }): Promise<DiagnosticReport>
   fixDiagnostic(action: string): Promise<{ fixed: boolean }>
+  /** Builds a one-click diagnostic bundle (zip, base64) for the client to save. */
+  exportDiagnosticBundle(client: unknown): Promise<DiagnosticBundle>
   scanLibrary(): Promise<LibraryScanResult>
   addDetectedGame(name: string, executables: string[], source?: string): Promise<Game[]>
   rulesStatus(): Promise<RulesStatus>
@@ -673,7 +676,7 @@ class MockBackend implements Backend {
     if (patch.subscriptionAutoUpdateHours !== undefined) {
       const hours = patch.subscriptionAutoUpdateHours
       if (![0, 6, 12, 24, 48].includes(hours)) {
-        throw new Error('订阅自动更新间隔只能是 0、6、12、24 或 48 小时')
+        throw new Error('订阅自动更新间隔只能 0、6、12、24 或 48 小时')
       }
     }
     const { advanced, ...rest } = patch
@@ -915,6 +918,16 @@ class MockBackend implements Backend {
   async fixDiagnostic(action: string): Promise<{ fixed: boolean }> {
     await new Promise((r) => setTimeout(r, 300))
     return { fixed: action === 'fixProxy' }
+  }
+
+  async exportDiagnosticBundle(_client: unknown): Promise<DiagnosticBundle> {
+    await new Promise((r) => setTimeout(r, 400))
+    const now = new Date()
+    const pad = (n: number): string => String(n).padStart(2, '0')
+    const fileName = `GamePlus-diagnostics-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.zip`
+    // A valid, empty zip archive (end-of-central-directory record only).
+    const base64 = 'UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA=='
+    return { fileName, base64, size: 22 }
   }
 
   private tick(): void {

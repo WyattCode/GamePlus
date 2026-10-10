@@ -6,6 +6,7 @@ using Netch.Core.Models.Games;
 using Netch.Core.Models.Servers;
 using Netch.Core.Services;
 using Netch.Core.Services.Diagnostics;
+using Netch.Core.Services.Library;
 
 namespace Netch.Host;
 
@@ -41,6 +42,7 @@ internal sealed class RpcRouter
     private IUpdateChecker UpdateChecker => _sp.GetRequiredService<IUpdateChecker>();
     private ILogService Logs => _sp.GetRequiredService<ILogService>();
     private DiagnosticsService Diagnostics => _sp.GetRequiredService<DiagnosticsService>();
+    private GameLibraryScanner LibraryScanner => _sp.GetRequiredService<GameLibraryScanner>();
 
     public Task<object?> DispatchAsync(string method, JsonElement @params, CancellationToken ct) =>
         DispatchCoreAsync(method, @params, ct);
@@ -313,6 +315,57 @@ internal sealed class RpcRouter
                     var game = Games.Games.FirstOrDefault(g => g.Id == id)
                                ?? throw new InvalidOperationException("游戏不存在");
                     Games.RemoveGame(game);
+                    return Games.Games.Select(Mapping.ToDto).ToArray();
+                }, ct);
+            }
+
+            case "library.scan":
+            {
+                // Snapshot the library under the lock, then run the scan OUTSIDE it (file I/O can take
+                // seconds) on a background thread.
+                var library = await WithStateValue(() => Games.Games.ToList(), ct);
+                var result = await Task.Run(() => LibraryScanner.ScanAll(library, ct), ct);
+                return Mapping.ToDto(result);
+            }
+
+            case "library.addDetected":
+            {
+                var name = JsonParams.RequiredString(@params, "name").Trim();
+                if (string.IsNullOrWhiteSpace(name))
+                    throw new InvalidOperationException("游戏名称不能为空");
+
+                var executables = JsonParams.StringList(@params, "executables")
+                    .Select(e => e.Trim())
+                    .Where(e => e.Length > 0)
+                    .ToList();
+                if (executables.Count == 0)
+                    throw new InvalidOperationException("请至少提供一个可执行文件");
+
+                foreach (var exe in executables)
+                {
+                    if (!exe.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException($"可执行文件必须以 .exe 结尾：{exe}");
+                    if (exe.Contains('/') || exe.Contains('\\'))
+                        throw new InvalidOperationException($"可执行文件不能包含路径分隔符：{exe}");
+                }
+
+                var source = JsonParams.OptionalString(@params, "source");
+
+                return await WithStateValue(() =>
+                {
+                    var game = new Game
+                    {
+                        Name = name,
+                        Icon = "🎮",
+                        Category = GameCategory.Pc,
+                        Platforms = new List<string> { "PC" },
+                        ProxyProcesses = executables,
+                        Regions = new List<string>(),
+                        Aliases = new List<string>()
+                    };
+                    if (!string.IsNullOrWhiteSpace(source))
+                        game.EnglishName = source!;
+                    Games.AddCustomGame(game);
                     return Games.Games.Select(Mapping.ToDto).ToArray();
                 }, ct);
             }

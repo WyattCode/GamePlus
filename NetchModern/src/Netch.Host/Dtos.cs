@@ -4,6 +4,7 @@ using Netch.Core.Models.Games;
 using Netch.Core.Models.Servers;
 using Netch.Core.Services;
 using Netch.Core.Services.Diagnostics;
+using Netch.Core.Services.Library;
 
 namespace Netch.Host;
 
@@ -43,6 +44,11 @@ internal record DiagnosticItemDto(string Id, string Title, string Status, string
 
 internal record DiagnosticReportDto(DiagnosticItemDto[] Items, string Summary, string RanAt,
     string? ErrorExplanation);
+
+internal record DetectedGameDto(string Source, string SourceId, string Name, string? InstallDir,
+    string[] Executables, string? GameId, string? GameName, string? MatchedBy);
+
+internal record LibraryScanDto(DetectedGameDto[] Games, string[] Errors, string ScannedAt);
 
 internal static class Mapping
 {
@@ -226,6 +232,13 @@ internal static class Mapping
 
     public static DiagnosticItemDto ToDto(DiagnosticItem i) =>
         new(i.Id, i.Title, StatusName(i.Status), i.Detail, i.Suggestion, i.FixAction);
+
+    public static DetectedGameDto ToDto(DetectedGame d) =>
+        new(d.Installed.Source, d.Installed.SourceId, d.Installed.Name, d.Installed.InstallDir,
+            d.Installed.Executables.ToArray(), d.GameId, d.GameName, d.MatchedBy);
+
+    public static LibraryScanDto ToDto(ScanResult r) =>
+        new(r.Games.Select(ToDto).ToArray(), r.Errors.ToArray(), r.ScannedAtUtc.ToString("o"));
 
     private static string StatusName(DiagnosticStatus s) => s switch
     {

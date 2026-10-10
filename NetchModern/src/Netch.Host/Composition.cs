@@ -6,6 +6,7 @@ using Netch.Core.Controllers;
 using Netch.Core.Models.Servers;
 using Netch.Core.Services;
 using Netch.Core.Services.Diagnostics;
+using Netch.Core.Services.Library;
 
 namespace Netch.Host;
 
@@ -57,6 +58,14 @@ internal static class Composition
         services.AddSingleton<IDiagnosticEnvironment>(_ =>
             new WindowsDiagnosticEnvironment(new WindowsProxySettingsStore()));
         services.AddSingleton<DiagnosticsService>();
+
+        // Installed-game auto-detection: Steam / Epic / uninstall-registry scanners + matcher.
+        services.AddSingleton(_ => new GameLibraryScanner(new IGameScanner[]
+        {
+            new SteamScanner(null),
+            new EpicScanner(null),
+            new UninstallRegistryScanner(new RegistryUninstallSource())
+        }));
 
         // Update check. Source is resolved by UpdateSourceOptions (env vars, then update.json next to
         // the exe, then the default repo). Current version = the host assembly's.

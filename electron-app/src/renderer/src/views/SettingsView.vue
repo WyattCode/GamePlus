@@ -2,10 +2,12 @@
 import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { useAppStore } from '@/stores/app'
+import { useDiagnosticsStore } from '@/stores/diagnostics'
 import { backend } from '@/api/backend'
 import type { EngineSettings, UpdateInfo } from '@shared/types'
 
 const app = useAppStore()
+const diagnostics = useDiagnosticsStore()
 const themes = [
   { v: 'light', label: '浅色', icon: 'sun' },
   { v: 'dark', label: '深色', icon: 'moon' },
@@ -108,6 +110,17 @@ const updateText = computed<string | null>(() => {
     </div>
 
     <div class="card group">
+      <div class="g-title">诊断</div>
+      <div class="setting">
+        <div>
+          <div class="s-name">网络诊断</div>
+          <div class="muted small">检查驱动、权限、端口、线路和 DNS 等常见问题</div>
+        </div>
+        <button class="btn btn-primary diag-btn" @click="diagnostics.open()">开始诊断</button>
+      </div>
+    </div>
+
+    <div class="card group">
       <div class="g-title">关于</div>
       <div class="about">
         <div class="logo"><AppIcon name="bolt" :size="22" /></div>
@@ -171,6 +184,12 @@ const updateText = computed<string | null>(() => {
 }
 .warn {
   color: var(--warn);
+}
+.diag-btn {
+  flex: none;
+  height: 36px;
+  padding: 0 18px;
+  font-size: 13px;
 }
 .seg {
   display: flex;

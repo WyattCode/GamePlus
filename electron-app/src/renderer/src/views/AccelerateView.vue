@@ -6,11 +6,13 @@ import EffectChart from '@/components/EffectChart.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
 import { gameColor } from '@/utils/gameIcon'
 import { useAccelStore } from '@/stores/accel'
+import { useDiagnosticsStore } from '@/stores/diagnostics'
 import { useLibraryStore } from '@/stores/library'
 import { errorMessage } from '@/stores/toast'
 import { fmtDelay, fmtDuration, fmtLatency, fmtRate } from '@/utils/format'
 
 const accel = useAccelStore()
+const diagnostics = useDiagnosticsStore()
 const library = useLibraryStore()
 const router = useRouter()
 
@@ -202,6 +204,7 @@ async function toggle(): Promise<void> {
       <div v-if="error" class="card error-banner">
         <AppIcon name="warning" :size="16" />
         <span class="err-msg">{{ error }}</span>
+        <button class="err-diag" @click="diagnostics.open(error)">诊断</button>
         <button class="err-close" title="关闭" @click="error = null">
           <AppIcon name="close" :size="14" />
         </button>
@@ -451,6 +454,19 @@ async function toggle(): Promise<void> {
 .err-msg {
   flex: 1;
   word-break: break-word;
+}
+.err-diag {
+  flex: none;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.err-diag:hover {
+  background: rgba(220, 53, 69, 0.1);
 }
 .err-close {
   color: var(--danger);

@@ -5,6 +5,7 @@ using Netch.Core.Abstractions;
 using Netch.Core.Controllers;
 using Netch.Core.Models.Servers;
 using Netch.Core.Services;
+using Netch.Core.Services.Diagnostics;
 
 namespace Netch.Host;
 
@@ -51,6 +52,11 @@ internal static class Composition
             sp.GetRequiredService<ISystemProxyService>(),
             sp.GetRequiredService<IModeControllerFactory>(),
             sp.GetRequiredService<EffectMonitor>()));
+
+        // One-click diagnostics: environment checks + plain-Chinese explanations.
+        services.AddSingleton<IDiagnosticEnvironment>(_ =>
+            new WindowsDiagnosticEnvironment(new WindowsProxySettingsStore()));
+        services.AddSingleton<DiagnosticsService>();
 
         // Update check. Source is resolved by UpdateSourceOptions (env vars, then update.json next to
         // the exe, then the default repo). Current version = the host assembly's.

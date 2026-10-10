@@ -1,0 +1,354 @@
+using System.Net;
+using System.Text.RegularExpressions;
+using Netch.Core.Models.Servers;
+
+namespace Netch.Core.Services.Diagnostics;
+
+/// <summary>
+///     Runs a set of independent environment checks and explains each result in plain Chinese with a
+///     suggested action. A failing check never aborts the run — it becomes an Error item instead.
+/// </summary>
+public sealed class DiagnosticsService
+{
+    private readonly IDiagnosticEnvironment _env;
+
+    public DiagnosticsService(IDiagnosticEnvironment env) => _env = env;
+
+    /// <summary>Runs every check. Network checks run concurrently; each check is isolated.</summary>
+    public async Task<DiagnosticReport> RunAsync(DiagnosticContext ctx, CancellationToken ct)
+    {
+        var items = new List<DiagnosticItem>();
+
+        items.Add(Guard("core", "加速核心", CheckCore));
+        items.Add(Guard("admin", "管理员权限", CheckAdmin));
+        items.Add(Guard("netfilter", "进程模式驱动", CheckNetfilter));
+        items.Add(Guard("wintun", "TUN 模式组件", CheckWintun));
+        items.Add(Guard("port", "本地端口", CheckPort));
+
+        // Network checks run concurrently — DNS resolution and node probing can each take seconds.
+        var dnsTask = GuardAsync("dns", "DNS 解析", () => CheckDnsAsync(ctx, ct));
+        var nodeTask = GuardAsync("node", "线路连通性", () => CheckNodeAsync(ctx, ct));
+        var proxyTask = GuardAsync("proxy", "系统代理", () => Task.FromResult(CheckProxy(ctx)));
+
+        var networkItems = await Task.WhenAll(dnsTask, nodeTask, proxyTask);
+        items.AddRange(networkItems);
+
+        var errors = items.Count(i => i.Status == DiagnosticStatus.Error);
+        var warnings = items.Count(i => i.Status == DiagnosticStatus.Warning);
+        var summary = errors == 0 && warnings == 0
+            ? "未发现问题"
+            : $"发现 {errors} 个错误、{warnings} 个警告";
+
+        string? explanation = string.IsNullOrWhiteSpace(ctx.LastError)
+            ? null
+            : ErrorExplainer.Explain(ctx.LastError!);
+
+        return new DiagnosticReport(items, summary, DateTime.UtcNow, explanation);
+    }
+
+    /// <summary>
+    ///     One-click fix for a dead loopback system proxy: only acts when the proxy currently points at a
+    ///     loopback port that nothing is listening on. Returns true when it disabled the proxy.
+    /// </summary>
+    public Task<bool> FixProxyAsync()
+    {
+        var (server, _, enable) = _env.ReadSystemProxy();
+        if (enable == 0)
+            return Task.FromResult(false);
+
+        var port = ExtractLoopbackPort(server);
+        if (port is null || _env.IsLoopbackPortListening(port.Value))
+            return Task.FromResult(false);
+
+        _env.DisableSystemProxy();
+        return Task.FromResult(true);
+    }
+
+    /// <summary>Runs a check, converting any thrown exception into an Error item instead of aborting.</summary>
+    private static DiagnosticItem Guard(string id, string title, Func<DiagnosticItem> check)
+    {
+        try
+        {
+            return check();
+        }
+        catch (Exception ex)
+        {
+            return new DiagnosticItem(id, title, DiagnosticStatus.Error, $"检测出错：{ex.Message}", null, null);
+        }
+    }
+
+    /// <summary>
+    ///     Runs an asynchronous check, converting any thrown exception into an Error item instead of
+    ///     aborting. <see cref="OperationCanceledException"/> is rethrown when the caller's token is
+    ///     cancelled so cancellation propagates rather than being reported as a check failure.
+    /// </summary>
+    private static async Task<DiagnosticItem> GuardAsync(string id, string title, Func<Task<DiagnosticItem>> check)
+    {
+        try
+        {
+            return await check().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new DiagnosticItem(id, title, DiagnosticStatus.Error, $"检测出错：{ex.Message}", null, null);
+        }
+    }
+
+    private DiagnosticItem CheckCore()
+    {
+        var bin = Path.Combine(_env.BaseDirectory, "bin");
+        var required = new[] { "xray.exe", "sing-box.exe", "geoip.dat", "geosite.dat" };
+        var missing = required.Where(f => !_env.FileExists(Path.Combine(bin, f))).ToArray();
+
+        if (missing.Length == 0)
+            return new DiagnosticItem("core", "加速核心", DiagnosticStatus.Ok, "加速核心文件完整", null, null);
+
+        return new DiagnosticItem("core", "加速核心", DiagnosticStatus.Error,
+            $"缺少文件：{string.Join("、", missing)}",
+            "安装包不完整，请重新安装 Game+（或检查杀毒软件是否隔离了这些文件）", null);
+    }
+
+    private DiagnosticItem CheckAdmin()
+    {
+        if (_env.IsAdministrator())
+            return new DiagnosticItem("admin", "管理员权限", DiagnosticStatus.Ok, "已以管理员身份运行", null, null);
+
+        return new DiagnosticItem("admin", "管理员权限", DiagnosticStatus.Warning,
+            "当前未以管理员身份运行，进程模式和 TUN 模式不可用，只能使用系统代理模式（大部分游戏无法被加速）",
+            "退出 Game+ 后重新打开，在系统弹出的权限确认窗口中选择\"是\"", null);
+    }
+
+    private DiagnosticItem CheckNetfilter()
+    {
+        var bin = Path.Combine(_env.BaseDirectory, "bin");
+        var bundled = new[] { "Redirector.bin", "nfapi.dll", "nfdriver.sys" };
+        var missing = bundled.Where(f => !_env.FileExists(Path.Combine(bin, f))).ToArray();
+
+        if (missing.Length > 0)
+            return new DiagnosticItem("netfilter", "进程模式驱动", DiagnosticStatus.Warning,
+                "未附带进程模式驱动，将自动改用 TUN 模式", null, null);
+
+        if (!_env.IsAdministrator())
+            return new DiagnosticItem("netfilter", "进程模式驱动", DiagnosticStatus.Skipped,
+                "需要管理员权限才能加载驱动", null, null);
+
+        var installed = _env.DriverFileInstalled();
+        var service = _env.NetfilterServiceState();
+
+        if (installed && service is DriverServiceState.Running or DriverServiceState.Stopped or DriverServiceState.Unknown)
+            return new DiagnosticItem("netfilter", "进程模式驱动", DiagnosticStatus.Ok, "进程模式驱动已就绪", null, null);
+
+        return new DiagnosticItem("netfilter", "进程模式驱动", DiagnosticStatus.Ok,
+            "首次加速时会自动安装驱动", null, null);
+    }
+
+    private DiagnosticItem CheckWintun()
+    {
+        var bin = Path.Combine(_env.BaseDirectory, "bin");
+        var required = new[] { "wintun.dll", "tun2socks.bin", "RouteHelper.bin" };
+        var missing = required.Where(f => !_env.FileExists(Path.Combine(bin, f))).ToArray();
+
+        if (missing.Length > 0)
+            return new DiagnosticItem("wintun", "TUN 模式组件", DiagnosticStatus.Warning,
+                "TUN 模式不可用",
+                "安装包不完整，请重新安装 Game+（或检查杀毒软件是否隔离了这些文件）", null);
+
+        if (!_env.IsAdministrator())
+            return new DiagnosticItem("wintun", "TUN 模式组件", DiagnosticStatus.Skipped,
+                "需要管理员权限才能创建虚拟网卡", null, null);
+
+        return new DiagnosticItem("wintun", "TUN 模式组件", DiagnosticStatus.Ok, "TUN 模式组件已就绪", null, null);
+    }
+
+    private DiagnosticItem CheckPort()
+    {
+        if (_env.CanBindLoopback())
+            return new DiagnosticItem("port", "本地端口", DiagnosticStatus.Ok, "可以在本机回环地址上监听端口", null, null);
+
+        return new DiagnosticItem("port", "本地端口", DiagnosticStatus.Error,
+            "无法在本机回环地址上监听端口，可能被安全软件拦截",
+            "将 Game+ 加入安全软件白名单后重试", null);
+    }
+
+    private async Task<DiagnosticItem> CheckDnsAsync(DiagnosticContext ctx, CancellationToken ct)
+    {
+        var host = ResolveHost(ctx);
+        IPAddress[]? addrs;
+        try
+        {
+            addrs = await _env.ResolveAsync(host, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            addrs = null;
+        }
+
+        if (addrs is null || addrs.Length == 0)
+            return new DiagnosticItem("dns", "DNS 解析", DiagnosticStatus.Error,
+                $"无法解析 {host}",
+                "检查网络连接；或在系统网络设置中把 DNS 改为 223.5.5.5 / 119.29.29.29 后重试", null);
+
+        return new DiagnosticItem("dns", "DNS 解析", DiagnosticStatus.Ok,
+            $"{host} → {addrs[0]}", null, null);
+    }
+
+    private static string ResolveHost(DiagnosticContext ctx)
+    {
+        if (ctx.Game is { } game)
+        {
+            var target = Netch.Core.Services.EffectProbeTarget.Resolve(game);
+            if (target is { } t && !IPAddress.TryParse(t.Host, out _))
+                return t.Host;
+        }
+
+        return "www.microsoft.com";
+    }
+
+    private async Task<DiagnosticItem> CheckNodeAsync(DiagnosticContext ctx, CancellationToken ct)
+    {
+        var pool = ctx.Servers;
+        if (pool.Count == 0)
+            return new DiagnosticItem("node", "线路连通性", DiagnosticStatus.Error,
+                "还没有任何线路",
+                "前往\"订阅\"页导入订阅，或在\"线路\"页添加分享链接", null);
+
+        List<Server> toProbe;
+        if (ctx.Node is { } node)
+        {
+            toProbe = new List<Server> { node };
+        }
+        else
+        {
+            // Lowest known delay first, then untested.
+            toProbe = pool
+                .OrderBy(s => s.Delay >= 0 ? 0 : 1)
+                .ThenBy(s => s.Delay >= 0 ? s.Delay : int.MaxValue)
+                .Take(3)
+                .ToList();
+        }
+
+        // Probe the selected nodes concurrently; keep the original order in the results.
+        var probeTasks = toProbe.Select(s => ProbeOneAsync(s, ct)).ToArray();
+        var msResults = await Task.WhenAll(probeTasks).ConfigureAwait(false);
+
+        var results = new List<(Server Server, int Ms)>(toProbe.Count);
+        for (var i = 0; i < toProbe.Count; i++)
+            results.Add((toProbe[i], msResults[i]));
+
+        var ok = results.Where(r => r.Ms >= 0).ToList();
+        if (ok.Count == 0)
+            return new DiagnosticItem("node", "线路连通性", DiagnosticStatus.Error,
+                $"线路均无法连接（{results.Count} 条已测试）",
+                "更新订阅或更换线路；若所有线路都不通，请检查本机网络或代理服务商状态", null);
+
+        if (ok.Count < results.Count)
+        {
+            var best = ok.OrderBy(r => r.Ms).First();
+            return new DiagnosticItem("node", "线路连通性", DiagnosticStatus.Warning,
+                $"{best.Server.Remark}：{best.Ms} ms（{results.Count - ok.Count} 条不可用）",
+                "部分线路不可用，建议更新订阅或更换线路", null);
+        }
+
+        var bestOk = ok.OrderBy(r => r.Ms).First();
+        return new DiagnosticItem("node", "线路连通性", DiagnosticStatus.Ok,
+            $"{bestOk.Server.Remark}：{bestOk.Ms} ms", null, null);
+    }
+
+    private async Task<int> ProbeOneAsync(Server server, CancellationToken ct)
+    {
+        try
+        {
+            return await _env.ProbeNodeAsync(server, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return -4;
+        }
+    }
+
+    private DiagnosticItem CheckProxy(DiagnosticContext ctx)
+    {
+        var (server, _, enable) = _env.ReadSystemProxy();
+        if (enable == 0)
+            return new DiagnosticItem("proxy", "系统代理", DiagnosticStatus.Ok, "未设置系统代理", null, null);
+
+        var port = ExtractLoopbackPort(server);
+        if (port is { } p)
+        {
+            var listening = _env.IsLoopbackPortListening(p);
+            if (!listening)
+                return new DiagnosticItem("proxy", "系统代理", DiagnosticStatus.Error,
+                    $"系统代理指向已关闭的本地端口 {p}，浏览器等程序可能无法上网",
+                    "点击\"修复\"恢复为不使用代理", "fixProxy");
+
+            if (ctx.Accelerating)
+                return new DiagnosticItem("proxy", "系统代理", DiagnosticStatus.Ok, "由 Game+ 设置（加速中）", null, null);
+
+            return new DiagnosticItem("proxy", "系统代理", DiagnosticStatus.Warning,
+                $"检测到其他程序设置了系统代理（{server}），可能与 Game+ 冲突",
+                "如加速异常，请先关闭其他代理/加速软件", null);
+        }
+
+        return new DiagnosticItem("proxy", "系统代理", DiagnosticStatus.Warning,
+            $"检测到其他程序设置了系统代理（{server}），可能与 Game+ 冲突",
+            "如加速异常，请先关闭其他代理/加速软件", null);
+    }
+
+    /// <summary>
+    ///     Extracts the loopback port from a proxy server string. Handles plain <c>127.0.0.1:port</c> /
+    ///     <c>localhost:port</c> and the <c>http=127.0.0.1:port;https=...</c> form. Returns null when the
+    ///     proxy does not point at a loopback address.
+    /// </summary>
+    internal static int? ExtractLoopbackPort(string? server)
+    {
+        if (string.IsNullOrWhiteSpace(server))
+            return null;
+
+        foreach (var part in server.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var value = part;
+            var eq = value.IndexOf('=');
+            if (eq >= 0)
+                value = value[(eq + 1)..];
+
+            value = value.Trim();
+            if (value.Length == 0)
+                continue;
+
+            var colon = value.LastIndexOf(':');
+            if (colon <= 0)
+                continue;
+
+            var host = value[..colon].Trim();
+            var portText = value[(colon + 1)..].Trim();
+            if (!int.TryParse(portText, out var port))
+                continue;
+
+            if (IsLoopbackHost(host))
+                return port;
+        }
+
+        return null;
+    }
+
+    private static bool IsLoopbackHost(string host)
+    {
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (IPAddress.TryParse(host, out var ip))
+            return IPAddress.IsLoopback(ip);
+        return false;
+    }
+}

@@ -1,5 +1,6 @@
 import type {
   AccelStatus,
+  DiagnosticReport,
   EffectReport,
   EngineSettings,
   Game,
@@ -18,7 +19,8 @@ const METHOD_TIMEOUTS: Record<string, number> = {
   'subs.update': 90_000,
   'servers.ping': 60_000,
   'nodes.rank': 60_000,
-  'accel.start': 60_000
+  'accel.start': 60_000,
+  'diag.run': 30_000
 }
 
 // Speaks the JSON-RPC/WebSocket protocol of the headless C# sidecar (see Netch.Host).
@@ -258,5 +260,21 @@ export class WebSocketBackend implements Backend {
   }
   checkUpdate(): Promise<UpdateInfo> {
     return this.call('update.check')
+  }
+
+  runDiagnostics(opts: {
+    gameId?: string | null
+    nodeId?: string | null
+    error?: string | null
+  }): Promise<DiagnosticReport> {
+    return this.call('diag.run', {
+      gameId: opts.gameId ?? null,
+      nodeId: opts.nodeId ?? null,
+      error: opts.error ?? null
+    })
+  }
+
+  fixDiagnostic(action: string): Promise<{ fixed: boolean }> {
+    return this.call('diag.fix', { action })
   }
 }

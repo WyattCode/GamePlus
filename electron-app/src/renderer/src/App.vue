@@ -3,6 +3,7 @@ import { onMounted } from 'vue'
 import TitleBar from './components/TitleBar.vue'
 import SideBar from './components/SideBar.vue'
 import Toast from './components/Toast.vue'
+import DiagnosticsDialog from './components/DiagnosticsDialog.vue'
 import { useAppStore } from './stores/app'
 import { useLibraryStore } from './stores/library'
 import { useLogsStore } from './stores/logs'
@@ -34,6 +35,7 @@ onMounted(() => {
       </main>
     </div>
     <Toast />
+    <DiagnosticsDialog />
   </div>
 </template>
 

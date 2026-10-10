@@ -174,3 +174,26 @@ export interface NodeRanking {
   preferredRegions: string[]
   candidates: RankedNode[]
 }
+
+export type DiagnosticStatus = 'ok' | 'warning' | 'error' | 'skipped'
+
+/** One diagnostic check result. */
+export interface DiagnosticItem {
+  id: string
+  title: string
+  status: DiagnosticStatus
+  detail: string
+  suggestion: string | null
+  /** Machine id for an optional one-click fix (currently only "fixProxy"). */
+  fixAction: string | null
+}
+
+/** Result of a diagnostics run. */
+export interface DiagnosticReport {
+  items: DiagnosticItem[]
+  summary: string
+  /** ISO timestamp of the run. */
+  ranAt: string
+  /** Plain-Chinese explanation of the last error, when one was supplied. */
+  errorExplanation: string | null
+}

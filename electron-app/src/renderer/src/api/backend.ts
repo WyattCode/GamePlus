@@ -1,5 +1,6 @@
 import type {
   AccelStatus,
+  DiagnosticReport,
   EffectReport,
   EngineSettings,
   Game,
@@ -47,6 +48,12 @@ export interface Backend {
   checkUpdate(): Promise<UpdateInfo>
   getEffect(): Promise<EffectReport>
   onEffect(cb: (r: EffectReport) => void): () => void
+  runDiagnostics(opts: {
+    gameId?: string | null
+    nodeId?: string | null
+    error?: string | null
+  }): Promise<DiagnosticReport>
+  fixDiagnostic(action: string): Promise<{ fixed: boolean }>
 }
 
 function jitter(base: number): number {
@@ -425,6 +432,90 @@ class MockBackend implements Backend {
   async setSettings(patch: Partial<EngineSettings>): Promise<EngineSettings> {
     this.mockSettings = { ...this.mockSettings, ...patch }
     return structuredClone(this.mockSettings)
+  }
+
+  async runDiagnostics(opts: {
+    gameId?: string | null
+    nodeId?: string | null
+    error?: string | null
+  }): Promise<DiagnosticReport> {
+    await new Promise((r) => setTimeout(r, 600))
+    return {
+      items: [
+        {
+          id: 'core',
+          title: '加速核心',
+          status: 'ok',
+          detail: '加速核心文件完整',
+          suggestion: null,
+          fixAction: null
+        },
+        {
+          id: 'admin',
+          title: '管理员权限',
+          status: 'warning',
+          detail: '当前未以管理员身份运行，进程模式和 TUN 模式不可用，只能使用系统代理模式（大部分游戏无法被加速）',
+          suggestion: '退出 Game+ 后重新打开，在系统弹出的权限确认窗口中选择"是"',
+          fixAction: null
+        },
+        {
+          id: 'netfilter',
+          title: '进程模式驱动',
+          status: 'skipped',
+          detail: '需要管理员权限才能加载驱动',
+          suggestion: null,
+          fixAction: null
+        },
+        {
+          id: 'wintun',
+          title: 'TUN 模式组件',
+          status: 'skipped',
+          detail: '需要管理员权限才能创建虚拟网卡',
+          suggestion: null,
+          fixAction: null
+        },
+        {
+          id: 'port',
+          title: '本地端口',
+          status: 'ok',
+          detail: '可以在本机回环地址上监听端口',
+          suggestion: null,
+          fixAction: null
+        },
+        {
+          id: 'dns',
+          title: 'DNS 解析',
+          status: 'ok',
+          detail: 'www.microsoft.com → 20.70.246.20',
+          suggestion: null,
+          fixAction: null
+        },
+        {
+          id: 'node',
+          title: '线路连通性',
+          status: 'ok',
+          detail: '香港 01：42 ms',
+          suggestion: null,
+          fixAction: null
+        },
+        {
+          id: 'proxy',
+          title: '系统代理',
+          status: 'error',
+          detail: '系统代理指向已关闭的本地端口 1080，浏览器等程序可能无法上网',
+          suggestion: '点击"修复"恢复为不使用代理',
+          fixAction: 'fixProxy'
+        }
+      ],
+      summary: '发现 1 个错误、1 个警告',
+      ranAt: new Date().toISOString(),
+      errorExplanation: opts.error ? '未能识别的错误，请参考下方检测结果' : null
+    }
+  }
+
+  async fixDiagnostic(action: string): Promise<{ fixed: boolean }> {
+    await new Promise((r) => setTimeout(r, 300))
+    return { fixed: action === 'fixProxy' }
   }
 
   private tick(): void {

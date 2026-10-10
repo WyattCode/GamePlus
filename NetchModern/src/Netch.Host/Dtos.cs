@@ -3,6 +3,7 @@ using Netch.Core.Models;
 using Netch.Core.Models.Games;
 using Netch.Core.Models.Servers;
 using Netch.Core.Services;
+using Netch.Core.Services.Diagnostics;
 
 namespace Netch.Host;
 
@@ -36,6 +37,12 @@ internal record RankedNodeDto(string Id, string Remark, string Type, int Delay, 
 
 internal record NodeRankingDto(string? RecommendedId, string Reason, string? PreferenceLabel,
     string[] PreferredRegions, RankedNodeDto[] Candidates);
+
+internal record DiagnosticItemDto(string Id, string Title, string Status, string Detail,
+    string? Suggestion, string? FixAction);
+
+internal record DiagnosticReportDto(DiagnosticItemDto[] Items, string Summary, string RanAt,
+    string? ErrorExplanation);
 
 internal static class Mapping
 {
@@ -213,4 +220,18 @@ internal static class Mapping
             ranking.PreferredRegions.ToArray(),
             candidates);
     }
+
+    public static DiagnosticReportDto ToDto(DiagnosticReport r) =>
+        new(r.Items.Select(ToDto).ToArray(), r.Summary, r.RanAtUtc.ToString("o"), r.ErrorExplanation);
+
+    public static DiagnosticItemDto ToDto(DiagnosticItem i) =>
+        new(i.Id, i.Title, StatusName(i.Status), i.Detail, i.Suggestion, i.FixAction);
+
+    private static string StatusName(DiagnosticStatus s) => s switch
+    {
+        DiagnosticStatus.Ok => "ok",
+        DiagnosticStatus.Warning => "warning",
+        DiagnosticStatus.Error => "error",
+        _ => "skipped"
+    };
 }

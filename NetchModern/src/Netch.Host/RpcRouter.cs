@@ -5,6 +5,7 @@ using Netch.Core.Abstractions;
 using Netch.Core.Models.Games;
 using Netch.Core.Models.Servers;
 using Netch.Core.Services;
+using Netch.Core.Services.Diagnostics;
 
 namespace Netch.Host;
 
@@ -39,6 +40,7 @@ internal sealed class RpcRouter
     private ISettingsService SettingsSvc => _sp.GetRequiredService<ISettingsService>();
     private IUpdateChecker UpdateChecker => _sp.GetRequiredService<IUpdateChecker>();
     private ILogService Logs => _sp.GetRequiredService<ILogService>();
+    private DiagnosticsService Diagnostics => _sp.GetRequiredService<DiagnosticsService>();
 
     public Task<object?> DispatchAsync(string method, JsonElement @params, CancellationToken ct) =>
         DispatchCoreAsync(method, @params, ct);
@@ -118,6 +120,44 @@ internal sealed class RpcRouter
 
             case "effect.get":
                 return EffectDto();
+
+            case "diag.run":
+            {
+                var gameId = JsonParams.OptionalString(@params, "gameId");
+                var nodeId = JsonParams.OptionalString(@params, "nodeId");
+                var error = JsonParams.OptionalString(@params, "error");
+
+                // Snapshot game/node/servers + accelerating flag under the lock, then run the checks
+                // OUTSIDE it (DNS + node probes are network I/O and can take seconds).
+                var (game, node, servers, accelerating) = await WithStateValue(() =>
+                {
+                    var g = string.IsNullOrEmpty(gameId)
+                        ? null
+                        : Games.Games.FirstOrDefault(x => x.Id == gameId);
+                    var pool = Servers.Servers.ToList();
+                    var n = string.IsNullOrEmpty(nodeId)
+                        ? null
+                        : ServerIds.Resolve(nodeId!, pool);
+                    var accel = Accel.State == AccelerationState.Accelerating
+                                || Accel.State == AccelerationState.Connecting;
+                    return (g, n, pool, accel);
+                }, ct);
+
+                var ctx = new DiagnosticContext(game, node, servers, accelerating, error);
+                var report = await Diagnostics.RunAsync(ctx, ct);
+                return Mapping.ToDto(report);
+            }
+
+            case "diag.fix":
+            {
+                var action = JsonParams.RequiredString(@params, "action");
+                if (action == "fixProxy")
+                {
+                    var fixedOk = await Diagnostics.FixProxyAsync();
+                    return new { @fixed = fixedOk };
+                }
+                throw new InvalidOperationException("未知的修复操作");
+            }
 
             case "servers.add":
             {

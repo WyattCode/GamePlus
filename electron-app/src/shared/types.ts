@@ -145,3 +145,32 @@ export interface EffectReport {
   series: EffectPoint[]
   measuring: boolean
 }
+
+/** One ranked candidate node from the smart-routing ranker. */
+export interface RankedNode {
+  id: string
+  remark: string
+  /** Short protocol tag, e.g. "SS", "HY2". */
+  type: string
+  /** Latency in ms; -1 = untested, < -1 = failed. */
+  delay: number
+  /** Detected region code, e.g. "HK"; null when unknown. */
+  region: string | null
+  /** Chinese region name, e.g. "香港"; null when unknown. */
+  regionName: string | null
+  /** True when the node is in one of the game's preferred regions. */
+  regionMatch: boolean
+  /** Ranking score (delay + region penalty); lower is better. */
+  score: number
+  /** Short Chinese note, e.g. "区服匹配". */
+  note: string
+}
+
+/** Result of ranking the node pool for a game. */
+export interface NodeRanking {
+  recommendedId: string | null
+  reason: string
+  preferenceLabel: string | null
+  preferredRegions: string[]
+  candidates: RankedNode[]
+}

@@ -24,6 +24,10 @@ export const useLibraryStore = defineStore('library', () => {
     loaded.value = true
   }
 
+  async function reloadServers(): Promise<void> {
+    servers.value = await backend.listServers()
+  }
+
   async function pingAll(): Promise<void> {
     pinging.value = true
     try {
@@ -113,6 +117,7 @@ export const useLibraryStore = defineStore('library', () => {
     pinging,
     sortedGames,
     load,
+    reloadServers,
     pingAll,
     toggleFavorite,
     addGame,

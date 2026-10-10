@@ -4,6 +4,8 @@ import type {
   EngineSettings,
   Game,
   LogEntry,
+  NodeRanking,
+  RankedNode,
   Server,
   Subscription,
   UpdateInfo
@@ -24,6 +26,7 @@ export interface Backend {
   listServers(): Promise<Server[]>
   listSubscriptions(): Promise<Subscription[]>
   pingAll(): Promise<Server[]>
+  rankNodes(gameId: string | null, ping: boolean): Promise<NodeRanking>
   startAccelerate(gameId: string, nodeId: string | null): Promise<void>
   stopAccelerate(): Promise<void>
   onStatus(cb: (s: AccelStatus) => void): () => void
@@ -48,6 +51,78 @@ export interface Backend {
 
 function jitter(base: number): number {
   return Math.max(1, Math.round(base + (Math.random() - 0.5) * base * 0.25))
+}
+
+// Mirrors NodeRegions in Netch.Core/Services/NodeRanker.cs (subset sufficient for the mock).
+// Short latin codes are matched case-SENSITIVELY with lookarounds (not \b) so "JP01" / "香港HK2"
+// match while lowercase "us-west" does not. Long words / CJK / emoji are matched case-insensitively.
+const SHORT_CODES: Array<{ code: string; name: string; re: RegExp }> = [
+  { code: 'HK', name: '香港', re: /(?<![A-Za-z])HK(?![A-Za-z])/ },
+  { code: 'TW', name: '台湾', re: /(?<![A-Za-z])TW(?![A-Za-z])/ },
+  { code: 'JP', name: '日本', re: /(?<![A-Za-z])JP(?![A-Za-z])/ },
+  { code: 'KR', name: '韩国', re: /(?<![A-Za-z])KR(?![A-Za-z])/ },
+  { code: 'SG', name: '新加坡', re: /(?<![A-Za-z])SG(?![A-Za-z])/ },
+  { code: 'US', name: '美国', re: /(?<![A-Za-z])USA?(?![A-Za-z])/ },
+  { code: 'EU', name: '欧洲', re: /(?<![A-Za-z])(?:DE|UK|GB|FR|NL)(?![A-Za-z])/ },
+  { code: 'CN', name: '中国大陆', re: /(?<![A-Za-z])CN(?![A-Za-z])/ }
+]
+
+const LONG_RULES: Array<{ code: string; name: string; re: RegExp }> = [
+  { code: 'HK', name: '香港', re: /香港|港|🇭🇰|Hong ?Kong/i },
+  { code: 'TW', name: '台湾', re: /台湾|台北|🇹🇼|Taiwan/i },
+  { code: 'JP', name: '日本', re: /日本|东京|大阪|🇯🇵|Japan|Tokyo|Osaka/i },
+  { code: 'KR', name: '韩国', re: /韩国|首尔|🇰🇷|Korea|Seoul/i },
+  { code: 'SG', name: '新加坡', re: /新加坡|狮城|🇸🇬|Singapore/i },
+  { code: 'US', name: '美国', re: /美国|洛杉矶|硅谷|圣何塞|西雅图|🇺🇸|United States|Los Angeles|San Jose/i },
+  { code: 'EU', name: '欧洲', re: /德国|英国|法国|荷兰|欧洲|🇩🇪|🇬🇧|🇫🇷|🇳🇱|Germany|London|Frankfurt|Amsterdam/i },
+  { code: 'CN', name: '中国大陆', re: /中国|国内|回国|大陆|上海|北京|广州|深圳|杭州|🇨🇳|China/i }
+]
+
+const HK_TW_RE = /香港|港|🇭🇰|(?<![A-Za-z])HK(?![A-Za-z])|Hong ?Kong|台湾|台北|🇹🇼|(?<![A-Za-z])TW(?![A-Za-z])|Taiwan/i
+
+function detectRegion(text: string): { code: string; name: string } | null {
+  for (let i = 0; i < LONG_RULES.length; i++) {
+    const long = LONG_RULES[i]
+    const short = SHORT_CODES[i]
+    if (long.code === 'CN' && HK_TW_RE.test(text)) continue
+    if (long.re.test(text) || short.re.test(text)) return { code: long.code, name: long.name }
+  }
+  return null
+}
+
+function preferredRegionsFor(game: Game | null): { regions: string[]; label: string | null } {
+  if (!game || !game.regions || game.regions.length === 0) return { regions: [], label: null }
+  const hasCn = game.regions.some((r) => r.includes('国服'))
+  const hasIntl = game.regions.some((r) => r.includes('国际服'))
+  if (hasCn && hasIntl) return { regions: [], label: null }
+
+  const regions: string[] = []
+  let label: string | null = null
+  const add = (code: string): void => {
+    if (!regions.includes(code)) regions.push(code)
+  }
+  for (const raw of game.regions) {
+    const r = raw.trim()
+    if (r.includes('亚服')) {
+      add('HK'); add('TW'); add('JP'); add('KR'); add('SG')
+      label ??= '亚服'
+    } else if (r.includes('日服')) {
+      add('JP'); label ??= '日服'
+    } else if (r.includes('韩服')) {
+      add('KR'); label ??= '韩服'
+    } else if (r.includes('港服')) {
+      add('HK'); label ??= '港服'
+    } else if (r.includes('台服')) {
+      add('TW'); label ??= '台服'
+    } else if (r.includes('北美服') || r.includes('美服')) {
+      add('US'); label ??= '美服'
+    } else if (r.includes('欧服')) {
+      add('EU'); label ??= '欧服'
+    } else if (r.includes('国服')) {
+      add('CN'); label ??= '国服'
+    }
+  }
+  return { regions, label }
 }
 
 class MockBackend implements Backend {
@@ -94,6 +169,92 @@ class MockBackend implements Backend {
     await new Promise((r) => setTimeout(r, 500))
     this.mockServers = this.mockServers.map((s) => ({ ...s, delay: jitter(s.delay || 90) }))
     return structuredClone(this.mockServers)
+  }
+
+  async rankNodes(gameId: string | null, ping: boolean): Promise<NodeRanking> {
+    if (ping) {
+      await new Promise((r) => setTimeout(r, 500))
+      this.mockServers = this.mockServers.map((s) => ({ ...s, delay: jitter(s.delay || 90) }))
+    }
+    const game = gameId ? this.mockGames.find((g) => g.id === gameId) ?? null : null
+    const pref = preferredRegionsFor(game)
+
+    const candidates: RankedNode[] = this.mockServers.map((s) => {
+      const region = detectRegion(`${s.remark} ${s.hostname}`)
+      const match = region != null && pref.regions.includes(region.code)
+      const tested = s.delay >= 0
+      // Untested/failed nodes get score -1 so the UI renders them as grey/empty bars.
+      const score = tested ? s.delay + (pref.regions.length > 0 && !match ? 60 : 0) : -1
+      return {
+        id: s.id,
+        remark: s.remark,
+        type: s.type,
+        delay: s.delay,
+        region: region?.code ?? null,
+        regionName: region?.name ?? null,
+        regionMatch: match,
+        score,
+        note: ''
+      }
+    })
+
+    const bucket = (d: number): number => (d >= 0 ? 0 : d === -1 ? 1 : 2)
+    candidates.sort((a, b) => {
+      const ba = bucket(a.delay)
+      const bb = bucket(b.delay)
+      if (ba !== bb) return ba - bb
+      if (a.delay >= 0 && b.delay >= 0 && a.score !== b.score) return a.score - b.score
+      return a.remark.localeCompare(b.remark, 'zh-CN')
+    })
+
+    // Notes are tags: lowest-delay tested node → "延迟最低", matching nodes → "区服匹配", both → joined.
+    const testedDelays = candidates.filter((c) => c.delay >= 0).map((c) => c.delay)
+    const lowestDelay = testedDelays.length ? Math.min(...testedDelays) : null
+    for (const c of candidates) {
+      if (c.delay < 0) {
+        c.note = c.delay === -1 ? '未测速' : '超时/不可达'
+        continue
+      }
+      const tags: string[] = []
+      if (lowestDelay != null && c.delay === lowestDelay) tags.push('延迟最低')
+      if (c.regionMatch) tags.push('区服匹配')
+      c.note = tags.join(' · ')
+    }
+
+    const tested = candidates.filter((c) => c.delay >= 0)
+    const recommended = candidates[0] ?? null
+    let reason: string
+    if (tested.length === 0) {
+      reason = '所有线路均未测通，已选择列表中的第一条线路'
+    } else {
+      const lowest = [...tested].sort((a, b) => a.delay - b.delay)[0]
+      if (pref.regions.length === 0) {
+        const hasCn = !!game?.regions?.some((r) => r.includes('国服'))
+        const hasIntl = !!game?.regions?.some((r) => r.includes('国际服'))
+        reason = `延迟最低（${lowest.delay} ms）${hasCn && hasIntl ? '；该游戏同时有国服和国际服，按延迟选择' : ''}`
+      } else if (recommended && recommended.regionMatch) {
+        // The reason must describe the RECOMMENDED node, not the lowest-delay one.
+        reason =
+          recommended.delay === lowest.delay
+            ? `延迟最低（${recommended.delay} ms），且位于${pref.label}所在地区（${recommended.regionName}）`
+            : `位于${pref.label}所在地区（${recommended.regionName}），延迟 ${recommended.delay} ms，仅比最低延迟线路高 ${recommended.delay - lowest.delay} ms`
+      } else {
+        const matching = tested.filter((c) => c.regionMatch)
+        if (matching.length === 0) {
+          reason = `没有${pref.label}所在地区的可用线路，已按延迟最低选择（${lowest.delay} ms）`
+        } else {
+          reason = `${pref.label}所在地区的线路（${recommended?.regionName ?? ''} ${recommended?.delay ?? lowest.delay} ms）比最低延迟线路慢 ${(recommended?.delay ?? lowest.delay) - lowest.delay} ms 以上，已选择延迟最低的线路（${lowest.delay} ms）`
+        }
+      }
+    }
+
+    return {
+      recommendedId: recommended?.id ?? null,
+      reason,
+      preferenceLabel: pref.label,
+      preferredRegions: pref.regions,
+      candidates
+    }
   }
 
   async startAccelerate(gameId: string, nodeId: string | null): Promise<void> {

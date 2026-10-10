@@ -16,6 +16,7 @@ const router = useRouter()
 
 const error = ref<string | null>(null)
 const busy = ref(false)
+const candidatesOpen = ref(true)
 
 // If the selected node id disappears from the list (e.g. after a subscription refresh), clear the
 // selection and fall back to smart node rather than silently showing a blank select.
@@ -85,6 +86,70 @@ const effectCompare = computed(() => {
   if (!c) return base
   return `${base} → 加速 ${c.latency >= 0 ? c.latency + ' ms' : '—'} · 丢包 ${c.loss}%`
 })
+
+// --- smart routing (P2) ---
+
+const recommended = computed(() => {
+  const r = accel.ranking
+  if (!r || !r.recommendedId) return null
+  return r.candidates.find((c) => c.id === r.recommendedId) ?? null
+})
+
+const topCandidates = computed(() => (accel.ranking?.candidates ?? []).slice(0, 6))
+
+// The node the UI currently considers "in use": the live accel node, else the manual selection, else
+// the smart recommendation.
+const currentNodeId = computed<string | null>(() => {
+  if (running.value) return accel.status.nodeId
+  if (!accel.smartNode) return accel.selectedNodeId
+  return accel.ranking?.recommendedId ?? null
+})
+
+function barColor(score: number, delay: number): string {
+  if (delay < 0 || score < 0) return 'var(--text-3)'
+  if (score <= 80) return 'var(--ok)'
+  if (score <= 150) return 'var(--warn)'
+  return 'var(--danger)'
+}
+
+function barWidth(score: number, delay: number): string {
+  if (delay < 0 || score < 0) return '0%'
+  const pct = Math.min(100, Math.max(4, (score / 200) * 100))
+  return `${pct}%`
+}
+
+async function refreshRanking(ping = false): Promise<void> {
+  error.value = null
+  try {
+    await accel.refreshRanking(ping)
+  } catch (e) {
+    error.value = errorMessage(e)
+  }
+}
+
+async function switchNode(id: string): Promise<void> {
+  error.value = null
+  try {
+    await accel.switchNode(id)
+  } catch (e) {
+    error.value = errorMessage(e)
+  }
+}
+
+// Fetch the ranking on mount, when the selected game changes, and when the node pool changes (no ping).
+watch(
+  () => accel.selectedGame?.id,
+  () => {
+    void refreshRanking(false)
+  },
+  { immediate: true }
+)
+watch(
+  () => library.servers.length,
+  () => {
+    void refreshRanking(false)
+  }
+)
 
 async function toggle(): Promise<void> {
   if (busy.value) return
@@ -166,6 +231,60 @@ async function toggle(): Promise<void> {
             [{{ s.type }}] {{ s.remark }} · {{ fmtDelay(s.delay) }}
           </option>
         </select>
+
+        <!-- Smart routing: recommendation (only when smart routing is on) -->
+        <div v-if="accel.smartNode && recommended" class="rec">
+          <div class="rec-line">
+            <AppIcon name="bolt" :size="14" />
+            <span class="rec-label">推荐：</span>
+            <span class="rec-name">{{ recommended.remark }}</span>
+          </div>
+          <div class="muted small rec-reason">{{ accel.ranking?.reason }}</div>
+        </div>
+
+        <!-- Ranked candidates: shown in both smart and manual mode so the user can compare/switch -->
+        <div v-if="topCandidates.length" class="cand">
+          <div class="cand-head">
+            <button type="button" class="cand-toggle" @click="candidatesOpen = !candidatesOpen">
+              <AppIcon name="chevron" :size="14" :class="{ open: candidatesOpen }" />
+              <span class="cand-title">候选线路</span>
+              <span class="muted small">{{ topCandidates.length }}</span>
+            </button>
+            <span class="cand-spacer" />
+            <button
+              type="button"
+              class="cand-refresh"
+              :disabled="accel.rankLoading"
+              @click="refreshRanking(true)"
+            >
+              <AppIcon name="refresh" :size="13" />
+              {{ accel.rankLoading ? '测速中…' : '重新测速' }}
+            </button>
+          </div>
+
+          <div v-if="candidatesOpen" class="cand-list">
+            <div v-for="c in topCandidates" :key="c.id" class="cand-row">
+              <span class="chip">{{ c.regionName ?? '未知' }}</span>
+              <div class="cand-main">
+                <div class="cand-remark" :title="c.remark">{{ c.remark }}</div>
+                <div class="cand-bar">
+                  <span
+                    class="cand-bar-fill"
+                    :style="{ width: barWidth(c.score, c.delay), background: barColor(c.score, c.delay) }"
+                  />
+                </div>
+                <div class="muted small">{{ c.note }}</div>
+              </div>
+              <div class="cand-right">
+                <div class="cand-delay" :style="{ color: barColor(c.score, c.delay) }">
+                  {{ fmtDelay(c.delay) }}
+                </div>
+                <span v-if="c.id === currentNodeId" class="badge">当前</span>
+                <button v-else class="btn small-btn" @click="switchNode(c.id)">切换</button>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <div v-if="accel.nodeUnavailable" class="capture-hint warn">
           <AppIcon name="info" :size="14" />
@@ -401,6 +520,144 @@ async function toggle(): Promise<void> {
 }
 .capture-hint.warn {
   color: var(--warn);
+}
+
+/* smart routing */
+.rec {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.rec-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--brand);
+}
+.rec-label {
+  color: var(--text-2);
+}
+.rec-name {
+  font-weight: 600;
+  color: var(--text);
+}
+.rec-reason {
+  margin-top: 4px;
+}
+
+.cand {
+  margin-top: 12px;
+}
+.cand-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.cand-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.cand-toggle .open {
+  transform: rotate(180deg);
+}
+.cand-title {
+  font-weight: 600;
+  color: var(--text);
+}
+.cand-spacer {
+  flex: 1;
+}
+.cand-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--brand);
+  font-size: 12px;
+  cursor: pointer;
+}
+.cand-refresh:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.cand-list {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cand-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.chip {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.cand-main {
+  flex: 1;
+  min-width: 0;
+}
+.cand-remark {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cand-bar {
+  height: 3px;
+  margin: 4px 0 3px;
+  border-radius: 2px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.cand-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+}
+.cand-right {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cand-delay {
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 52px;
+  text-align: right;
+}
+.badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 11px;
+}
+.small-btn {
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 .metrics {

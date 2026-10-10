@@ -4,6 +4,7 @@ import type {
   EngineSettings,
   Game,
   LogEntry,
+  NodeRanking,
   Server,
   Subscription,
   UpdateInfo
@@ -16,6 +17,7 @@ const DEFAULT_TIMEOUT_MS = 30_000
 const METHOD_TIMEOUTS: Record<string, number> = {
   'subs.update': 90_000,
   'servers.ping': 60_000,
+  'nodes.rank': 60_000,
   'accel.start': 60_000
 }
 
@@ -181,6 +183,9 @@ export class WebSocketBackend implements Backend {
   }
   pingAll(): Promise<Server[]> {
     return this.call('servers.ping')
+  }
+  rankNodes(gameId: string | null, ping: boolean): Promise<NodeRanking> {
+    return this.call('nodes.rank', { gameId, ping })
   }
   async startAccelerate(gameId: string, nodeId: string | null): Promise<void> {
     await this.call('accel.start', { gameId, nodeId })

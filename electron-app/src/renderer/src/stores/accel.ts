@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, onScopeDispose, ref } from 'vue'
-import type { AccelStatus, EffectReport, Game, Server } from '@shared/types'
+import type { AccelStatus, EffectReport, Game, NodeRanking, Server } from '@shared/types'
 import { backend } from '@/api/backend'
 import { useLibraryStore } from '@/stores/library'
 
@@ -27,6 +27,10 @@ export const useAccelStore = defineStore('accel', () => {
   const smartNode = ref(true)
   // Set when the previously-selected node id disappears from the current list (e.g. subscription refresh).
   const nodeUnavailable = ref(false)
+
+  // Smart-routing ranking for the selected game (candidates + recommended node + reason).
+  const ranking = ref<NodeRanking | null>(null)
+  const rankLoading = ref(false)
 
   const library = useLibraryStore()
 
@@ -84,6 +88,30 @@ export const useAccelStore = defineStore('accel', () => {
     }
   }
 
+  /** Refreshes the smart-routing ranking for the selected game. Errors propagate to the caller. */
+  async function refreshRanking(ping = false): Promise<void> {
+    rankLoading.value = true
+    try {
+      ranking.value = await backend.rankNodes(selectedGame.value?.id ?? null, ping)
+      if (ping) await library.reloadServers()
+    } finally {
+      rankLoading.value = false
+    }
+  }
+
+  /**
+   * Switches to a specific node: turns off smart routing, selects the node, and restarts acceleration
+   * on it when currently accelerating. Errors propagate to the caller.
+   */
+  async function switchNode(id: string): Promise<void> {
+    smartNode.value = false
+    setSelectedNodeId(id)
+    if (status.value.state === 'accelerating' || status.value.state === 'connecting') {
+      await stop()
+      await start()
+    }
+  }
+
   return {
     status,
     effect,
@@ -92,8 +120,12 @@ export const useAccelStore = defineStore('accel', () => {
     selectedNode,
     smartNode,
     nodeUnavailable,
+    ranking,
+    rankLoading,
     setSelectedNodeId,
     reconcileSelection,
+    refreshRanking,
+    switchNode,
     start,
     stop,
     toggle

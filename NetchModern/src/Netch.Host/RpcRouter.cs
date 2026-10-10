@@ -69,6 +69,28 @@ internal sealed class RpcRouter
                 return await WithStateValue(ServerList, ct);
             }
 
+            case "nodes.rank":
+            {
+                var gameId = JsonParams.OptionalString(@params, "gameId");
+                var ping = JsonParams.OptionalBool(@params, "ping") ?? false;
+
+                // Snapshot under the lock; ping the snapshot outside it (network I/O).
+                var pool = await WithStateValue(() => Servers.Servers.ToList(), ct);
+                if (ping || pool.All(s => s.Delay < 0))
+                {
+                    await Servers.PingAsync(pool, ct);
+                    pool = await WithStateValue(() => Servers.Servers.ToList(), ct);
+                }
+
+                // Unknown gameId → rank without preference (do not throw).
+                var game = string.IsNullOrEmpty(gameId)
+                    ? null
+                    : await WithStateValue(() => Games.Games.FirstOrDefault(g => g.Id == gameId), ct);
+
+                var ranking = NodeRanker.Rank(game, pool);
+                return Mapping.ToDto(ranking, pool);
+            }
+
             case "servers.export":
                 // Every server as a share link string (skips protocols the exporter can't emit, e.g. WireGuard).
                 return await WithStateValue(
@@ -374,7 +396,7 @@ internal sealed class RpcRouter
         Server node;
         if (string.IsNullOrEmpty(nodeId))
         {
-            node = await PickBestNodeAsync(ct);
+            node = await PickBestNodeAsync(game, ct);
         }
         else
         {
@@ -437,8 +459,10 @@ internal sealed class RpcRouter
         }
     }
 
-    /// <summary>Smart routing: lowest tested latency; if nothing is tested yet, ping first.</summary>
-    private async Task<Server> PickBestNodeAsync(CancellationToken ct)
+    /// <summary>
+    ///     Smart routing: region-aware lowest-latency pick. If nothing is tested yet, ping first.
+    /// </summary>
+    private async Task<Server> PickBestNodeAsync(Game game, CancellationToken ct)
     {
         // Snapshot under the lock; ping the snapshot outside it (network I/O).
         var pool = await WithStateValue(() => Servers.Servers.ToList(), ct);
@@ -451,6 +475,9 @@ internal sealed class RpcRouter
             pool = await WithStateValue(() => Servers.Servers.ToList(), ct);
         }
 
-        return pool.Where(s => s.Delay >= 0).OrderBy(s => s.Delay).FirstOrDefault() ?? pool[0];
+        var ranking = NodeRanker.Rank(game, pool);
+        var node = ranking.Recommended?.Server ?? pool[0];
+        Logs.Log(Netch.Core.Enums.LogLevel.Info, $"智能选路：{node.Remark}（{ranking.Reason}）");
+        return node;
     }
 }

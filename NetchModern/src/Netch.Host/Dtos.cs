@@ -31,6 +31,12 @@ internal record EffectPointDto(long Ts, int Accel);
 internal record EffectReportDto(bool HasTarget, string? Target, EffectSnapshotDto? Baseline,
     EffectSnapshotDto? Current, int? LatencyPct, string Summary, EffectPointDto[] Series, bool Measuring);
 
+internal record RankedNodeDto(string Id, string Remark, string Type, int Delay, string? Region,
+    string? RegionName, bool RegionMatch, int Score, string Note);
+
+internal record NodeRankingDto(string? RecommendedId, string Reason, string? PreferenceLabel,
+    string[] PreferredRegions, RankedNodeDto[] Candidates);
+
 internal static class Mapping
 {
     public static string KindOf(Server s) => s switch
@@ -178,4 +184,33 @@ internal static class Mapping
     public static EffectReportDto ToDto(EffectReport r) =>
         new(r.HasTarget, r.Target, ToDto(r.Baseline), ToDto(r.Current), r.LatencyPct, r.Summary,
             r.Series.Select(p => new EffectPointDto(p.TsMs, p.Accel)).ToArray(), r.Measuring);
+
+    /// <summary>Builds the ranking DTO, assigning stable ids from the same pool as servers.list.</summary>
+    public static NodeRankingDto ToDto(NodeRanking ranking, IReadOnlyList<Server> pool)
+    {
+        var ids = ServerIds.Assign(pool);
+        var candidates = ranking.Candidates
+            .Select(c => new RankedNodeDto(
+                ids.TryGetValue(c.Server, out var id) ? id : ServerIds.Fingerprint(c.Server),
+                c.Server.Remark,
+                ChipOf(c.Server),
+                c.Delay,
+                c.Region,
+                c.RegionName,
+                c.RegionMatch,
+                c.Score,
+                c.Note))
+            .ToArray();
+
+        string? recommendedId = null;
+        if (ranking.Recommended is { } rec)
+            recommendedId = ids.TryGetValue(rec.Server, out var rid) ? rid : ServerIds.Fingerprint(rec.Server);
+
+        return new NodeRankingDto(
+            recommendedId,
+            ranking.Reason,
+            ranking.PreferenceLabel,
+            ranking.PreferredRegions.ToArray(),
+            candidates);
+    }
 }

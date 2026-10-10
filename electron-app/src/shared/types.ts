@@ -46,6 +46,8 @@ export interface Game {
   proxyDomains?: string[]
   proxyIps?: string[]
   proxyProcesses?: string[]
+  /** True when this game is in the auto-acceleration list. */
+  autoAccelerate?: boolean
 }
 
 export type AccelState =
@@ -95,6 +97,8 @@ export interface EngineSettings {
   minimizeToTray: boolean
   /** Remote game-rules URL; empty = the feature is disabled (no network traffic). */
   rulesUrl: string
+  /** Global master switch for auto-acceleration on game launch. */
+  autoAccelerate: boolean
 }
 
 /** Connection state of the C# backend sidecar. */

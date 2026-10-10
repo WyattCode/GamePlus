@@ -8,6 +8,7 @@ using Netch.Core.Abstractions;
 using Netch.Core.Models;
 using Netch.Core.Models.Games;
 using Netch.Core.Services;
+using Netch.Core.Services.AutoAccel;
 
 namespace Netch.Host;
 
@@ -35,9 +36,10 @@ internal sealed class ClientSession
     private readonly ILogService _log;
     private readonly IServerRepository _servers;
     private readonly EffectMonitor? _effect;
+    private readonly AutoAccelHost? _autoAccel;
     private readonly SemaphoreSlim _inFlight = new(MaxInFlight, MaxInFlight);
 
-    public ClientSession(WebSocket ws, RpcRouter router, IServiceProvider sp)
+    public ClientSession(WebSocket ws, RpcRouter router, IServiceProvider sp, AutoAccelHost? autoAccel = null)
     {
         _ws = ws;
         _router = router;
@@ -46,6 +48,7 @@ internal sealed class ClientSession
         _log = sp.GetRequiredService<ILogService>();
         _servers = sp.GetRequiredService<IServerRepository>();
         _effect = sp.GetService<EffectMonitor>();
+        _autoAccel = autoAccel;
     }
 
     public async Task RunAsync()
@@ -57,6 +60,8 @@ internal sealed class ClientSession
         _log.EntryAdded += OnLog;
         if (_effect != null)
             _effect.Updated += OnEffectUpdated;
+        if (_autoAccel != null)
+            _autoAccel.Event += OnAutoAccel;
 
         // Initial snapshot so the UI reflects current state on connect.
         Enqueue("accel.status", StatusDto());
@@ -74,6 +79,8 @@ internal sealed class ClientSession
             _log.EntryAdded -= OnLog;
             if (_effect != null)
                 _effect.Updated -= OnEffectUpdated;
+            if (_autoAccel != null)
+                _autoAccel.Event -= OnAutoAccel;
             _out.Writer.TryComplete();
             cts.Cancel();
             try { await writer; } catch { /* ignore */ }
@@ -201,4 +208,13 @@ internal sealed class ClientSession
     private void OnLog(object? sender, LogEntry e) => Enqueue("log", Mapping.ToDto(e));
 
     private void OnEffectUpdated() => Enqueue("effect", EffectDto());
+
+    private void OnAutoAccel(AutoAccelEvent e) =>
+        Enqueue("auto.accel", new
+        {
+            kind = e.Kind,
+            gameId = e.GameId,
+            gameName = _router.GameNameOf(e.GameId),
+            message = e.Message
+        });
 }

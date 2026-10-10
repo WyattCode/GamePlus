@@ -46,6 +46,12 @@ internal sealed class RpcRouter
     private GameLibraryScanner LibraryScanner => _sp.GetRequiredService<GameLibraryScanner>();
     private GameRulesService Rules => _sp.GetRequiredService<GameRulesService>();
 
+    /// <summary>Current acceleration state (used by the auto-acceleration policy).</summary>
+    internal AccelerationState CurrentAccelState => Accel.State;
+
+    /// <summary>Id of the game currently being accelerated, or null.</summary>
+    internal string? CurrentAccelGameId => Accel.CurrentGame?.Id;
+
     public Task<object?> DispatchAsync(string method, JsonElement @params, CancellationToken ct) =>
         DispatchCoreAsync(method, @params, ct);
 
@@ -54,7 +60,7 @@ internal sealed class RpcRouter
         switch (method)
         {
             case "games.list":
-                return await WithStateValue(() => Games.Games.Select(Mapping.ToDto).ToArray(), ct);
+                return await WithStateValue(() => GameList(), ct);
 
             case "servers.list":
                 return await WithStateValue(ServerList, ct);
@@ -260,7 +266,34 @@ internal sealed class RpcRouter
                                ?? throw new InvalidOperationException("游戏不存在");
                     Games.ToggleFavorite(game);
                     await SettingsSvc.SaveAsync();
-                    return Games.Games.Select(Mapping.ToDto).ToArray();
+                    return GameList();
+                }, ct);
+            }
+
+            case "games.setAuto":
+            {
+                var id = JsonParams.RequiredString(@params, "id");
+                var enabled = JsonParams.OptionalBool(@params, "enabled") ?? false;
+                return await WithStateValueAsync(async () =>
+                {
+                    var game = Games.Games.FirstOrDefault(g => g.Id == id)
+                               ?? throw new InvalidOperationException("游戏不存在");
+                    if (enabled && game.ProxyProcesses.Count == 0)
+                        throw new InvalidOperationException("该游戏没有配置进程规则，无法自动加速");
+
+                    var list = SettingsSvc.Settings.AutoAccelerateGames;
+                    if (enabled)
+                    {
+                        if (!list.Contains(id))
+                            list.Add(id);
+                    }
+                    else
+                    {
+                        list.RemoveAll(x => x == id);
+                    }
+
+                    await SettingsSvc.SaveAsync();
+                    return GameList();
                 }, ct);
             }
 
@@ -272,7 +305,7 @@ internal sealed class RpcRouter
                 return await WithStateValue(() =>
                 {
                     Games.AddCustomGame(game);
-                    return Games.Games.Select(Mapping.ToDto).ToArray();
+                    return GameList();
                 }, ct);
             }
 
@@ -305,7 +338,7 @@ internal sealed class RpcRouter
                             throw;
                         }
                     }
-                    return Games.Games.Select(Mapping.ToDto).ToArray();
+                    return GameList();
                 }, ct);
             }
 
@@ -317,7 +350,7 @@ internal sealed class RpcRouter
                     var game = Games.Games.FirstOrDefault(g => g.Id == id)
                                ?? throw new InvalidOperationException("游戏不存在");
                     Games.RemoveGame(game);
-                    return Games.Games.Select(Mapping.ToDto).ToArray();
+                    return GameList();
                 }, ct);
             }
 
@@ -368,7 +401,7 @@ internal sealed class RpcRouter
                     if (!string.IsNullOrWhiteSpace(source))
                         game.EnglishName = source!;
                     Games.AddCustomGame(game);
-                    return Games.Games.Select(Mapping.ToDto).ToArray();
+                    return GameList();
                 }, ct);
             }
 
@@ -439,15 +472,13 @@ internal sealed class RpcRouter
             return await WithStateValue(() =>
             {
                 Games.ReplaceSeedGames(Rules.CreateGames());
-                return new RulesUpdateDto("updated", result.Message, result.Version,
-                    Games.Games.Select(Mapping.ToDto).ToArray());
+                return new RulesUpdateDto("updated", result.Message, result.Version, GameList());
             }, ct);
         }
 
         var status = result.Status == RulesUpdateStatus.UpToDate ? "upToDate" : "failed";
         return await WithStateValue(
-            () => new RulesUpdateDto(status, result.Message, result.Version,
-                Games.Games.Select(Mapping.ToDto).ToArray()),
+            () => new RulesUpdateDto(status, result.Message, result.Version, GameList()),
             ct);
     }
 
@@ -502,6 +533,53 @@ internal sealed class RpcRouter
     private SubscriptionDto[] SubList() =>
         Subs.Subscriptions.ToList().Select(Mapping.ToDto).ToArray();
 
+    /// <summary>Builds the games DTO list, marking the per-game auto-acceleration toggle.</summary>
+    private GameDto[] GameList()
+    {
+        var auto = SettingsSvc.Settings.AutoAccelerateGames;
+        return Games.Games.Select(g => Mapping.ToDto(g, auto)).ToArray();
+    }
+
+    /// <summary>Game name for a given id, or null when unknown (used for auto-accel event payloads).</summary>
+    internal string? GameNameOf(string gameId)
+    {
+        try
+        {
+            return Games.Games.FirstOrDefault(g => g.Id == gameId)?.Name;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    ///     Games to watch for auto-acceleration plus the global master switch. Read under the state lock.
+    /// </summary>
+    internal async Task<(IReadOnlyList<Game> Games, bool Enabled)> AutoWatchedGamesAsync(CancellationToken ct)
+    {
+        return await WithStateValue(() =>
+        {
+            var settings = SettingsSvc.Settings;
+            var ids = settings.AutoAccelerateGames;
+            var watched = Games.Games
+                .Where(g => ids.Contains(g.Id) && g.ProxyProcesses.Count > 0)
+                .ToList();
+            return ((IReadOnlyList<Game>)watched, settings.AutoAccelerate);
+        }, ct);
+    }
+
+    /// <summary>
+    ///     Starts acceleration for an auto-acceleration launch edge, using the same code path as
+    ///     accel.start with a null nodeId (smart routing).
+    /// </summary>
+    internal Task StartAccelForAutoAsync(string gameId, CancellationToken ct) =>
+        StartAccelAsync(gameId, null, ct);
+
+    /// <summary>Stops acceleration for an auto-acceleration exit edge.</summary>
+    internal Task StopAccelForAutoAsync(CancellationToken ct) =>
+        StopAccelAsync(ct);
+
     private void ApplySettings(JsonElement p)
     {
         var s = SettingsSvc.Settings;
@@ -511,6 +589,8 @@ internal sealed class RpcRouter
             s.Language = language;
         if (JsonParams.OptionalBool(p, "minimizeToTray") is { } minimizeToTray)
             s.MinimizeToTray = minimizeToTray;
+        if (JsonParams.OptionalBool(p, "autoAccelerate") is { } autoAccelerate)
+            s.AutoAccelerate = autoAccelerate;
         if (JsonParams.OptionalString(p, "rulesUrl") is { } rulesUrl)
         {
             // Validate BEFORE mutating anything so a bad value can't leave settings half-applied.

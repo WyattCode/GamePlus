@@ -20,10 +20,17 @@ public partial class AppSettings : ObservableObject
     [ObservableProperty]
     private string _rulesUrl = "";
 
+    /// <summary>Global master switch for auto-acceleration on game launch.</summary>
+    [ObservableProperty]
+    private bool _autoAccelerate = true;
+
     public DnsSettings Dns { get; set; } = new();
 
     /// <summary>Ids of games the user has favourited.</summary>
     public List<string> FavoriteGames { get; set; } = new();
+
+    /// <summary>Ids of games with the per-game auto-acceleration toggle enabled.</summary>
+    public List<string> AutoAccelerateGames { get; set; } = new();
 }
 
 public enum AppTheme

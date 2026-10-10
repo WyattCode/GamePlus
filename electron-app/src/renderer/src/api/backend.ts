@@ -90,7 +90,7 @@ const SHORT_CODES: Array<{ code: string; name: string; re: RegExp }> = [
 
 const LONG_RULES: Array<{ code: string; name: string; re: RegExp }> = [
   { code: 'HK', name: '香港', re: /香港|港|🇭🇰|Hong ?Kong/i },
-  { code: 'TW', name: '台湾', re: /台湾|台北|🇹🇼|Taiwan/i },
+  { code: 'TW', name: '台湾', re: /台北|🇹🇼|Taiwan/i },
   { code: 'JP', name: '日本', re: /日本|东京|大阪|🇯🇵|Japan|Tokyo|Osaka/i },
   { code: 'KR', name: '韩国', re: /韩国|首尔|🇰🇷|Korea|Seoul/i },
   { code: 'SG', name: '新加坡', re: /新加坡|狮城|🇸🇬|Singapore/i },
@@ -352,7 +352,8 @@ class MockBackend implements Backend {
     theme: 'light',
     language: 'System',
     minimizeToTray: true,
-    rulesUrl: ''
+    rulesUrl: '',
+    autoAccelerate: true
   }
 
   async addServerFromLink(link: string): Promise<Server[]> {

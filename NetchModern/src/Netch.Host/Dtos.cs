@@ -15,7 +15,7 @@ internal record ServerDto(string Id, string Kind, string Type, string Remark, st
 internal record GameDto(string Id, string Name, string Icon, string Accent, string RegionText,
     int RuleCount, string[] Categories, bool Favorite, bool Custom,
     string EnglishName, string[] Aliases, string Category, string[] Regions, string[] Platforms,
-    string[] ProxyDomains, string[] ProxyIps, string[] ProxyProcesses);
+    string[] ProxyDomains, string[] ProxyIps, string[] ProxyProcesses, bool AutoAccelerate);
 
 internal record SubscriptionDto(string Id, string Remark, string Link, int ServerCount, string? LastUpdated);
 
@@ -24,7 +24,8 @@ internal record AccelStatusDto(string State, int Latency, double Loss, int Jitte
 
 internal record LogDto(string Ts, string Level, string Message);
 
-internal record SettingsDto(string Theme, string Language, bool MinimizeToTray, string RulesUrl);
+internal record SettingsDto(string Theme, string Language, bool MinimizeToTray, string RulesUrl,
+    bool AutoAccelerate);
 
 internal record EffectSnapshotDto(int Latency, double Loss, int Jitter, int Samples);
 
@@ -75,12 +76,19 @@ internal static class Mapping
     public static ServerDto ToDto(Server s, string id) =>
         new(id, KindOf(s), ChipOf(s), s.Remark, s.Hostname, s.Port, s.Group, s.Delay);
 
-    public static GameDto ToDto(Game g) =>
+    public static GameDto ToDto(Game g) => ToDto(g, null);
+
+    /// <summary>
+    ///     Builds the game DTO. <paramref name="autoAccelerateIds" /> is the set of game ids with the
+    ///     per-game auto-acceleration toggle enabled (null → false for every game).
+    /// </summary>
+    public static GameDto ToDto(Game g, IReadOnlyCollection<string>? autoAccelerateIds) =>
         new(g.Id, g.Name, g.Icon, g.Accent, g.RegionText, g.RuleCount,
             BuildCategories(g), g.IsFavorite, g.IsCustom,
             g.EnglishName, g.Aliases.ToArray(), g.Category.ToString(), g.Regions.ToArray(),
             g.Platforms.ToArray(), g.ProxyDomains.ToArray(), g.ProxyIps.ToArray(),
-            g.ProxyProcesses.ToArray());
+            g.ProxyProcesses.ToArray(),
+            autoAccelerateIds is not null && autoAccelerateIds.Contains(g.Id));
 
     /// <summary>
     ///     Builds a <see cref="Game" /> from client-edit fields (used by games.add / games.update).
@@ -194,7 +202,8 @@ internal static class Mapping
         new(e.Timestamp.ToString("o"), e.Level.ToString().ToLowerInvariant(), e.Message);
 
     public static SettingsDto ToDto(Netch.Core.Models.Settings.AppSettings s) =>
-        new(s.Theme.ToString().ToLowerInvariant(), s.Language, s.MinimizeToTray, s.RulesUrl);
+        new(s.Theme.ToString().ToLowerInvariant(), s.Language, s.MinimizeToTray, s.RulesUrl,
+            s.AutoAccelerate);
 
     public static EffectSnapshotDto? ToDto(EffectSnapshot? s) =>
         s is null ? null : new EffectSnapshotDto(s.Latency, s.Loss, s.Jitter, s.Samples);

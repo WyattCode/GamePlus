@@ -58,6 +58,11 @@ for (var i = 0; i < args.Length - 1; i++)
 
 var router = new RpcRouter(services);
 
+// Auto-acceleration: watch for game launches/exits every few seconds and start/stop acceleration.
+var autoAccel = new AutoAccelHost(router, log: services.GetRequiredService<ILogService>());
+using var autoAccelCts = new CancellationTokenSource();
+_ = autoAccel.RunAsync(autoAccelCts.Token);
+
 // Remote game rules: refresh in the background shortly after startup when a URL is configured. Failures
 // are logged and swallowed — the bundled/cached rules stay active.
 var rulesUrl = services.GetRequiredService<ISettingsService>().Settings.RulesUrl;
@@ -171,7 +176,7 @@ using var acceptCts = new CancellationTokenSource();
 try
 {
     await server.AcceptLoopAsync(
-        ws => new ClientSession(ws, router, services).RunAsync(),
+        ws => new ClientSession(ws, router, services, autoAccel).RunAsync(),
         acceptCts.Token);
 }
 catch (Exception e)

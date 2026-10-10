@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type {
+  CaptureMode,
   DetectedGame,
   Game,
   ImportResult,
@@ -81,6 +82,20 @@ export const useLibraryStore = defineStore('library', () => {
       const updated = games.value.find((g) => g.id === id)
       if (updated) accel.selectedGame = updated
       await accel.refreshRanking(false)
+    }
+  }
+
+  /**
+   * Persists the per-game capture-mode override ("default" clears it). Keeps the accel store's
+   * selected-game snapshot in sync so the mode picker reflects the new value immediately.
+   */
+  async function setGameMode(id: string, mode: CaptureMode | 'default'): Promise<void> {
+    games.value = await backend.setGameMode(id, mode)
+
+    const accel = useAccelStore()
+    if (accel.selectedGame?.id === id) {
+      const updated = games.value.find((g) => g.id === id)
+      if (updated) accel.selectedGame = updated
     }
   }
 
@@ -204,6 +219,7 @@ export const useLibraryStore = defineStore('library', () => {
     toggleFavorite,
     setGameAuto,
     setGameServer,
+    setGameMode,
     addGame,
     updateGame,
     removeGame,

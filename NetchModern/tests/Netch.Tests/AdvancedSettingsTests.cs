@@ -97,6 +97,34 @@ public class AdvancedSettingsTests
         Assert.Throws<InvalidOperationException>(() => AdvancedSettingsValidator.ValidateLocalPort(value));
     }
 
+    // --- capture mode ---
+
+    [Theory]
+    [InlineData("auto", "auto")]
+    [InlineData("process", "process")]
+    [InlineData("tun", "tun")]
+    [InlineData("proxy", "proxy")]
+    [InlineData("AUTO", "auto")]
+    [InlineData("Process", "process")]
+    [InlineData("  TUN  ", "tun")]
+    [InlineData("PROXY", "proxy")]
+    public void ValidateCaptureMode_AcceptsValidValues(string input, string expected)
+    {
+        Assert.Equal(expected, AdvancedSettingsValidator.ValidateCaptureMode(input));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("direct")]
+    [InlineData("system")]
+    [InlineData("tun2socks")]
+    [InlineData("process,tun")]
+    public void ValidateCaptureMode_RejectsInvalid(string value)
+    {
+        Assert.Throws<InvalidOperationException>(() => AdvancedSettingsValidator.ValidateCaptureMode(value));
+    }
+
     // --- NodeRanker penalty parameter ---
 
     private static ShadowsocksServer Node(string remark, int delay, string host = "h.example.net")

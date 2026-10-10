@@ -5,7 +5,7 @@ import AppIcon from '@/components/AppIcon.vue'
 import { backend } from '@/api/backend'
 import { errorMessage, useToastStore } from '@/stores/toast'
 import { validateDns, validateLocalPort, validateRegionPenalty } from '@/utils/advanced'
-import type { AdvancedSettings, EngineSettings } from '@shared/types'
+import type { AdvancedSettings, CaptureMode, EngineSettings } from '@shared/types'
 
 const router = useRouter()
 const toast = useToastStore()
@@ -18,6 +18,7 @@ const dns = ref('')
 const socksPort = ref(0)
 const measureEffect = ref(false)
 const regionPenalty = ref(60)
+const defaultCaptureMode = ref<CaptureMode>('auto')
 
 const loaded = ref(false)
 
@@ -38,6 +39,7 @@ function apply(s: EngineSettings): void {
   socksPort.value = s.advanced.localSocksPort
   measureEffect.value = s.advanced.measureEffect
   regionPenalty.value = s.advanced.regionPenaltyMs
+  defaultCaptureMode.value = s.advanced.defaultCaptureMode
 }
 
 const dnsError = computed(() => (dns.value.trim() ? validateDns(dns.value) : null))
@@ -98,6 +100,12 @@ function onPenaltyInput(e: Event): void {
 function onPenaltyChange(): void {
   if (validateRegionPenalty(regionPenalty.value)) return
   void saveAdvanced({ regionPenaltyMs: regionPenalty.value })
+}
+
+function onCaptureModeChange(e: Event): void {
+  const v = (e.target as HTMLSelectElement).value as CaptureMode
+  defaultCaptureMode.value = v
+  void saveAdvanced({ defaultCaptureMode: v })
 }
 
 async function resetDefaults(): Promise<void> {
@@ -166,6 +174,26 @@ async function resetDefaults(): Promise<void> {
             @keyup.enter="savePort"
           />
           <div v-if="portError" class="small danger">{{ portError }}</div>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="field">
+          <div class="s-name">默认加速模式</div>
+          <div class="muted small">
+            自动：进程 → TUN → 系统代理 依次尝试；手动指定后失败不会自动降级。单个游戏可在加速页单独设置。
+          </div>
+          <select
+            class="input select"
+            :value="defaultCaptureMode"
+            :disabled="!loaded || saving"
+            @change="onCaptureModeChange"
+          >
+            <option value="auto">自动（推荐）</option>
+            <option value="process">进程模式</option>
+            <option value="tun">TUN 模式</option>
+            <option value="proxy">系统代理</option>
+          </select>
         </div>
       </div>
     </div>
@@ -303,6 +331,9 @@ async function resetDefaults(): Promise<void> {
 .input {
   margin-top: 8px;
   width: 100%;
+}
+.select {
+  cursor: pointer;
 }
 .port {
   max-width: 160px;

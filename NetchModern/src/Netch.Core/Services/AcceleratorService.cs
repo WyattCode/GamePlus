@@ -35,6 +35,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     private readonly Func<IReadOnlyList<ExtraApp>>? _extraApps;
     private readonly Func<AdvancedSettings>? _advanced;
     private readonly IBaselineStore? _baselines;
+    private readonly Func<Game, string>? _captureModeFor;
 
     private IServerController? _controller;
     private IModeController? _modeController;
@@ -59,7 +60,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     public AcceleratorService(ILogService log, Func<Server, IServerController> controllerFactory,
         ISystemProxyService systemProxy, IModeControllerFactory modeControllerFactory, EffectMonitor? effect = null,
         Func<IReadOnlyList<ExtraApp>>? extraApps = null, Func<AdvancedSettings>? advanced = null,
-        IBaselineStore? baselines = null)
+        IBaselineStore? baselines = null, Func<Game, string>? captureModeFor = null)
     {
         _log = log;
         _controllerFactory = controllerFactory;
@@ -69,6 +70,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         _extraApps = extraApps;
         _advanced = advanced;
         _baselines = baselines;
+        _captureModeFor = captureModeFor;
     }
 
     /// <summary>Convenience overload using the default <see cref="ModeControllerFactory" /> (real drivers).</summary>
@@ -103,6 +105,22 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             _log.Log(LogLevel.Info, $"Accelerating {game.Name} via {node.DisplayName}");
 
             var adv = _advanced?.Invoke();
+
+            // Resolve the effective capture mode (per-game override ?? global default). Unknown values
+            // fall back to "auto" so a hand-edited settings.json can never break acceleration.
+            var mode = NormalizeMode(_captureModeFor?.Invoke(game));
+
+            // Validate availability BEFORE any side effect (controller start, driver load, system proxy).
+            var hasProcess = game.ProxyProcesses.Count > 0;
+            var hasIp = game.ProxyIps.Count > 0;
+            var hasDomain = game.ProxyDomains.Count > 0;
+
+            if (mode == "process" && !hasProcess)
+                throw new InvalidOperationException("该游戏没有进程规则，无法使用进程模式");
+            if (mode == "tun" && !hasIp)
+                throw new InvalidOperationException("该游戏没有 IP 规则，无法使用 TUN 模式");
+            if (mode == "proxy" && !hasDomain)
+                throw new InvalidOperationException("该游戏没有域名规则，无法使用系统代理模式");
 
             // Baseline policy: the direct baseline (~3.5 s) runs automatically only on the FIRST
             // acceleration of each game (persisted) or when the user explicitly asks for it
@@ -157,16 +175,15 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             // Win11, whereas the netfilter driver used by process capture is often blocked by
             // driver-signature enforcement), and finally domain system-proxy routing when neither driver
             // is available and the game lists domains.
-            var hasProcess = game.ProxyProcesses.Count > 0;
-            var hasIp = game.ProxyIps.Count > 0;
-            var hasDomain = game.ProxyDomains.Count > 0;
-            var useCapture = hasProcess || hasIp;
+            var useCapture = mode is "auto" or "process" or "tun"
+                ? (mode == "auto" ? hasProcess || hasIp : true)
+                : false;
 
             _controller = _controllerFactory(node);
             // Fixed local SOCKS5 port (0 = automatic). Set before StartAsync; persists across the
             // restart in StartDomainProxyAsync because it reuses the same controller instance.
             _controller.PreferredSocksPort = adv?.LocalSocksPort ?? 0;
-            if (!useCapture)
+            if (mode == "proxy" || (mode == "auto" && !useCapture))
             {
                 // Domain-only game: system proxy with xray domain/IP routing (works for apps that honour
                 // the Windows proxy — launchers/browsers; raw-socket games need a process/IP rule instead).
@@ -176,16 +193,33 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
 
             _socks = await _controller.StartAsync(node, ct);
 
-            if (useCapture)
-                await StartCaptureAsync(game, node, _socks, hasProcess, hasIp, hasDomain, ct);
-            else if (hasDomain)
+            if (mode == "auto")
+            {
+                if (useCapture)
+                    await StartCaptureAsync(game, node, _socks, hasProcess, hasIp, hasDomain, ct);
+                else if (hasDomain)
+                {
+                    _systemProxy.Enable("127.0.0.1", _controller.HttpPort);
+                    Status.CaptureMode = "proxy";
+                    _log.Log(LogLevel.Info, $"System-proxy routing {game.ProxyDomains.Count} domain(s) via {node.Hostname}");
+                }
+                else
+                    throw new InvalidOperationException("该游戏没有配置任何加速规则（进程/IP/域名），请先在游戏设置里填写。");
+            }
+            else if (mode == "process")
+            {
+                await StartForcedProcessAsync(game, node, _socks, ct);
+            }
+            else if (mode == "tun")
+            {
+                await StartForcedTunAsync(game, node, _socks, ct);
+            }
+            else // "proxy"
             {
                 _systemProxy.Enable("127.0.0.1", _controller.HttpPort);
                 Status.CaptureMode = "proxy";
-                _log.Log(LogLevel.Info, $"System-proxy routing {game.ProxyDomains.Count} domain(s) via {node.Hostname}");
+                _log.Log(LogLevel.Info, $"加速模式：系统代理（手动指定）— {game.ProxyDomains.Count} 个域名经 {node.Hostname}");
             }
-            else
-                throw new InvalidOperationException("该游戏没有配置任何加速规则（进程/IP/域名），请先在游戏设置里填写。");
 
             _startedUtc = DateTime.UtcNow;
             _statsTimer = new Timer(PollStats, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
@@ -204,6 +238,73 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             // Clean up with a fresh token: the failure may itself be a cancellation, and cleanup must still run.
             await StopAsync(CancellationToken.None);
             throw;
+        }
+    }
+
+    /// <summary>Normalizes a capture-mode string; unknown/null → "auto".</summary>
+    private static string NormalizeMode(string? value)
+    {
+        var normalized = (value ?? "").Trim().ToLowerInvariant();
+        return normalized is "process" or "tun" or "proxy" ? normalized : "auto";
+    }
+
+    /// <summary>
+    ///     Forced process capture (manual mode). No fallback: any failure is surfaced with a clear
+    ///     Chinese message so the user can switch to 自动 / TUN.
+    /// </summary>
+    private async Task StartForcedProcessAsync(Game game, Server node, Socks5Server socks5, CancellationToken ct)
+    {
+        try
+        {
+            _modeController = _modeControllerFactory.Create(ModeType.ProcessMode);
+            var extras = _extraApps?.Invoke() ?? Array.Empty<ExtraApp>();
+            var mode = SplitRouting.BuildProcessMode(game.ProxyProcesses, extras);
+            await _modeController.StartAsync(socks5, mode, ct);
+            Status.CaptureMode = "process";
+
+            var extraProxy = extras.Count(a => a is { Enabled: true, Mode: ExtraAppMode.Proxy });
+            var extraBypass = extras.Count(a => a is { Enabled: true, Mode: ExtraAppMode.Bypass });
+            if (extraProxy > 0 || extraBypass > 0)
+                _log.Log(LogLevel.Info, $"分应用分流：额外代理 {extraProxy} 个，绕过 {extraBypass} 个");
+
+            _log.Log(LogLevel.Info,
+                $"加速模式：进程模式（手动指定）— 抓取 {game.ProxyProcesses.Count} 个进程 → {node.Hostname}");
+        }
+        catch (Exception e)
+        {
+            if (_modeController != null)
+            {
+                try { await _modeController.StopAsync(ct); } catch { /* ignore */ }
+                _modeController = null;
+            }
+            throw new InvalidOperationException(
+                $"进程模式启动失败：{e.Message}。可在加速模式中改用「自动」或「TUN」。", e);
+        }
+    }
+
+    /// <summary>
+    ///     Forced TUN capture (manual mode). No fallback: any failure is surfaced with a clear Chinese
+    ///     message so the user can switch to 自动 / 进程模式.
+    /// </summary>
+    private async Task StartForcedTunAsync(Game game, Server node, Socks5Server socks5, CancellationToken ct)
+    {
+        try
+        {
+            _modeController = _modeControllerFactory.Create(ModeType.TunMode);
+            await _modeController.StartAsync(socks5, BuildMode(ModeType.TunMode, game.ProxyIps), ct);
+            Status.CaptureMode = "tun";
+            _log.Log(LogLevel.Info,
+                $"加速模式：TUN 模式（手动指定）— 抓取 {game.ProxyIps.Count} 条 IP 规则 → {node.Hostname}");
+        }
+        catch (Exception e)
+        {
+            if (_modeController != null)
+            {
+                try { await _modeController.StopAsync(ct); } catch { /* ignore */ }
+                _modeController = null;
+            }
+            throw new InvalidOperationException(
+                $"TUN 模式启动失败：{e.Message}。可在加速模式中改用「自动」或「进程模式」。", e);
         }
     }
 

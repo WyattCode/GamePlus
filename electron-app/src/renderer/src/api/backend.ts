@@ -4,6 +4,8 @@ import type {
   AdvancedSettings,
   AutoAccelEvent,
   AutoStartState,
+  CaptureMode,
+  CaptureModeKind,
   DetectedGame,
   DiagnosticBundle,
   DiagnosticReport,
@@ -56,6 +58,8 @@ export interface Backend {
   toggleFavorite(id: string): Promise<Game[]>
   setGameAuto(id: string, enabled: boolean): Promise<Game[]>
   setGameServer(id: string, server: 'cn' | 'intl'): Promise<Game[]>
+  /** Sets (or clears, with "default") the per-game capture-mode override. */
+  setGameMode(id: string, mode: CaptureMode | 'default'): Promise<Game[]>
   onAutoAccel(cb: (e: AutoAccelEvent) => void): () => void
   addGame(data: Partial<Game>): Promise<Game[]>
   updateGame(id: string, data: Partial<Game>): Promise<Game[]>
@@ -206,6 +210,22 @@ export function isValidProcessName(s: string): boolean {
 // Schemes the mock recognises when pretending to import pasted share links.
 const IMPORT_SCHEMES = ['ss://', 'vmess://', 'trojan://', 'vless://', 'hysteria2://', 'socks://', 'socks5://']
 
+/** Capture methods available for a game's rules (mirrors the backend's GameDto.AvailableModes). */
+export function availableModesFor(game: Game): CaptureModeKind[] {
+  const modes: CaptureModeKind[] = []
+  if (game.proxyProcesses && game.proxyProcesses.length > 0) modes.push('process')
+  if (game.proxyIps && game.proxyIps.length > 0) modes.push('tun')
+  if (game.proxyDomains && game.proxyDomains.length > 0) modes.push('proxy')
+  return modes
+}
+
+/** Chinese error for a mode that the game's rules cannot support; null when the mode is usable. */
+export function modeUnavailableError(mode: CaptureModeKind): string {
+  if (mode === 'process') return '该游戏没有进程规则，无法使用进程模式'
+  if (mode === 'tun') return '该游戏没有 IP 规则，无法使用 TUN 模式'
+  return '该游戏没有域名规则，无法使用系统代理模式'
+}
+
 class MockBackend implements Backend {
   private statusCbs = new Set<(s: AccelStatus) => void>()
   private logCbs = new Set<(l: LogEntry) => void>()
@@ -238,8 +258,20 @@ class MockBackend implements Backend {
     baselineFromCache: false
   }
 
+  /** Per-game capture-mode overrides (gameId → mode); missing = follow the global default. */
+  private gameModes = new Map<string, CaptureMode>()
+
+  /** Returns the mock game list with captureMode/availableModes filled in. */
+  private gamesWithModes(): Game[] {
+    return this.mockGames.map((g) => ({
+      ...g,
+      captureMode: this.gameModes.get(g.id) ?? null,
+      availableModes: availableModesFor(g)
+    }))
+  }
+
   async listGames(): Promise<Game[]> {
-    return structuredClone(this.mockGames)
+    return structuredClone(this.gamesWithModes())
   }
   async listServers(): Promise<Server[]> {
     return structuredClone(this.mockServers)
@@ -445,7 +477,7 @@ class MockBackend implements Backend {
     autoAccelerate: true,
     subscriptionAutoUpdateHours: 12,
     extraApps: [],
-    advanced: { ...ADVANCED_DEFAULTS }
+    advanced: { ...ADVANCED_DEFAULTS, defaultCaptureMode: 'auto' as CaptureMode }
   }
 
   private mockAutoStart: AutoStartState = { enabled: false, supported: true, reason: null }
@@ -590,7 +622,7 @@ class MockBackend implements Backend {
   async toggleFavorite(id: string): Promise<Game[]> {
     const g = this.mockGames.find((x) => x.id === id)
     if (g) g.favorite = !g.favorite
-    return structuredClone(this.mockGames)
+    return structuredClone(this.gamesWithModes())
   }
   async setGameAuto(id: string, enabled: boolean): Promise<Game[]> {
     const g = this.mockGames.find((x) => x.id === id)
@@ -599,14 +631,31 @@ class MockBackend implements Backend {
       throw new Error('该游戏没有配置进程规则，无法自动加速')
     }
     g.autoAccelerate = enabled
-    return structuredClone(this.mockGames)
+    return structuredClone(this.gamesWithModes())
   }
   async setGameServer(id: string, server: 'cn' | 'intl'): Promise<Game[]> {
     const g = this.mockGames.find((x) => x.id === id)
     if (!g) throw new Error('游戏不存在')
     if (!hasServerChoice(g)) throw new Error('该游戏没有国服/国际服之分')
     g.serverChoice = server
-    return structuredClone(this.mockGames)
+    return structuredClone(this.gamesWithModes())
+  }
+  async setGameMode(id: string, mode: CaptureMode | 'default'): Promise<Game[]> {
+    const g = this.mockGames.find((x) => x.id === id)
+    if (!g) throw new Error('游戏不存在')
+    if (mode !== 'default' && mode !== 'auto' && mode !== 'process' && mode !== 'tun' && mode !== 'proxy') {
+      throw new Error('无效的加速模式')
+    }
+    if (mode === 'default') {
+      this.gameModes.delete(id)
+    } else if (mode === 'auto') {
+      this.gameModes.set(id, 'auto')
+    } else {
+      const available = availableModesFor(g)
+      if (!available.includes(mode)) throw new Error(modeUnavailableError(mode))
+      this.gameModes.set(id, mode)
+    }
+    return structuredClone(this.gamesWithModes())
   }
   onAutoAccel(_cb: (e: AutoAccelEvent) => void): () => void {
     // The mock never detects real game processes, so this event never fires.
@@ -633,16 +682,17 @@ class MockBackend implements Backend {
       proxyIps: data.proxyIps || [],
       proxyProcesses: data.proxyProcesses || []
     })
-    return structuredClone(this.mockGames)
+    return structuredClone(this.gamesWithModes())
   }
   async updateGame(id: string, data: Partial<Game>): Promise<Game[]> {
     const g = this.mockGames.find((x) => x.id === id)
     if (g) Object.assign(g, data, { id })
-    return structuredClone(this.mockGames)
+    return structuredClone(this.gamesWithModes())
   }
   async removeGame(id: string): Promise<Game[]> {
     this.mockGames = this.mockGames.filter((x) => x.id !== id)
-    return structuredClone(this.mockGames)
+    this.gameModes.delete(id)
+    return structuredClone(this.gamesWithModes())
   }
   async exportServers(): Promise<string[]> {
     return this.mockServers.map((s) => `${s.type}://${s.hostname}:${s.port}#${s.remark}`)
@@ -694,6 +744,12 @@ class MockBackend implements Backend {
         const err = validateLocalPort(adv.localSocksPort)
         if (err) throw new Error(err)
       }
+      if (adv.defaultCaptureMode !== undefined) {
+        const m = adv.defaultCaptureMode
+        if (m !== 'auto' && m !== 'process' && m !== 'tun' && m !== 'proxy') {
+          throw new Error('加速模式只能是 auto、process、tun 或 proxy')
+        }
+      }
       this.mockSettings = {
         ...this.mockSettings,
         ...rest,
@@ -706,7 +762,7 @@ class MockBackend implements Backend {
   }
 
   async resetAdvancedSettings(): Promise<EngineSettings> {
-    this.mockSettings = { ...this.mockSettings, advanced: { ...ADVANCED_DEFAULTS } }
+    this.mockSettings = { ...this.mockSettings, advanced: { ...ADVANCED_DEFAULTS, defaultCaptureMode: 'auto' as CaptureMode } }
     return structuredClone(this.mockSettings)
   }
 
@@ -786,7 +842,7 @@ class MockBackend implements Backend {
       proxyIps: [],
       proxyProcesses: [...executables]
     })
-    return structuredClone(this.mockGames)
+    return structuredClone(this.gamesWithModes())
   }
 
   private mockRules: RulesStatus = {
@@ -810,7 +866,7 @@ class MockBackend implements Backend {
         status: 'failed',
         message: '未配置规则更新地址',
         version: this.mockRules.version,
-        games: structuredClone(this.mockGames)
+        games: structuredClone(this.gamesWithModes())
       }
     }
     this.mockRules = {
@@ -823,7 +879,7 @@ class MockBackend implements Backend {
       status: 'upToDate',
       message: '已是最新版本',
       version: this.mockRules.version,
-      games: structuredClone(this.mockGames)
+      games: structuredClone(this.gamesWithModes())
     }
   }
 

@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AccelHistoryCard from '@/components/AccelHistoryCard.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import EffectChart from '@/components/EffectChart.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
 import { gameColor } from '@/utils/gameIcon'
+import { backend } from '@/api/backend'
 import { useAccelStore } from '@/stores/accel'
 import { useDiagnosticsStore } from '@/stores/diagnostics'
 import { useLibraryStore } from '@/stores/library'
 import { errorMessage, useToastStore } from '@/stores/toast'
 import { fmtDelay, fmtDuration, fmtLatency, fmtRate } from '@/utils/format'
+import type { CaptureMode, CaptureModeKind } from '@shared/types'
 
 const accel = useAccelStore()
 const diagnostics = useDiagnosticsStore()
@@ -246,6 +248,78 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
   }
 }
 
+// --- capture mode (per game) ---
+
+const MODE_LABELS: Record<CaptureMode, string> = {
+  auto: '自动（推荐）',
+  process: '进程模式',
+  tun: 'TUN 模式',
+  proxy: '系统代理'
+}
+
+const MODE_UNAVAILABLE_HINT: Record<CaptureModeKind, string> = {
+  process: '该游戏没有进程规则',
+  tun: '该游戏没有 IP 规则',
+  proxy: '该游戏没有域名规则'
+}
+
+// Global default capture mode, read from settings (best-effort; falls back to "auto").
+const globalDefaultMode = ref<CaptureMode>('auto')
+
+onMounted(async () => {
+  try {
+    const s = await backend.getSettings()
+    const m = s.advanced.defaultCaptureMode
+    if (m === 'auto' || m === 'process' || m === 'tun' || m === 'proxy') {
+      globalDefaultMode.value = m
+    }
+  } catch {
+    // backend not reachable (e.g. browser preview)
+  }
+})
+
+const captureMode = computed<CaptureMode | null>(() => selectedGame.value?.captureMode ?? null)
+const availableModes = computed<CaptureModeKind[]>(
+  () => (selectedGame.value?.availableModes as CaptureModeKind[] | undefined) ?? []
+)
+
+const modeOptions = computed<{ value: CaptureMode | 'default'; label: string; disabled: boolean; title: string }[]>(() => {
+  const avail = availableModes.value
+  const opts: { value: CaptureMode | 'default'; label: string; disabled: boolean; title: string }[] = [
+    {
+      value: 'default',
+      label: `跟随默认 · ${MODE_LABELS[globalDefaultMode.value]}`,
+      disabled: false,
+      title: ''
+    }
+  ]
+  const kinds: CaptureMode[] = ['auto', 'process', 'tun', 'proxy']
+  for (const k of kinds) {
+    const isKind = k !== 'auto'
+    const disabled = isKind && !avail.includes(k as CaptureModeKind)
+    opts.push({
+      value: k,
+      label: MODE_LABELS[k],
+      disabled,
+      title: disabled ? MODE_UNAVAILABLE_HINT[k as CaptureModeKind] : ''
+    })
+  }
+  return opts
+})
+
+const currentModeValue = computed<CaptureMode | 'default'>(() => captureMode.value ?? 'default')
+
+async function setCaptureMode(mode: CaptureMode | 'default'): Promise<void> {
+  const g = selectedGame.value
+  if (!g || running.value || busy.value || mode === currentModeValue.value) return
+  error.value = null
+  try {
+    await library.setGameMode(g.id, mode)
+  } catch (e) {
+    toast.error(errorMessage(e))
+  }
+}
+
 // --- acceleration history (per-game) ---
 
 // Bumped whenever a session finishes (accelerating/stopping → idle) so the history card reloads.
@@ -329,6 +403,26 @@ watch(
             </button>
           </div>
           <span class="muted small server-hint">按所选服务器挑选线路</span>
+        </div>
+
+        <!-- Per-game capture mode -->
+        <div class="server-row">
+          <div class="server-label">加速模式</div>
+          <div class="seg" :class="{ disabled: running }" :title="running ? '停止加速后可切换' : ''">
+            <button
+              v-for="opt in modeOptions"
+              :key="opt.value"
+              type="button"
+              class="seg-btn"
+              :class="{ active: currentModeValue === opt.value }"
+              :disabled="running || busy || opt.disabled"
+              :title="opt.title"
+              @click="setCaptureMode(opt.value)"
+            >
+              {{ opt.label }}
+            </button>
+          </div>
+          <span class="muted small server-hint">手动指定后失败不会自动降级</span>
         </div>
 
         <div class="row">

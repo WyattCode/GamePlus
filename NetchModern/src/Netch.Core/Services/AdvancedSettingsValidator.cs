@@ -132,6 +132,18 @@ public static class AdvancedSettingsValidator
         return value;
     }
 
+    /// <summary>
+    ///     Validates the acceleration (capture) mode. Returns the normalized lowercase value
+    ///     ("auto" | "process" | "tun" | "proxy") or throws.
+    /// </summary>
+    public static string ValidateCaptureMode(string? value)
+    {
+        var normalized = (value ?? "").Trim().ToLowerInvariant();
+        if (normalized is not ("auto" or "process" or "tun" or "proxy"))
+            throw new InvalidOperationException("加速模式只能是 auto、process、tun 或 proxy");
+        return normalized;
+    }
+
     /// <summary>Checks whether a TCP port on 127.0.0.1 is currently free (bind + release).</summary>
     public static bool IsPortFree(int port)
     {

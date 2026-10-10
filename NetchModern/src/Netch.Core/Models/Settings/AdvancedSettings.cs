@@ -13,6 +13,9 @@ public partial class AdvancedSettings : ObservableObject
     /// <summary>Upper bound for <see cref="RegionPenaltyMs" />.</summary>
     public const int MaxRegionPenaltyMs = 300;
 
+    /// <summary>All valid values for <see cref="DefaultCaptureMode" />.</summary>
+    public static readonly string[] CaptureModes = { "auto", "process", "tun", "proxy" };
+
     /// <summary>
     ///     When true, the accelerator takes a fresh direct baseline (~3.5 s) before EVERY acceleration.
     ///     When false (default) the baseline is measured automatically only on the first acceleration of
@@ -31,4 +34,12 @@ public partial class AdvancedSettings : ObservableObject
     /// </summary>
     [ObservableProperty]
     private int _localSocksPort;
+
+    /// <summary>
+    ///     Global default acceleration (capture) mode: "auto" | "process" | "tun" | "proxy".
+    ///     "auto" keeps the historical behaviour (process capture → TUN → system proxy fallback).
+    ///     A per-game override in <see cref="AppSettings.GameCaptureMode" /> takes precedence.
+    /// </summary>
+    [ObservableProperty]
+    private string _defaultCaptureMode = "auto";
 }

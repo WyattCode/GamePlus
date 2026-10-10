@@ -348,6 +348,35 @@ internal sealed class RpcRouter
                 }, ct);
             }
 
+            case "games.setMode":
+            {
+                var id = JsonParams.RequiredString(@params, "id");
+                var mode = (JsonParams.RequiredString(@params, "mode") ?? "").Trim().ToLowerInvariant();
+                if (mode is not ("default" or "auto" or "process" or "tun" or "proxy"))
+                    throw new InvalidOperationException("加速模式只能是 default、auto、process、tun 或 proxy");
+                return await WithStateValueAsync(async () =>
+                {
+                    var game = Games.Games.FirstOrDefault(g => g.Id == id)
+                               ?? throw new InvalidOperationException("游戏不存在");
+
+                    // Availability checks (same Chinese errors as the accelerator) — validate before mutating.
+                    if (mode == "process" && game.ProxyProcesses.Count == 0)
+                        throw new InvalidOperationException("该游戏没有进程规则，无法使用进程模式");
+                    if (mode == "tun" && game.ProxyIps.Count == 0)
+                        throw new InvalidOperationException("该游戏没有 IP 规则，无法使用 TUN 模式");
+                    if (mode == "proxy" && game.ProxyDomains.Count == 0)
+                        throw new InvalidOperationException("该游戏没有域名规则，无法使用系统代理模式");
+
+                    if (mode == "default")
+                        SettingsSvc.Settings.GameCaptureMode.TryRemove(id, out _);
+                    else
+                        SettingsSvc.Settings.GameCaptureMode[id] = mode;
+
+                    await SettingsSvc.SaveAsync();
+                    return GameList();
+                }, ct);
+            }
+
             case "games.add":
             {
                 var game = Mapping.ToGame(@params);
@@ -890,7 +919,8 @@ internal sealed class RpcRouter
     {
         var auto = SettingsSvc.Settings.AutoAccelerateGames;
         var choices = SettingsSvc.Settings.GameServerChoice;
-        return Games.Games.Select(g => Mapping.ToDto(g, auto, choices)).ToArray();
+        var modes = SettingsSvc.Settings.GameCaptureMode;
+        return Games.Games.Select(g => Mapping.ToDto(g, auto, choices, modes)).ToArray();
     }
 
     /// <summary>Game name for a given id, or null when unknown (used for auto-accel event payloads).</summary>
@@ -983,6 +1013,7 @@ internal sealed class RpcRouter
         bool? measureEffect = null;
         int? regionPenalty = null;
         int? localPort = null;
+        string? defaultCaptureMode = null;
 
         if (JsonParams.HasProperty(adv, "tunDns"))
             tunDns = AdvancedSettingsValidator.ValidateDns(JsonParams.OptionalString(adv, "tunDns"));
@@ -994,6 +1025,9 @@ internal sealed class RpcRouter
         if (JsonParams.HasProperty(adv, "localSocksPort"))
             localPort = AdvancedSettingsValidator.ValidateLocalPort(
                 JsonParams.OptionalInt(adv, "localSocksPort") ?? 0);
+        if (JsonParams.HasProperty(adv, "defaultCaptureMode"))
+            defaultCaptureMode = AdvancedSettingsValidator.ValidateCaptureMode(
+                JsonParams.OptionalString(adv, "defaultCaptureMode"));
 
         // All fields validated — now apply.
         if (tunDns is not null)
@@ -1004,6 +1038,8 @@ internal sealed class RpcRouter
             s.Advanced.RegionPenaltyMs = rp;
         if (localPort is { } lp)
             s.Advanced.LocalSocksPort = lp;
+        if (defaultCaptureMode is not null)
+            s.Advanced.DefaultCaptureMode = defaultCaptureMode;
     }
 
     /// <summary>

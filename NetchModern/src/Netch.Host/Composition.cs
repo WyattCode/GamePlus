@@ -78,7 +78,14 @@ internal static class Composition
             sp.GetRequiredService<EffectMonitor>(),
             () => sp.GetRequiredService<ISettingsService>().Settings.ExtraApps.ToList(),
             () => sp.GetRequiredService<ISettingsService>().Settings.Advanced,
-            sp.GetRequiredService<IBaselineStore>()));
+            sp.GetRequiredService<IBaselineStore>(),
+            game =>
+            {
+                var settings = sp.GetRequiredService<ISettingsService>().Settings;
+                return settings.GameCaptureMode.TryGetValue(game.Id, out var m)
+                    ? m
+                    : settings.Advanced.DefaultCaptureMode;
+            }));
 
         // Per-game acceleration history. The store owns its own lock; the recorder subscribes to the
         // accelerator's StateChanged and appends one session per completed acceleration. GameServerChoice

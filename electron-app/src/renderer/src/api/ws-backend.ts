@@ -3,6 +3,7 @@ import type {
   AccelStatus,
   AutoAccelEvent,
   AutoStartState,
+  CaptureMode,
   DiagnosticBundle,
   DiagnosticReport,
   EffectReport,
@@ -292,6 +293,9 @@ export class WebSocketBackend implements Backend {
   }
   setGameServer(id: string, server: 'cn' | 'intl'): Promise<Game[]> {
     return this.call('games.setServer', { id, server })
+  }
+  setGameMode(id: string, mode: CaptureMode | 'default'): Promise<Game[]> {
+    return this.call('games.setMode', { id, mode })
   }
   addGame(data: Partial<Game>): Promise<Game[]> {
     return this.call('games.add', data)

@@ -138,10 +138,11 @@ public class AcceleratorServiceTests
         new() { Hostname = "example.com", Port = 8388, Remark = "test" };
 
     private static AcceleratorService MakeAccelerator(FakeServerController controller, FakeSystemProxy proxy,
-        IModeControllerFactory? modeFactory = null)
+        IModeControllerFactory? modeFactory = null, Func<Game, string>? captureModeFor = null)
     {
         var log = new LogService();
-        return new AcceleratorService(log, _ => controller, proxy, modeFactory ?? new FakeModeControllerFactory());
+        return new AcceleratorService(log, _ => controller, proxy, modeFactory ?? new FakeModeControllerFactory(),
+            null, null, null, null, captureModeFor);
     }
 
     private static AcceleratorService MakeAcceleratorWithEffect(FakeServerController controller, FakeSystemProxy proxy,
@@ -324,6 +325,79 @@ public class AcceleratorServiceTests
         Assert.Equal("process", accel.Status.CaptureMode);
         Assert.False(proxy.IsEnabled);
         Assert.Equal(ModeType.ProcessMode, modeFactory.Last!.Type);
+    }
+
+    [Fact]
+    public async Task StartAsync_ForcedProcess_UsesOnlyProcessMode_NoFallback()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(failProcess: true);
+        var accel = MakeAccelerator(controller, proxy, modeFactory, _ => "process");
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" },
+            ProxyIps = new List<string> { "1.2.3.4" },
+            ProxyDomains = new List<string> { "game.example.com" }
+        };
+        var server = MakeServer();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => accel.StartAsync(game, server));
+
+        Assert.Contains("进程模式", ex.Message);
+        Assert.Equal(AccelerationState.Idle, accel.State);
+        Assert.False(proxy.IsEnabled);
+        // No fallback to TUN or system proxy.
+        Assert.Equal("", accel.Status.CaptureMode ?? "");
+    }
+
+    [Fact]
+    public async Task StartAsync_ForcedTun_NoIps_ThrowsAvailabilityError_NeverStartsController()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory();
+        var accel = MakeAccelerator(controller, proxy, modeFactory, _ => "tun");
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyDomains = new List<string> { "game.example.com" }
+        };
+        var server = MakeServer();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => accel.StartAsync(game, server));
+
+        Assert.Contains("TUN", ex.Message);
+        Assert.Equal(0, controller.StartCalls);
+        Assert.Equal(AccelerationState.Idle, accel.State);
+    }
+
+    [Fact]
+    public async Task StartAsync_ForcedProxy_EnablesSystemProxyWithProxyCaptureMode()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory();
+        var accel = MakeAccelerator(controller, proxy, modeFactory, _ => "proxy");
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyDomains = new List<string> { "game.example.com" }
+        };
+        var server = MakeServer();
+
+        await accel.StartAsync(game, server);
+
+        Assert.Equal(AccelerationState.Accelerating, accel.State);
+        Assert.Equal("proxy", accel.Status.CaptureMode);
+        Assert.True(proxy.IsEnabled);
+        Assert.Equal("127.0.0.1", proxy.Host);
+        Assert.Equal(controller.HttpPort, proxy.Port);
+        Assert.Equal(new[] { "game.example.com" }, controller.ProxyDomains);
     }
 
     [Fact]

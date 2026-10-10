@@ -24,6 +24,12 @@ export interface Server {
   delay: number
 }
 
+/** A concrete capture method (no "auto"): process capture, TUN IP capture or system proxy. */
+export type CaptureModeKind = 'process' | 'tun' | 'proxy'
+
+/** User-selectable acceleration mode: "auto" plus the three concrete capture methods. */
+export type CaptureMode = 'auto' | CaptureModeKind
+
 export interface Game {
   id: string
   name: string
@@ -52,6 +58,10 @@ export interface Game {
   hasServerChoice?: boolean
   /** Per-game server choice; only meaningful when hasServerChoice is true. */
   serverChoice?: 'cn' | 'intl' | null
+  /** Per-game capture-mode override; null/undefined = follow the global default. */
+  captureMode?: CaptureMode | null
+  /** Capture methods available for this game's rules (subset of process/tun/proxy). */
+  availableModes?: CaptureModeKind[]
 }
 
 export type AccelState =
@@ -61,7 +71,7 @@ export type AccelState =
   | 'stopping'
 
 /** Which capture method is actually active. Null while idle. */
-export type CaptureMode = 'process' | 'tun' | 'proxy'
+export type ActiveCaptureMode = CaptureModeKind
 
 export interface AccelStatus {
   state: AccelState
@@ -75,7 +85,7 @@ export interface AccelStatus {
   gameId: string | null
   nodeId: string | null
   /** Active capture method, or null when idle. */
-  captureMode: CaptureMode | null
+  captureMode: ActiveCaptureMode | null
 }
 
 export interface Subscription {
@@ -116,6 +126,8 @@ export interface AdvancedSettings {
   regionPenaltyMs: number
   /** Fixed local SOCKS5 port; 0 = pick a free port automatically. */
   localSocksPort: number
+  /** Global default acceleration mode; per-game overrides take precedence. */
+  defaultCaptureMode: CaptureMode
 }
 
 /** Engine-side settings persisted by the C# backend (subset of the full AppSettings). */
@@ -339,7 +351,7 @@ export interface TelemetryConfig {
 
 /** One whitelisted telemetry event (as stored locally / uploaded). */
 export type TelemetryEvent =
-  | { type: 'accel_start'; ok: boolean; mode?: 'process' | 'tun' | 'proxy'; reason?: string; durationMs?: number }
+  | { type: 'accel_start'; ok: boolean; mode?: CaptureModeKind; reason?: string; durationMs?: number }
   | { type: 'accel_stop'; durationSec?: number }
   | { type: 'auto_accel'; kind: 'started' | 'stopped' | 'failed' | 'skipped' }
   | { type: 'diagnostics'; failed: number; warned: number }

@@ -1,22 +1,64 @@
 import { app } from 'electron'
 import { readFileSync, renameSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import type { UiPrefs } from '../shared/types'
+import type { UiPrefs, UpdateConfig } from '../shared/types'
 
 // Tiny JSON prefs store for renderer-only UI state (onboarding, etc.). Kept separate from the
 // backend's settings.json so the renderer can read/write it before the sidecar is even running.
 // Read once (sync) on first access, then cached; writes are atomic (temp file + rename).
 
+const DEFAULT_UPDATE: UpdateConfig = {
+  source: 'none',
+  manifestUrl: '',
+  githubRepo: '',
+  includePrerelease: false,
+  autoCheck: true
+}
+
 const DEFAULTS: UiPrefs = {
   onboardingDone: false,
-  startHidden: false
+  startHidden: false,
+  update: { ...DEFAULT_UPDATE }
 }
 
 // Per-key validation table — extend here when UiPrefs grows. Unknown keys are ignored.
 type Validator = (v: unknown) => boolean
+
+/** True for an https URL, or an http URL pointing at loopback (localhost / 127.0.0.1 / ::1). */
+function isAllowedUpdateUrl(url: string): boolean {
+  if (url.length === 0) return true
+  if (url.length > 2048) return false
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return false
+  }
+  if (parsed.protocol === 'https:') return true
+  if (parsed.protocol !== 'http:') return false
+  const host = parsed.hostname.toLowerCase()
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
+}
+
+const GITHUB_REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
+
+/** Validates a full UpdateConfig object (nested objects are validated as a whole). */
+function isUpdateConfig(v: unknown): boolean {
+  if (!v || typeof v !== 'object') return false
+  const o = v as Record<string, unknown>
+  if (o.source !== 'none' && o.source !== 'manifest' && o.source !== 'github') return false
+  if (typeof o.manifestUrl !== 'string' || !isAllowedUpdateUrl(o.manifestUrl)) return false
+  if (typeof o.githubRepo !== 'string') return false
+  if (o.githubRepo.length > 0 && !GITHUB_REPO_RE.test(o.githubRepo)) return false
+  if (typeof o.includePrerelease !== 'boolean') return false
+  if (typeof o.autoCheck !== 'boolean') return false
+  return true
+}
+
 const VALIDATORS: { [K in keyof UiPrefs]: Validator } = {
   onboardingDone: (v) => typeof v === 'boolean',
-  startHidden: (v) => typeof v === 'boolean'
+  startHidden: (v) => typeof v === 'boolean',
+  update: isUpdateConfig
 }
 
 let cache: UiPrefs | null = null
@@ -31,36 +73,61 @@ function assign<K extends keyof UiPrefs>(o: UiPrefs, k: K, v: unknown): void {
   o[k] = v as UiPrefs[K]
 }
 
+/** Normalizes a validated update config into a fresh object (drops unknown keys). */
+function normalizeUpdate(v: unknown): UpdateConfig {
+  const o = v as Record<string, unknown>
+  return {
+    source: o.source as UpdateConfig['source'],
+    manifestUrl: o.manifestUrl as string,
+    githubRepo: o.githubRepo as string,
+    includePrerelease: o.includePrerelease as boolean,
+    autoCheck: o.autoCheck as boolean
+  }
+}
+
 function load(): UiPrefs {
   try {
     const raw = JSON.parse(readFileSync(prefsPath(), 'utf8')) as Record<string, unknown>
-    const out: UiPrefs = { ...DEFAULTS }
+    const out: UiPrefs = { ...DEFAULTS, update: { ...DEFAULT_UPDATE } }
     for (const key of Object.keys(VALIDATORS) as Array<keyof UiPrefs>) {
       const v = raw[key]
       if (VALIDATORS[key](v)) {
-        assign(out, key, v)
+        if (key === 'update') {
+          out.update = normalizeUpdate(v)
+        } else {
+          assign(out, key, v)
+        }
       }
     }
     return out
   } catch {
     // Missing or corrupt file → defaults.
-    return { ...DEFAULTS }
+    return { ...DEFAULTS, update: { ...DEFAULT_UPDATE } }
   }
 }
 
 /** Returns the cached prefs, loading them from disk on first access. */
 export function getPrefs(): UiPrefs {
   if (!cache) cache = load()
-  return { ...cache }
+  return { ...cache, update: { ...cache.update } }
 }
 
 /** Merges a validated patch into the prefs and persists them atomically. Returns the new prefs. */
 export function setPrefs(patch: Partial<UiPrefs>): UiPrefs {
   const current = cache ?? load()
-  const next: UiPrefs = { ...current }
+  const next: UiPrefs = { ...current, update: { ...current.update } }
   for (const key of Object.keys(VALIDATORS) as Array<keyof UiPrefs>) {
     if (!(key in patch)) continue
     const v = (patch as Record<string, unknown>)[key]
+    if (key === 'update') {
+      // Nested object: validate the whole thing, then merge over the current config so a partial
+      // patch (e.g. only `source`) keeps the other fields.
+      if (v && typeof v === 'object') {
+        const merged = { ...current.update, ...(v as Record<string, unknown>) }
+        if (isUpdateConfig(merged)) next.update = normalizeUpdate(merged)
+      }
+      continue
+    }
     if (VALIDATORS[key](v)) {
       assign(next, key, v)
     }
@@ -74,5 +141,5 @@ export function setPrefs(patch: Partial<UiPrefs>): UiPrefs {
   } catch (e) {
     console.error('failed to persist prefs:', e)
   }
-  return { ...next }
+  return { ...next, update: { ...next.update } }
 }

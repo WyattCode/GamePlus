@@ -1,5 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { LoginItemState, TrayAction, TrayInfo, UiPrefs } from '../shared/types'
+import type {
+  LoginItemState,
+  TrayAction,
+  TrayInfo,
+  UiPrefs,
+  UpdateConfig,
+  UpdateConfigView,
+  UpdateState
+} from '../shared/types'
 
 // Minimal, typed surface exposed to the renderer. Window chrome + theme now; the
 // backend RPC channel to the C# sidecar will be added here as it comes online.
@@ -48,6 +56,23 @@ const api = {
       const listener = (_e: Electron.IpcRendererEvent, action: TrayAction): void => cb(action)
       ipcRenderer.on('tray:action', listener)
       return () => ipcRenderer.removeListener('tray:action', listener)
+    }
+  },
+  update: {
+    getState: (): Promise<UpdateState | null> => ipcRenderer.invoke('update:get-state'),
+    check: (): Promise<UpdateState | null> => ipcRenderer.invoke('update:check'),
+    download: (): Promise<UpdateState | null> => ipcRenderer.invoke('update:download'),
+    cancel: (): Promise<void> => ipcRenderer.invoke('update:cancel'),
+    install: (): Promise<UpdateState | null> => ipcRenderer.invoke('update:install'),
+    getConfig: (): Promise<UpdateConfigView | null> => ipcRenderer.invoke('update:get-config'),
+    setConfig: (patch: Partial<UpdateConfig>): Promise<UpdateConfigView | null> =>
+      ipcRenderer.invoke('update:set-config', patch),
+    setToken: (token: string | null): Promise<boolean> => ipcRenderer.invoke('update:set-token', token),
+    // Returns an unsubscribe function so callers can detach the listener.
+    onState: (cb: (state: UpdateState) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, state: UpdateState): void => cb(state)
+      ipcRenderer.on('update:state', listener)
+      return () => ipcRenderer.removeListener('update:state', listener)
     }
   }
 }

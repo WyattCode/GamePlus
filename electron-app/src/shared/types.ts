@@ -240,12 +240,71 @@ export interface DiagnosticReport {
   errorExplanation: string | null
 }
 
+/** Where the client auto-updater fetches releases from. */
+export type UpdateSource = 'none' | 'manifest' | 'github'
+
+/** Client auto-update configuration (persisted in UiPrefs). */
+export interface UpdateConfig {
+  source: UpdateSource
+  /** Direct URL to a JSON manifest (source === 'manifest'). */
+  manifestUrl: string
+  /** GitHub repository in "owner/repo" form (source === 'github'). */
+  githubRepo: string
+  /** Include GitHub prereleases when picking the latest release. */
+  includePrerelease: boolean
+  /** Check for updates automatically after startup and periodically. */
+  autoCheck: boolean
+}
+
+/** Update config as exposed to the renderer, plus whether a GitHub token is stored. */
+export interface UpdateConfigView extends UpdateConfig {
+  hasToken: boolean
+}
+
+export type UpdateStatus =
+  | 'disabled'
+  | 'idle'
+  | 'checking'
+  | 'upToDate'
+  | 'available'
+  | 'downloading'
+  | 'ready'
+  | 'error'
+
+/** Latest release metadata surfaced to the renderer. */
+export interface UpdateLatest {
+  version: string
+  notes: string
+  publishedAt?: string
+  size?: number
+}
+
+/** Download progress in bytes. */
+export interface UpdateProgress {
+  received: number
+  total: number
+}
+
+/** Full auto-update state pushed to the renderer on every change. */
+export interface UpdateState {
+  status: UpdateStatus
+  /** Running app version. */
+  current: string
+  latest?: UpdateLatest
+  progress?: UpdateProgress
+  error?: string
+  /** ISO timestamp of the last completed check. */
+  lastCheck?: string
+}
+
 /** UI preferences persisted by the Electron main process (userData/prefs.json). */
 export interface UiPrefs {
   /** True once the user has completed (or skipped) the first-run onboarding. */
   onboardingDone: boolean
   /** True when the app was launched at login and should start minimized to the tray. */
   startHidden: boolean
+  /** Client auto-update configuration. */
+  update: UpdateConfig
 }
 
 /** One game found by scanning the local machine's launchers/registries. */

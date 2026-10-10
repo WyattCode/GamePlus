@@ -5,11 +5,14 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { startSidecar, stopSidecar } from './sidecar'
 import { getPrefs, setPrefs } from './prefs'
 import { trayIcon32 } from './trayIcon'
-import type { TrayInfo } from '../shared/types'
+import { Updater } from './updater'
+import { setToken } from './updater/token'
+import type { TrayInfo, UpdateConfig } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
+let updater: Updater | null = null
 
 /** Honour the backend's MinimizeToTray setting (default on) so the close button hides to tray. */
 function minimizeToTrayEnabled(): boolean {
@@ -250,6 +253,36 @@ function registerWindowControls(): void {
     const latency = typeof i.latency === 'number' && Number.isFinite(i.latency) ? i.latency : 0
     updateTray({ state, gameName, latency })
   })
+
+  // --- Client auto-update ---
+  ipcMain.handle('update:get-state', () => updater?.getState() ?? null)
+  ipcMain.handle('update:check', () => updater?.check() ?? null)
+  ipcMain.handle('update:download', () => updater?.download() ?? null)
+  ipcMain.handle('update:cancel', () => {
+    updater?.cancel()
+  })
+  ipcMain.handle('update:install', () => updater?.install() ?? null)
+  ipcMain.handle('update:get-config', () => updater?.getConfig() ?? null)
+  ipcMain.handle('update:set-config', (_e, patch: unknown) => {
+    if (!patch || typeof patch !== 'object') return updater?.getConfig() ?? null
+    const p = patch as Record<string, unknown>
+    const clean: Partial<UpdateConfig> = {}
+    if (p.source === 'none' || p.source === 'manifest' || p.source === 'github') clean.source = p.source
+    if (typeof p.manifestUrl === 'string' && p.manifestUrl.length <= 2048) clean.manifestUrl = p.manifestUrl
+    if (typeof p.githubRepo === 'string' && p.githubRepo.length <= 200) clean.githubRepo = p.githubRepo
+    if (typeof p.includePrerelease === 'boolean') clean.includePrerelease = p.includePrerelease
+    if (typeof p.autoCheck === 'boolean') clean.autoCheck = p.autoCheck
+    return updater?.setConfig(clean) ?? null
+  })
+  ipcMain.handle('update:set-token', (_e, token: unknown) => {
+    if (token !== null && (typeof token !== 'string' || token.length > 200)) return false
+    try {
+      setToken(token as string | null)
+      return true
+    } catch {
+      return false
+    }
+  })
 }
 
 // Single-instance: a second launch must not spawn another sidecar / proxy chain. Focus the running
@@ -282,6 +315,10 @@ if (!gotSingleInstanceLock) {
     createWindow()
     createTray()
 
+    // Client auto-update: disabled unless the user configured a source. Never auto-downloads.
+    updater = new Updater()
+    updater.armAutoCheck()
+
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
@@ -289,7 +326,10 @@ if (!gotSingleInstanceLock) {
 
   // Any real quit — tray "退出", OS logoff/shutdown, auto-updater — must NOT be vetoed by the close→hide-to-tray
   // handler. before-quit fires for all of those (but not for a plain window X-close), so mark the intent here.
-  app.on('before-quit', () => (isQuitting = true))
+  app.on('before-quit', () => {
+    isQuitting = true
+    updater?.dispose()
+  })
 
   // Hold the quit until the backend has gracefully torn down (restore system proxy, stop cores), then exit.
   // will-quit can fire more than once (tray-exit → app.quit → window-all-closed → app.quit); always hold the

@@ -601,7 +601,7 @@ internal sealed class RpcRouter
     private async Task<DiagnosticReport> RunDiagnosticsAsync(
         string? gameId, string? nodeId, string? error, CancellationToken ct)
     {
-        var (game, node, servers, accelerating) = await WithStateValue(() =>
+        var (game, node, servers, accelerating, lastProcessCaptureError) = await WithStateValue(() =>
         {
             var g = string.IsNullOrEmpty(gameId)
                 ? null
@@ -612,10 +612,11 @@ internal sealed class RpcRouter
                 : ServerIds.Resolve(nodeId!, pool);
             var accel = Accel.State == AccelerationState.Accelerating
                         || Accel.State == AccelerationState.Connecting;
-            return (g, n, pool, accel);
+            var captureError = Accel.LastProcessCaptureError;
+            return (g, n, pool, accel, captureError);
         }, ct);
 
-        var ctx = new DiagnosticContext(game, node, servers, accelerating, error);
+        var ctx = new DiagnosticContext(game, node, servers, accelerating, error, lastProcessCaptureError);
         return await Diagnostics.RunAsync(ctx, ct);
     }
 

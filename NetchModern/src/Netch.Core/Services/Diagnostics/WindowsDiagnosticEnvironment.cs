@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Principal;
 using Microsoft.Win32;
@@ -17,6 +18,7 @@ namespace Netch.Core.Services.Diagnostics;
 public sealed class WindowsDiagnosticEnvironment : IDiagnosticEnvironment
 {
     private const string NetfilterServiceKey = @"SYSTEM\CurrentControlSet\Services\netfilter2";
+    private const string HvciKey = @"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity";
     private readonly IProxySettingsStore _proxy;
 
     public WindowsDiagnosticEnvironment(IProxySettingsStore proxy) => _proxy = proxy;
@@ -143,6 +145,80 @@ public sealed class WindowsDiagnosticEnvironment : IDiagnosticEnvironment
         catch
         {
             // ignore
+        }
+    }
+
+    public string? ReadHostsFile()
+    {
+        try
+        {
+            var systemRoot = Environment.GetEnvironmentVariable("SystemRoot") ?? @"C:\Windows";
+            return File.ReadAllText(Path.Combine(systemRoot, "System32", "drivers", "etc", "hosts"));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public IReadOnlyList<FirewallRuleInfo>? ReadFirewallBlockRules()
+    {
+        object? policy = null;
+        try
+        {
+            var type = Type.GetTypeFromProgID("HNetCfg.FwPolicy2");
+            if (type == null)
+                return null;
+
+            policy = Activator.CreateInstance(type);
+            if (policy == null)
+                return null;
+
+            dynamic fwPolicy = policy;
+            var rules = new List<FirewallRuleInfo>();
+            foreach (var rule in fwPolicy.Rules)
+            {
+                try
+                {
+                    // Action: 0 = NET_FW_ACTION_BLOCK. Direction: 1 = in, 2 = out.
+                    if (!(bool)rule.Enabled || (int)rule.Action != 0)
+                        continue;
+
+                    var direction = (int)rule.Direction == 1 ? "入站" : "出站";
+                    var app = rule.ApplicationName as string;
+                    rules.Add(new FirewallRuleInfo((string)rule.Name,
+                        string.IsNullOrWhiteSpace(app) ? null : app, direction));
+                }
+                finally
+                {
+                    if (rule != null && Marshal.IsComObject(rule))
+                        Marshal.FinalReleaseComObject(rule);
+                }
+            }
+
+            return rules;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            if (policy != null && Marshal.IsComObject(policy))
+                Marshal.FinalReleaseComObject(policy);
+        }
+    }
+
+    public bool? IsMemoryIntegrityEnabled()
+    {
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(HvciKey, writable: false);
+            return key?.GetValue("Enabled") is int enabled && enabled == 1;
+        }
+        catch
+        {
+            return null;
         }
     }
 }

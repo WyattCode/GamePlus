@@ -10,6 +10,14 @@ namespace Netch.Core.Services.Diagnostics;
 /// </summary>
 public sealed class DiagnosticsService
 {
+    /// <summary>Platform domains commonly rewritten by accelerator tools such as Steam++ (Watt Toolkit).</summary>
+    private static readonly string[] CommonPlatformDomains =
+    {
+        "steampowered.com", "steamcommunity.com", "steamcontent.com", "steamstatic.com",
+        "epicgames.com", "battle.net", "blizzard.com", "riotgames.com", "ea.com",
+        "ubisoft.com", "xboxlive.com"
+    };
+
     private readonly IDiagnosticEnvironment _env;
 
     public DiagnosticsService(IDiagnosticEnvironment env) => _env = env;
@@ -24,6 +32,9 @@ public sealed class DiagnosticsService
         items.Add(Guard("netfilter", "进程模式驱动", CheckNetfilter));
         items.Add(Guard("wintun", "TUN 模式组件", CheckWintun));
         items.Add(Guard("port", "本地端口", CheckPort));
+        items.Add(Guard("hosts", "hosts 文件", () => CheckHosts(ctx)));
+        items.Add(Guard("firewall", "Windows 防火墙", () => CheckFirewall(ctx)));
+        items.Add(Guard("netfilterLoad", "进程模式驱动加载", () => CheckNetfilterLoad(ctx)));
 
         // Network checks run concurrently — DNS resolution and node probing can each take seconds.
         var dnsTask = GuardAsync("dns", "DNS 解析", () => CheckDnsAsync(ctx, ct));
@@ -172,6 +183,65 @@ public sealed class DiagnosticsService
         return new DiagnosticItem("port", "本地端口", DiagnosticStatus.Error,
             "无法在本机回环地址上监听端口，可能被安全软件拦截",
             "将 Game+ 加入安全软件白名单后重试", null);
+    }
+
+    private DiagnosticItem CheckHosts(DiagnosticContext ctx)
+    {
+        var content = _env.ReadHostsFile();
+        if (content is null)
+            return new DiagnosticItem("hosts", "hosts 文件", DiagnosticStatus.Skipped, "无法读取 hosts 文件", null, null);
+
+        var domains = CommonPlatformDomains.ToList();
+        if (ctx.Game is { } game)
+            domains.AddRange(game.ProxyDomains);
+
+        var entries = HostsFileAnalyzer.FindOverrides(content, domains);
+        if (entries.Count == 0)
+            return new DiagnosticItem("hosts", "hosts 文件", DiagnosticStatus.Ok, "未发现改写游戏/平台域名的记录", null, null);
+
+        var detail = $"hosts 中有 {entries.Count} 条记录改写了游戏/平台域名：" +
+                     string.Join("；", entries.Take(5).Select(e => $"第{e.Line}行 {e.Ip} {e.Host}"));
+
+        return new DiagnosticItem("hosts", "hosts 文件", DiagnosticStatus.Warning, detail,
+            "以管理员身份用记事本打开 C:\\Windows\\System32\\drivers\\etc\\hosts，删除这些行或在行首加 #，保存后运行 ipconfig /flushdns。如果是 Steam++（Watt Toolkit）等工具写入的，请先在该工具中关闭加速/恢复 hosts。", null);
+    }
+
+    private DiagnosticItem CheckFirewall(DiagnosticContext ctx)
+    {
+        var rules = _env.ReadFirewallBlockRules();
+        if (rules is null)
+            return new DiagnosticItem("firewall", "Windows 防火墙", DiagnosticStatus.Skipped, "无法读取防火墙规则", null, null);
+
+        var programs = new List<string> { "Game+.exe", "gameplus-host.exe", "xray.exe", "sing-box.exe", "tun2socks.exe" };
+        if (ctx.Game is { } game)
+            programs.AddRange(game.ProxyProcesses);
+
+        var matches = FirewallRuleMatcher.Match(rules, programs);
+        if (matches.Count == 0)
+            return new DiagnosticItem("firewall", "Windows 防火墙", DiagnosticStatus.Ok, "没有发现阻止 Game+ 或游戏的防火墙规则", null, null);
+
+        var detail = string.Join("；", matches.Take(5).Select(r =>
+            $"「{r.Name}」{r.Direction}阻止 {Path.GetFileName(r.ApplicationPath)}"));
+
+        return new DiagnosticItem("firewall", "Windows 防火墙", DiagnosticStatus.Warning, detail,
+            "打开 控制面板 → Windows Defender 防火墙 → 高级设置，在入站/出站规则中找到上述规则并禁用或删除；或在「允许应用通过 Windows 防火墙」中勾选 Game+ 和游戏。第三方安全软件的防火墙也可能拦截，请一并检查。", null);
+    }
+
+    private DiagnosticItem CheckNetfilterLoad(DiagnosticContext ctx)
+    {
+        const string suggestion =
+            "netfilter 驱动可能被驱动签名强制、Windows「内存完整性」或安全软件拦截。建议在加速页把加速模式改为「TUN 模式」（WinTUN 为微软签名驱动），或以管理员身份运行；若开启了内存完整性，可在 Windows 安全中心 → 设备安全性 → 内核隔离 中关闭后重启再试。";
+
+        if (!string.IsNullOrWhiteSpace(ctx.LastProcessCaptureError))
+            return new DiagnosticItem("netfilterLoad", "进程模式驱动加载", DiagnosticStatus.Error,
+                $"最近一次进程模式启动失败：{ctx.LastProcessCaptureError}", suggestion, null);
+
+        if (_env.IsMemoryIntegrityEnabled() == true)
+            return new DiagnosticItem("netfilterLoad", "进程模式驱动加载", DiagnosticStatus.Warning,
+                "已开启 Windows「内存完整性」，进程模式驱动可能无法加载", suggestion, null);
+
+        return new DiagnosticItem("netfilterLoad", "进程模式驱动加载", DiagnosticStatus.Ok,
+            "最近没有进程模式驱动加载失败", null, null);
     }
 
     private async Task<DiagnosticItem> CheckDnsAsync(DiagnosticContext ctx, CancellationToken ct)

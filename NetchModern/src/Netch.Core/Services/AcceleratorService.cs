@@ -87,6 +87,9 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     /// <summary>The effect monitor, when one is wired up (null in tests / minimal hosts).</summary>
     public EffectMonitor? Effect => _effect;
 
+    /// <inheritdoc />
+    public string? LastProcessCaptureError { get; private set; }
+
     public event EventHandler<AccelerationState>? StateChanged;
 
     public EffectReport? EffectReport() => _effect?.Report();
@@ -299,6 +302,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             var mode = SplitRouting.BuildProcessMode(game.ProxyProcesses, extras);
             await _modeController.StartAsync(socks5, mode, ct);
             Status.CaptureMode = "process";
+            LastProcessCaptureError = null;
 
             var extraProxy = extras.Count(a => a is { Enabled: true, Mode: ExtraAppMode.Proxy });
             var extraBypass = extras.Count(a => a is { Enabled: true, Mode: ExtraAppMode.Bypass });
@@ -310,6 +314,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         }
         catch (Exception e)
         {
+            LastProcessCaptureError = e.Message;
             if (_modeController != null)
             {
                 try { await _modeController.StopAsync(ct); } catch { /* ignore */ }
@@ -365,6 +370,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
                 var mode = SplitRouting.BuildProcessMode(game.ProxyProcesses, extras);
                 await _modeController.StartAsync(socks5, mode, ct);
                 Status.CaptureMode = "process";
+                LastProcessCaptureError = null;
 
                 var extraProxy = extras.Count(a => a is { Enabled: true, Mode: ExtraAppMode.Proxy });
                 var extraBypass = extras.Count(a => a is { Enabled: true, Mode: ExtraAppMode.Bypass });
@@ -378,6 +384,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             catch (Exception e)
             {
                 processError = e;
+                LastProcessCaptureError = e.Message;
                 _log.Log(LogLevel.Warning, $"Process capture failed: {e.Message}");
                 if (_modeController != null)
                 {

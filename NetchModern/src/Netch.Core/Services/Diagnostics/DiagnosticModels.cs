@@ -27,7 +27,8 @@ public sealed record DiagnosticContext(
     Netch.Core.Models.Servers.Server? Node,
     IReadOnlyList<Netch.Core.Models.Servers.Server> Servers,
     bool Accelerating,
-    string? LastError);
+    string? LastError,
+    string? LastProcessCaptureError = null);
 
 /// <summary>Result of a diagnostics run.</summary>
 public sealed record DiagnosticReport(

@@ -23,6 +23,9 @@ public class DiagnosticsServiceTests
         public HashSet<int> ListeningPorts { get; } = new();
         public bool DisableCalled { get; private set; }
         public Func<string, DiagnosticItem>? ThrowOn { get; set; }
+        public string? HostsContent { get; set; } = "";
+        public IReadOnlyList<FirewallRuleInfo>? FirewallRules { get; set; } = Array.Empty<FirewallRuleInfo>();
+        public bool? MemoryIntegrity { get; set; }
 
         public string BaseDirectory => "/app";
 
@@ -56,6 +59,12 @@ public class DiagnosticsServiceTests
             DisableCalled = true;
             ProxyEnable = 0;
         }
+
+        public string? ReadHostsFile() => HostsContent;
+
+        public IReadOnlyList<FirewallRuleInfo>? ReadFirewallBlockRules() => FirewallRules;
+
+        public bool? IsMemoryIntegrityEnabled() => MemoryIntegrity;
     }
 
     private static Server Node(string remark, int delay = -1) => new ShadowsocksServer
@@ -71,8 +80,9 @@ public class DiagnosticsServiceTests
         Server? node = null,
         bool accelerating = false,
         string? error = null,
-        Game? game = null) =>
-        new(game, node, servers ?? Array.Empty<Server>(), accelerating, error);
+        Game? game = null,
+        string? lastProcessCaptureError = null) =>
+        new(game, node, servers ?? Array.Empty<Server>(), accelerating, error, lastProcessCaptureError);
 
     private static DiagnosticItem Item(DiagnosticReport r, string id) =>
         r.Items.Single(i => i.Id == id);
@@ -243,6 +253,123 @@ public class DiagnosticsServiceTests
         Assert.Equal(DiagnosticStatus.Error, Item(report, "port").Status);
         Assert.Contains(report.Items, i => i.Id == "core");
         Assert.Contains(report.Items, i => i.Id == "admin");
+    }
+
+    [Fact]
+    public async Task HostsTampering_Warns()
+    {
+        var env = GoodEnv();
+        env.HostsContent = "# a comment\n0.0.0.0 steampowered.com\n";
+        var svc = new DiagnosticsService(env);
+
+        var report = await svc.RunAsync(Ctx(), CancellationToken.None);
+
+        var hosts = Item(report, "hosts");
+        Assert.Equal(DiagnosticStatus.Warning, hosts.Status);
+        Assert.Contains("第2行", hosts.Detail);
+        Assert.Contains("steampowered.com", hosts.Detail);
+    }
+
+    [Fact]
+    public async Task HostsClean_Ok()
+    {
+        var env = GoodEnv();
+        env.HostsContent = "127.0.0.1 localhost\n";
+        var svc = new DiagnosticsService(env);
+
+        var report = await svc.RunAsync(Ctx(), CancellationToken.None);
+
+        Assert.Equal(DiagnosticStatus.Ok, Item(report, "hosts").Status);
+    }
+
+    [Fact]
+    public async Task HostsUnreadable_Skipped()
+    {
+        var env = GoodEnv();
+        env.HostsContent = null;
+        var svc = new DiagnosticsService(env);
+
+        var report = await svc.RunAsync(Ctx(), CancellationToken.None);
+
+        Assert.Equal(DiagnosticStatus.Skipped, Item(report, "hosts").Status);
+    }
+
+    [Fact]
+    public async Task FirewallBlockingGamePlus_Warns()
+    {
+        var env = GoodEnv();
+        env.FirewallRules = new[] { new FirewallRuleInfo("Block xray", @"C:\app\xray.exe", "入站") };
+        var svc = new DiagnosticsService(env);
+
+        var report = await svc.RunAsync(Ctx(), CancellationToken.None);
+
+        var firewall = Item(report, "firewall");
+        Assert.Equal(DiagnosticStatus.Warning, firewall.Status);
+        Assert.Contains("「Block xray」", firewall.Detail);
+        Assert.Contains("xray.exe", firewall.Detail);
+    }
+
+    [Fact]
+    public async Task FirewallClean_Ok()
+    {
+        var env = GoodEnv();
+        env.FirewallRules = Array.Empty<FirewallRuleInfo>();
+        var svc = new DiagnosticsService(env);
+
+        var report = await svc.RunAsync(Ctx(), CancellationToken.None);
+
+        Assert.Equal(DiagnosticStatus.Ok, Item(report, "firewall").Status);
+    }
+
+    [Fact]
+    public async Task FirewallUnreadable_Skipped()
+    {
+        var env = GoodEnv();
+        env.FirewallRules = null;
+        var svc = new DiagnosticsService(env);
+
+        var report = await svc.RunAsync(Ctx(), CancellationToken.None);
+
+        Assert.Equal(DiagnosticStatus.Skipped, Item(report, "firewall").Status);
+    }
+
+    [Fact]
+    public async Task LastProcessCaptureError_ReportsError()
+    {
+        var env = GoodEnv();
+        var svc = new DiagnosticsService(env);
+
+        var report = await svc.RunAsync(Ctx(lastProcessCaptureError: "driver blocked by policy"), CancellationToken.None);
+
+        var load = Item(report, "netfilterLoad");
+        Assert.Equal(DiagnosticStatus.Error, load.Status);
+        Assert.Contains("driver blocked by policy", load.Detail);
+    }
+
+    [Fact]
+    public async Task MemoryIntegrityEnabled_Warns()
+    {
+        var env = GoodEnv();
+        env.MemoryIntegrity = true;
+        var svc = new DiagnosticsService(env);
+
+        var report = await svc.RunAsync(Ctx(), CancellationToken.None);
+
+        var load = Item(report, "netfilterLoad");
+        Assert.Equal(DiagnosticStatus.Warning, load.Status);
+        Assert.Contains("内存完整性", load.Detail);
+    }
+
+    [Fact]
+    public async Task NoProcessCaptureErrorAndNoMemoryIntegrity_Ok()
+    {
+        var env = GoodEnv();
+        env.MemoryIntegrity = false;
+        var svc = new DiagnosticsService(env);
+
+        var report = await svc.RunAsync(Ctx(), CancellationToken.None);
+
+        Assert.Equal(DiagnosticStatus.Ok, Item(report, "netfilterLoad").Status);
     }
 
     [Theory]

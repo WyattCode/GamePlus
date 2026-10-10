@@ -1038,6 +1038,30 @@ class MockBackend implements Backend {
           fixAction: null
         },
         {
+          id: 'hosts',
+          title: 'hosts 文件',
+          status: 'warning',
+          detail: 'hosts 中有 1 条记录改写了游戏/平台域名：第23行 104.16.0.1 store.steampowered.com',
+          suggestion: '以管理员身份用记事本打开 C:\\Windows\\System32\\drivers\\etc\\hosts，删除这些行或在行首加 #，保存后运行 ipconfig /flushdns。如果是 Steam++（Watt Toolkit）等工具写入的，请先在该工具中关闭加速/恢复 hosts。',
+          fixAction: null
+        },
+        {
+          id: 'firewall',
+          title: 'Windows 防火墙',
+          status: 'ok',
+          detail: '没有发现阻止 Game+ 或游戏的防火墙规则',
+          suggestion: null,
+          fixAction: null
+        },
+        {
+          id: 'netfilterLoad',
+          title: '进程模式驱动加载',
+          status: 'ok',
+          detail: '最近没有进程模式驱动加载失败',
+          suggestion: null,
+          fixAction: null
+        },
+        {
           id: 'dns',
           title: 'DNS 解析',
           status: 'ok',
@@ -1062,7 +1086,7 @@ class MockBackend implements Backend {
           fixAction: 'fixProxy'
         }
       ],
-      summary: '发现 1 个错误、1 个警告',
+      summary: '发现 1 个错误、2 个警告',
       ranAt: new Date().toISOString(),
       errorExplanation: opts.error ? '未能识别的错误，请参考下方检测结果' : null
     }

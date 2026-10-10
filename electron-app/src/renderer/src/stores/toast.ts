@@ -36,8 +36,9 @@ export const useToastStore = defineStore('toast', () => {
     push('error', message, action ? 8000 : 4000, action)
   }
 
-  function info(message: string): void {
-    push('info', message)
+  function info(message: string, action?: ToastAction): void {
+    // Info with an action stays longer so the user has time to click it.
+    push('info', message, action ? 8000 : 4000, action)
   }
 
   return { items, push, dismiss, error, info }

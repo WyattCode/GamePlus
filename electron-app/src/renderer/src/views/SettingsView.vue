@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import SplitRoutingCard from '@/components/SplitRoutingCard.vue'
+import UpdateCard from '@/components/UpdateCard.vue'
 import { useAppStore } from '@/stores/app'
 import { useDiagnosticsStore } from '@/stores/diagnostics'
 import { useLibraryStore } from '@/stores/library'
@@ -10,7 +11,7 @@ import { useOnboardingStore } from '@/stores/onboarding'
 import { useToastStore, errorMessage } from '@/stores/toast'
 import { backend } from '@/api/backend'
 import { getPrefs, setPrefs } from '@/api/prefs'
-import type { EngineSettings, LoginItemState, UpdateInfo } from '@shared/types'
+import type { EngineSettings, LoginItemState } from '@shared/types'
 
 const app = useAppStore()
 const diagnostics = useDiagnosticsStore()
@@ -38,41 +39,8 @@ async function patch(p: Partial<EngineSettings>): Promise<void> {
   settings.value = await backend.setSettings(p)
 }
 
-const update = ref<UpdateInfo | null>(null)
-const updateError = ref<string | null>(null)
-const updateChecked = ref(false)
-
-onMounted(async () => {
-  try {
-    update.value = await backend.checkUpdate()
-  } catch (e) {
-    update.value = null
-    updateError.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    updateChecked.value = true
-  }
-})
-
-// Prefer the backend's reported version; fall back to the build-time injected package.json version.
-const version = computed(() => update.value?.current || __APP_VERSION__)
-
-const updateText = computed<string | null>(() => {
-  if (!updateChecked.value) return null
-  if (updateError.value) return `无法检查更新：${updateError.value}`
-  const u = update.value
-  if (!u) return '无法检查更新：未知错误'
-  switch (u.status) {
-    case 'upToDate':
-      return `已是最新版本 (v${u.current})`
-    case 'updateAvailable':
-      return `发现新版本 ${u.tag ?? u.latest ?? ''}，点击查看`
-    case 'notConfigured':
-      return '未配置更新源'
-    case 'failed':
-    default:
-      return `无法检查更新：${u.error ?? '未知错误'}`
-  }
-})
+// Prefer the build-time injected package.json version.
+const version = computed(() => __APP_VERSION__)
 
 // --- 游戏规则库 ---
 const rulesUrl = ref('')
@@ -353,6 +321,8 @@ async function toggleStartHidden(v: boolean): Promise<void> {
       </div>
     </div>
 
+    <UpdateCard />
+
     <div class="card group">
       <div class="g-title">关于</div>
       <div class="about">
@@ -360,19 +330,6 @@ async function toggleStartHidden(v: boolean): Promise<void> {
         <div>
           <div class="s-name">Game+ <span class="muted">v{{ version }}</span></div>
           <div class="muted small">Electron + Vue 3 · 游戏加速器</div>
-          <div v-if="updateText" class="muted small">
-            <a
-              v-if="update?.status === 'updateAvailable'"
-              :href="update.url ?? '#'"
-              target="_blank"
-              rel="noopener"
-            >
-              {{ updateText }}
-            </a>
-            <span v-else :class="{ warn: update?.status === 'failed' || !!updateError }">
-              {{ updateText }}
-            </span>
-          </div>
         </div>
       </div>
     </div>

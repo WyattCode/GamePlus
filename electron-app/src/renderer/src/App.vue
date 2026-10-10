@@ -10,6 +10,7 @@ import { useAutoStore } from './stores/auto'
 import { useLibraryStore } from './stores/library'
 import { useLogsStore } from './stores/logs'
 import { useOnboardingStore } from './stores/onboarding'
+import { useUpdateStore } from './stores/update'
 import { useToastStore, errorMessage } from './stores/toast'
 import { allowBackendConnection } from './api/backend'
 
@@ -18,6 +19,7 @@ const auto = useAutoStore()
 const library = useLibraryStore()
 const logs = useLogsStore()
 const onboarding = useOnboardingStore()
+const update = useUpdateStore()
 const toast = useToastStore()
 
 let started = false
@@ -30,6 +32,7 @@ function startApp(): void {
   allowBackendConnection()
   logs.init()
   auto.start()
+  update.init()
   library.load().catch((e) => toast.error('加载数据失败：' + errorMessage(e)))
 }
 

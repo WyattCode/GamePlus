@@ -1,26 +1,49 @@
-import type { UiPrefs } from '@shared/types'
+import type { UiPrefs, UpdateConfig, UpdateSource } from '@shared/types'
 
 // Renderer-side accessor for the main-process prefs store. In Electron this goes through the
 // preload bridge; in a plain browser (vite preview with MockBackend) it falls back to localStorage.
 
 const STORAGE_KEY = 'gameplus.prefs'
 
+const DEFAULT_UPDATE: UpdateConfig = {
+  source: 'none',
+  manifestUrl: '',
+  githubRepo: '',
+  includePrerelease: false,
+  autoCheck: true
+}
+
 const DEFAULTS: UiPrefs = {
   onboardingDone: false,
-  startHidden: false
+  startHidden: false,
+  update: { ...DEFAULT_UPDATE }
+}
+
+function parseUpdate(raw: unknown): UpdateConfig {
+  const p = (raw ?? {}) as Partial<UpdateConfig>
+  const source: UpdateSource =
+    p.source === 'manifest' || p.source === 'github' || p.source === 'none' ? p.source : 'none'
+  return {
+    source,
+    manifestUrl: typeof p.manifestUrl === 'string' ? p.manifestUrl : '',
+    githubRepo: typeof p.githubRepo === 'string' ? p.githubRepo : '',
+    includePrerelease: typeof p.includePrerelease === 'boolean' ? p.includePrerelease : false,
+    autoCheck: typeof p.autoCheck === 'boolean' ? p.autoCheck : true
+  }
 }
 
 function readLocal(): UiPrefs {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return { ...DEFAULTS }
+    if (!raw) return { ...DEFAULTS, update: { ...DEFAULT_UPDATE } }
     const parsed = JSON.parse(raw) as Partial<UiPrefs>
     return {
       onboardingDone: typeof parsed.onboardingDone === 'boolean' ? parsed.onboardingDone : false,
-      startHidden: typeof parsed.startHidden === 'boolean' ? parsed.startHidden : false
+      startHidden: typeof parsed.startHidden === 'boolean' ? parsed.startHidden : false,
+      update: parseUpdate(parsed.update)
     }
   } catch {
-    return { ...DEFAULTS }
+    return { ...DEFAULTS, update: { ...DEFAULT_UPDATE } }
   }
 }
 

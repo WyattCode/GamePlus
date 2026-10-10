@@ -1,5 +1,6 @@
 import type {
   AccelStatus,
+  AdvancedSettings,
   AutoAccelEvent,
   DetectedGame,
   DiagnosticReport,
@@ -14,11 +15,13 @@ import type {
   RulesStatus,
   RulesUpdateResult,
   Server,
+  SettingsPatch,
   Subscription,
   UpdateInfo
 } from '@shared/types'
 import { sampleGames, sampleServers, sampleSubscriptions } from '@/data/sampleData'
 import { WebSocketBackend, allowBackendConnection as allowBackendConnectionImpl } from './ws-backend'
+import { ADVANCED_DEFAULTS, validateDns, validateLocalPort, validateRegionPenalty } from '@/utils/advanced'
 
 export interface SubMutation {
   subscriptions: Subscription[]
@@ -52,7 +55,8 @@ export interface Backend {
   removeGame(id: string): Promise<Game[]>
   exportServers(): Promise<string[]>
   getSettings(): Promise<EngineSettings>
-  setSettings(patch: Partial<EngineSettings>): Promise<EngineSettings>
+  setSettings(patch: SettingsPatch): Promise<EngineSettings>
+  resetAdvancedSettings(): Promise<EngineSettings>
   checkUpdate(): Promise<UpdateInfo>
   getEffect(): Promise<EffectReport>
   onEffect(cb: (r: EffectReport) => void): () => void
@@ -367,7 +371,8 @@ class MockBackend implements Backend {
     minimizeToTray: true,
     rulesUrl: '',
     autoAccelerate: true,
-    extraApps: []
+    extraApps: [],
+    advanced: { ...ADVANCED_DEFAULTS }
   }
 
   async addServerFromLink(link: string): Promise<Server[]> {
@@ -472,7 +477,7 @@ class MockBackend implements Backend {
   async getSettings(): Promise<EngineSettings> {
     return structuredClone(this.mockSettings)
   }
-  async setSettings(patch: Partial<EngineSettings>): Promise<EngineSettings> {
+  async setSettings(patch: SettingsPatch): Promise<EngineSettings> {
     if (patch.extraApps) {
       const seen = new Set<string>()
       for (const app of patch.extraApps) {
@@ -485,7 +490,34 @@ class MockBackend implements Backend {
         seen.add(key)
       }
     }
-    this.mockSettings = { ...this.mockSettings, ...patch }
+    const { advanced, ...rest } = patch
+    if (advanced) {
+      const adv: Partial<AdvancedSettings> = advanced
+      if (adv.tunDns !== undefined) {
+        const err = validateDns(adv.tunDns)
+        if (err) throw new Error(err)
+      }
+      if (adv.regionPenaltyMs !== undefined) {
+        const err = validateRegionPenalty(adv.regionPenaltyMs)
+        if (err) throw new Error(err)
+      }
+      if (adv.localSocksPort !== undefined) {
+        const err = validateLocalPort(adv.localSocksPort)
+        if (err) throw new Error(err)
+      }
+      this.mockSettings = {
+        ...this.mockSettings,
+        ...rest,
+        advanced: { ...this.mockSettings.advanced, ...adv }
+      }
+      return structuredClone(this.mockSettings)
+    }
+    this.mockSettings = { ...this.mockSettings, ...rest }
+    return structuredClone(this.mockSettings)
+  }
+
+  async resetAdvancedSettings(): Promise<EngineSettings> {
+    this.mockSettings = { ...this.mockSettings, advanced: { ...ADVANCED_DEFAULTS } }
     return structuredClone(this.mockSettings)
   }
 

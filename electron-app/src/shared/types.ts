@@ -102,6 +102,18 @@ export interface ExtraApp {
   enabled: boolean
 }
 
+/** Advanced engine options (TUN DNS, local port, routing/measurement tuning). */
+export interface AdvancedSettings {
+  /** DNS server used in TUN mode; IP, optionally with a port. */
+  tunDns: string
+  /** Measure the direct-connection baseline before accelerating. */
+  measureEffect: boolean
+  /** Latency penalty (ms) applied to nodes outside the game's region. */
+  regionPenaltyMs: number
+  /** Fixed local SOCKS5 port; 0 = pick a free port automatically. */
+  localSocksPort: number
+}
+
 /** Engine-side settings persisted by the C# backend (subset of the full AppSettings). */
 export interface EngineSettings {
   theme: 'light' | 'dark' | 'system'
@@ -113,6 +125,16 @@ export interface EngineSettings {
   autoAccelerate: boolean
   /** Extra applications for per-app split routing (process mode only). */
   extraApps: ExtraApp[]
+  /** Advanced engine options. */
+  advanced: AdvancedSettings
+}
+
+/**
+ * Patch accepted by settings.set: any top-level field, plus a partial `advanced` object so callers
+ * can update a single advanced field without resending (and re-validating) the whole block.
+ */
+export type SettingsPatch = Partial<Omit<EngineSettings, 'advanced'>> & {
+  advanced?: Partial<AdvancedSettings>
 }
 
 /** Connection state of the C# backend sidecar. */

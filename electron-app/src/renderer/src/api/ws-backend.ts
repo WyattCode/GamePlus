@@ -11,6 +11,7 @@ import type {
   RulesStatus,
   RulesUpdateResult,
   Server,
+  SettingsPatch,
   Subscription,
   UpdateInfo
 } from '@shared/types'
@@ -291,8 +292,11 @@ export class WebSocketBackend implements Backend {
   getSettings(): Promise<EngineSettings> {
     return this.call('settings.get')
   }
-  setSettings(patch: Partial<EngineSettings>): Promise<EngineSettings> {
+  setSettings(patch: SettingsPatch): Promise<EngineSettings> {
     return this.call('settings.set', patch)
+  }
+  resetAdvancedSettings(): Promise<EngineSettings> {
+    return this.call('settings.resetAdvanced')
   }
   checkUpdate(): Promise<UpdateInfo> {
     return this.call('update.check')

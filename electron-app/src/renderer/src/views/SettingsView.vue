@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import SplitRoutingCard from '@/components/SplitRoutingCard.vue'
 import { useAppStore } from '@/stores/app'
@@ -16,6 +17,7 @@ const diagnostics = useDiagnosticsStore()
 const library = useLibraryStore()
 const onboarding = useOnboardingStore()
 const toast = useToastStore()
+const router = useRouter()
 const themes = [
   { v: 'light', label: '浅色', icon: 'sun' },
   { v: 'dark', label: '深色', icon: 'moon' },
@@ -337,6 +339,17 @@ async function toggleStartHidden(v: boolean): Promise<void> {
           <div class="muted small">检查驱动、权限、端口、线路和 DNS 等常见问题</div>
         </div>
         <button class="btn btn-primary diag-btn" @click="diagnostics.open()">开始诊断</button>
+      </div>
+    </div>
+
+    <div class="card group">
+      <div class="g-title">高级</div>
+      <div class="setting">
+        <div>
+          <div class="s-name">高级设置</div>
+          <div class="muted small">TUN DNS、本地端口、选路策略等进阶选项</div>
+        </div>
+        <button class="btn diag-btn" @click="router.push('/settings/advanced')">打开</button>
       </div>
     </div>
 

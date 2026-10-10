@@ -4,6 +4,7 @@ using Netch.Core.Abstractions;
 using Netch.Core.Models.Games;
 using Netch.Core.Models.Modes;
 using Netch.Core.Models.Servers;
+using Netch.Core.Models.Settings;
 
 namespace Netch.Tests;
 
@@ -13,6 +14,7 @@ public class AcceleratorServiceTests
     {
         public string Name => "fake";
         public int HttpPort => 2802;
+        public int PreferredSocksPort { get; set; }
         public IReadOnlyCollection<string>? ProxyDomains { get; set; }
         public IReadOnlyCollection<string>? ProxyIps { get; set; }
         public int StartCalls { get; private set; }
@@ -92,6 +94,43 @@ public class AcceleratorServiceTests
         }
     }
 
+    /// <summary>In-memory baseline store used to exercise the measurement policy.</summary>
+    private sealed class FakeBaselineStore : IBaselineStore
+    {
+        public Dictionary<string, StoredBaseline> Baselines { get; } = new();
+        public HashSet<string> Remeasure { get; } = new();
+        public int SaveCalls { get; private set; }
+
+        public StoredBaseline? Get(string gameId) =>
+            Baselines.TryGetValue(gameId, out var b) ? b : null;
+
+        public void Save(string gameId, StoredBaseline baseline)
+        {
+            SaveCalls++;
+            Baselines[gameId] = baseline;
+        }
+
+        public bool ConsumeRemeasure(string gameId) => Remeasure.Remove(gameId);
+
+        public void MarkRemeasure(string gameId) => Remeasure.Add(gameId);
+    }
+
+    private sealed class FakeEffectProbe : IEffectProbe
+    {
+        public int DirectValue { get; set; } = 120;
+        public int SocksValue { get; set; } = 74;
+        public int DirectCalls { get; private set; }
+
+        public Task<int> DirectAsync(string host, int port, CancellationToken ct)
+        {
+            DirectCalls++;
+            return Task.FromResult(DirectValue);
+        }
+
+        public Task<int> ViaSocksAsync(string socksHost, int socksPort, string host, int port, CancellationToken ct) =>
+            Task.FromResult(SocksValue);
+    }
+
     private static Game MakeGame(params string[] domains) =>
         new() { Id = "test-game", Name = "Test Game", ProxyDomains = domains.ToList() };
 
@@ -103,6 +142,14 @@ public class AcceleratorServiceTests
     {
         var log = new LogService();
         return new AcceleratorService(log, _ => controller, proxy, modeFactory ?? new FakeModeControllerFactory());
+    }
+
+    private static AcceleratorService MakeAcceleratorWithEffect(FakeServerController controller, FakeSystemProxy proxy,
+        EffectMonitor effect, IBaselineStore? baselines, Func<AdvancedSettings>? advanced)
+    {
+        var log = new LogService();
+        return new AcceleratorService(log, _ => controller, proxy, new FakeModeControllerFactory(),
+            effect, null, advanced, baselines);
     }
 
     [Fact]
@@ -277,5 +324,104 @@ public class AcceleratorServiceTests
         Assert.Equal("process", accel.Status.CaptureMode);
         Assert.False(proxy.IsEnabled);
         Assert.Equal(ModeType.ProcessMode, modeFactory.Last!.Type);
+    }
+
+    [Fact]
+    public async Task StartAsync_FirstTime_MeasuresAndSavesBaseline()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var probe = new FakeEffectProbe();
+        var effect = new EffectMonitor(probe, sampleInterval: Timeout.InfiniteTimeSpan);
+        var store = new FakeBaselineStore();
+        var accel = MakeAcceleratorWithEffect(controller, proxy, effect, store, null);
+        var game = MakeGame("game.example.com");
+
+        await accel.StartAsync(game, MakeServer());
+
+        Assert.Equal(5, probe.DirectCalls);
+        Assert.Equal(1, store.SaveCalls);
+        Assert.True(store.Baselines.ContainsKey("test-game"));
+        Assert.Equal(120, store.Baselines["test-game"].Latency);
+        Assert.False(effect.Report().BaselineFromCache);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_SecondTime_ReusesStoredBaseline()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var probe = new FakeEffectProbe();
+        var effect = new EffectMonitor(probe, sampleInterval: Timeout.InfiniteTimeSpan);
+        var store = new FakeBaselineStore();
+        store.Baselines["test-game"] = new StoredBaseline
+        {
+            Latency = 130, Loss = 0, Jitter = 0, Samples = 5,
+            Target = "game.example.com:443", MeasuredUtc = new DateTime(2024, 5, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+        var accel = MakeAcceleratorWithEffect(controller, proxy, effect, store, null);
+        var game = MakeGame("game.example.com");
+
+        await accel.StartAsync(game, MakeServer());
+
+        Assert.Equal(0, probe.DirectCalls);
+        var report = effect.Report();
+        Assert.True(report.BaselineFromCache);
+        Assert.NotNull(report.Baseline);
+        Assert.Equal(130, report.Baseline!.Latency);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_MeasureEffectTrue_AlwaysMeasures()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var probe = new FakeEffectProbe();
+        var effect = new EffectMonitor(probe, sampleInterval: Timeout.InfiniteTimeSpan);
+        var store = new FakeBaselineStore();
+        store.Baselines["test-game"] = new StoredBaseline
+        {
+            Latency = 130, Loss = 0, Jitter = 0, Samples = 5,
+            Target = "game.example.com:443", MeasuredUtc = DateTime.UtcNow
+        };
+        var adv = new AdvancedSettings { MeasureEffect = true };
+        var accel = MakeAcceleratorWithEffect(controller, proxy, effect, store, () => adv);
+        var game = MakeGame("game.example.com");
+
+        await accel.StartAsync(game, MakeServer());
+
+        Assert.Equal(5, probe.DirectCalls);
+        Assert.False(effect.Report().BaselineFromCache);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_RemeasureFlag_MeasuresOnceAndIsConsumed()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var probe = new FakeEffectProbe();
+        var effect = new EffectMonitor(probe, sampleInterval: Timeout.InfiniteTimeSpan);
+        var store = new FakeBaselineStore();
+        store.Baselines["test-game"] = new StoredBaseline
+        {
+            Latency = 130, Loss = 0, Jitter = 0, Samples = 5,
+            Target = "game.example.com:443", MeasuredUtc = DateTime.UtcNow
+        };
+        store.Remeasure.Add("test-game");
+        var accel = MakeAcceleratorWithEffect(controller, proxy, effect, store, null);
+        var game = MakeGame("game.example.com");
+
+        await accel.StartAsync(game, MakeServer());
+        Assert.Equal(5, probe.DirectCalls);
+        Assert.False(store.Remeasure.Contains("test-game"));
+        await accel.StopAsync();
+
+        // Second start: flag consumed, stored baseline reused.
+        await accel.StartAsync(game, MakeServer());
+        Assert.Equal(5, probe.DirectCalls);
+        await accel.StopAsync();
     }
 }

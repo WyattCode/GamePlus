@@ -1,13 +1,27 @@
-import { app, shell, BrowserWindow, ipcMain, nativeTheme, Tray, Menu, nativeImage } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, nativeTheme, Tray, Menu, nativeImage, Notification } from 'electron'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { startSidecar, stopSidecar } from './sidecar'
+import { getPrefs, setPrefs } from './prefs'
 import { trayIcon32 } from './trayIcon'
+import { Updater } from './updater'
+import { setToken } from './updater/token'
+import {
+  installCrashHandlers,
+  registerTelemetryIpc,
+  startTelemetry,
+  stopTelemetry
+} from './telemetry'
+import type { TrayInfo, UpdateConfig } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
+let updater: Updater | null = null
+
+// Crash handlers must be installed before app.whenReady() so early failures are captured.
+installCrashHandlers()
 
 /** Honour the backend's MinimizeToTray setting (default on) so the close button hides to tray. */
 function minimizeToTrayEnabled(): boolean {
@@ -29,14 +43,57 @@ function showMainWindow(): void {
   mainWindow.focus()
 }
 
-function createTray(): void {
-  if (tray) return
-  tray = new Tray(nativeImage.createFromDataURL(trayIcon32))
-  tray.setToolTip('Game+ 游戏加速器')
+/** Sends a tray quick action to the renderer (which owns the accel/diagnostics stores). */
+function sendTrayAction(action: 'toggle' | 'diagnose'): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('tray:action', action)
+  }
+}
+
+/** Human-readable status line shared by the tray menu and tooltip. */
+function trayStatusLine(info: TrayInfo | null): string {
+  if (!info) return '未加速'
+  if (info.state === 'connecting') return '连接中…'
+  if (info.state === 'accelerating' || info.state === 'stopping') {
+    const name = info.gameName ?? '游戏'
+    const latency = info.latency > 0 ? ` · ${info.latency} ms` : ''
+    return `加速中：${name}${latency}`
+  }
+  return '未加速'
+}
+
+/** Rebuilds the tray context menu from the latest renderer status snapshot. */
+function updateTray(info: TrayInfo | null): void {
+  if (!tray) return
+  const status = trayStatusLine(info)
+  tray.setToolTip(`Game+ 游戏加速器 · ${status}`)
+
+  const active = info?.state === 'accelerating' || info?.state === 'connecting' || info?.state === 'stopping'
+  const hasGame = !!info?.gameName
+  const toggleLabel = active
+    ? '停止加速'
+    : hasGame
+      ? `开始加速 ${info!.gameName}`
+      : '开始加速（请先选择游戏）'
+
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: '显示 Game+', click: showMainWindow },
+      { label: status, enabled: false },
       { type: 'separator' },
+      {
+        label: toggleLabel,
+        enabled: active || hasGame,
+        click: () => sendTrayAction('toggle')
+      },
+      {
+        label: '网络诊断',
+        click: () => {
+          showMainWindow()
+          sendTrayAction('diagnose')
+        }
+      },
+      { type: 'separator' },
+      { label: '显示 Game+', click: showMainWindow },
       {
         label: '退出',
         click: () => {
@@ -46,6 +103,12 @@ function createTray(): void {
       }
     ])
   )
+}
+
+function createTray(): void {
+  if (tray) return
+  tray = new Tray(nativeImage.createFromDataURL(trayIcon32))
+  updateTray(null)
   tray.on('click', showMainWindow)
   tray.on('double-click', showMainWindow)
 }
@@ -82,7 +145,11 @@ function createWindow(): void {
   })
   mainWindow = win
 
-  win.on('ready-to-show', () => win.show())
+  // When launched at login with "start hidden" enabled, keep the window in the tray only.
+  const startHidden = process.argv.includes('--hidden') && getPrefs().startHidden
+  win.on('ready-to-show', () => {
+    if (!startHidden) win.show()
+  })
 
   // Close button hides to the tray (unless the user turned MinimizeToTray off, or is really quitting).
   win.on('close', (e) => {
@@ -150,6 +217,64 @@ function registerWindowControls(): void {
   )
   // Renderer asks for the backend WebSocket coordinates; resolves once the sidecar is up.
   ipcMain.handle('backend:get-connection', () => startSidecar())
+  // Renderer-only UI prefs (onboarding etc.).
+  ipcMain.handle('prefs:get', () => getPrefs())
+  ipcMain.handle('prefs:set', (_e, patch) => setPrefs(patch ?? {}))
+
+  // --- Desktop notifications (only when the window isn't visible/focused) ---
+  ipcMain.handle('app:notify', (_e, title: unknown, body: unknown) => {
+    if (typeof title !== 'string' || typeof body !== 'string') return
+    if (title.length === 0 || title.length > 200 || body.length > 500) return
+    if (!Notification.isSupported()) return
+    const win = mainWindow
+    const visible = !!win && !win.isDestroyed() && win.isVisible() && win.isFocused()
+    if (visible) return
+    new Notification({ title, body }).show()
+  })
+
+  // --- Tray status sync from the renderer ---
+  ipcMain.handle('tray:update', (_e, info: unknown) => {
+    if (!info || typeof info !== 'object') return
+    const i = info as Record<string, unknown>
+    const state = i.state
+    if (state !== 'idle' && state !== 'connecting' && state !== 'accelerating' && state !== 'stopping') return
+    const gameName = typeof i.gameName === 'string' && i.gameName.length <= 100 ? i.gameName : null
+    const latency = typeof i.latency === 'number' && Number.isFinite(i.latency) ? i.latency : 0
+    updateTray({ state, gameName, latency })
+  })
+
+  // --- Client auto-update ---
+  ipcMain.handle('update:get-state', () => updater?.getState() ?? null)
+  ipcMain.handle('update:check', () => updater?.check() ?? null)
+  ipcMain.handle('update:download', () => updater?.download() ?? null)
+  ipcMain.handle('update:cancel', () => {
+    updater?.cancel()
+  })
+  ipcMain.handle('update:install', () => updater?.install() ?? null)
+  ipcMain.handle('update:get-config', () => updater?.getConfig() ?? null)
+  ipcMain.handle('update:set-config', (_e, patch: unknown) => {
+    if (!patch || typeof patch !== 'object') return updater?.getConfig() ?? null
+    const p = patch as Record<string, unknown>
+    const clean: Partial<UpdateConfig> = {}
+    if (p.source === 'none' || p.source === 'manifest' || p.source === 'github') clean.source = p.source
+    if (typeof p.manifestUrl === 'string' && p.manifestUrl.length <= 2048) clean.manifestUrl = p.manifestUrl
+    if (typeof p.githubRepo === 'string' && p.githubRepo.length <= 200) clean.githubRepo = p.githubRepo
+    if (typeof p.includePrerelease === 'boolean') clean.includePrerelease = p.includePrerelease
+    if (typeof p.autoCheck === 'boolean') clean.autoCheck = p.autoCheck
+    return updater?.setConfig(clean) ?? null
+  })
+  ipcMain.handle('update:set-token', (_e, token: unknown) => {
+    if (token !== null && (typeof token !== 'string' || token.length > 200)) return false
+    try {
+      setToken(token as string | null)
+      return true
+    } catch {
+      return false
+    }
+  })
+
+  // --- Telemetry ---
+  registerTelemetryIpc()
 }
 
 // Single-instance: a second launch must not spawn another sidecar / proxy chain. Focus the running
@@ -173,10 +298,26 @@ if (!gotSingleInstanceLock) {
     })
 
     registerWindowControls()
-    // Kick the backend off early so it's ready by the time the renderer connects.
-    startSidecar().catch((e) => console.error('sidecar failed to start:', e))
+    // Start the backend early only when the user has already finished onboarding (or in dev).
+    // Otherwise the renderer triggers it lazily on its first backend:get-connection, i.e. after
+    // the user has read the permission explanation — so no UAC prompt before the app says anything.
+    if (getPrefs().onboardingDone || is.dev) {
+      startSidecar().catch((e) => console.error('sidecar failed to start:', e))
+    }
     createWindow()
     createTray()
+
+    // Client auto-update: disabled unless the user configured a source. Never auto-downloads.
+    updater = new Updater()
+    updater.armAutoCheck()
+
+    // Telemetry: records app_start when enabled and schedules periodic flushes.
+    startTelemetry()
+
+    // Migrate the old Electron login-item to the scheduled-task mechanism. The old mechanism would
+    // double-launch (and prompt UAC) now that the task also starts the app, so turn it off once and
+    // let the renderer offer to re-enable via the task.
+    migrateLoginItem()
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -185,7 +326,11 @@ if (!gotSingleInstanceLock) {
 
   // Any real quit — tray "退出", OS logoff/shutdown, auto-updater — must NOT be vetoed by the close→hide-to-tray
   // handler. before-quit fires for all of those (but not for a plain window X-close), so mark the intent here.
-  app.on('before-quit', () => (isQuitting = true))
+  app.on('before-quit', () => {
+    isQuitting = true
+    updater?.dispose()
+    stopTelemetry()
+  })
 
   // Hold the quit until the backend has gracefully torn down (restore system proxy, stop cores), then exit.
   // will-quit can fire more than once (tray-exit → app.quit → window-all-closed → app.quit); always hold the
@@ -201,4 +346,22 @@ if (!gotSingleInstanceLock) {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit()
   })
+}
+
+/**
+ * One-time migration away from the Electron login-item. Only runs in a packaged build (dev builds
+ * never registered a login item). If the old mechanism was enabled, disable it and flag the prefs so
+ * the renderer can offer to re-enable auto-start via the scheduled task.
+ */
+function migrateLoginItem(): void {
+  if (!app.isPackaged) return
+  if (getPrefs().migratedLoginItem) return
+  try {
+    if (app.getLoginItemSettings().openAtLogin) {
+      app.setLoginItemSettings({ openAtLogin: false })
+      setPrefs({ migratedLoginItem: true })
+    }
+  } catch {
+    // ignore — nothing to migrate
+  }
 }

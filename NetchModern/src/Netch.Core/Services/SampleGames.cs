@@ -6,7 +6,7 @@ namespace Netch.Core.Services;
 ///     Seed acceleration library — the "game traffic rule DB". Domains are the routes sent through a node;
 ///     everything else stays direct. Approximate but representative of what each title actually talks to.
 /// </summary>
-public static class SampleGames
+public static partial class SampleGames
 {
     public static IEnumerable<Game> Create()
     {

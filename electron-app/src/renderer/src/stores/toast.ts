@@ -3,10 +3,16 @@ import { ref } from 'vue'
 
 export type ToastKind = 'info' | 'error'
 
+export interface ToastAction {
+  label: string
+  run: () => void
+}
+
 export interface Toast {
   id: number
   kind: ToastKind
   message: string
+  action?: ToastAction
 }
 
 let seq = 0
@@ -15,9 +21,9 @@ let seq = 0
 export const useToastStore = defineStore('toast', () => {
   const items = ref<Toast[]>([])
 
-  function push(kind: ToastKind, message: string, timeoutMs = 4000): void {
+  function push(kind: ToastKind, message: string, timeoutMs = 4000, action?: ToastAction): void {
     const id = ++seq
-    items.value.push({ id, kind, message })
+    items.value.push({ id, kind, message, action })
     setTimeout(() => dismiss(id), timeoutMs)
   }
 
@@ -25,12 +31,14 @@ export const useToastStore = defineStore('toast', () => {
     items.value = items.value.filter((t) => t.id !== id)
   }
 
-  function error(message: string): void {
-    push('error', message)
+  function error(message: string, action?: ToastAction): void {
+    // Errors with an action stay longer so the user has time to click it.
+    push('error', message, action ? 8000 : 4000, action)
   }
 
-  function info(message: string): void {
-    push('info', message)
+  function info(message: string, action?: ToastAction): void {
+    // Info with an action stays longer so the user has time to click it.
+    push('info', message, action ? 8000 : 4000, action)
   }
 
   return { items, push, dismiss, error, info }

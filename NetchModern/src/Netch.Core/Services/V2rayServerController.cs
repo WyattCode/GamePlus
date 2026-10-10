@@ -26,6 +26,9 @@ public sealed class V2rayServerController : ProcessGuard, IServerController
     /// <summary>Local xray stats API port.</summary>
     public int ApiPort { get; private set; }
 
+    /// <summary>Fixed local SOCKS5 port (0 = automatic). Set before <see cref="StartAsync" />.</summary>
+    public int PreferredSocksPort { get; set; }
+
     /// <summary>Game mode: only these domains route through the node; set before <see cref="StartAsync" />.</summary>
     public IReadOnlyCollection<string>? ProxyDomains { get; set; }
 
@@ -34,7 +37,7 @@ public sealed class V2rayServerController : ProcessGuard, IServerController
 
     public async Task<Socks5Server> StartAsync(Server server, CancellationToken ct = default)
     {
-        SocksPort = GetFreeTcpPort();
+        SocksPort = ResolveSocksPort();
         HttpPort = NextDistinctPort(SocksPort);
         ApiPort = NextDistinctPort(SocksPort, HttpPort);
 
@@ -146,6 +149,19 @@ public sealed class V2rayServerController : ProcessGuard, IServerController
         }
 
         return (up, down);
+    }
+
+    /// <summary>Uses the fixed port when configured (and free), otherwise picks a free one.</summary>
+    private int ResolveSocksPort()
+    {
+        if (PreferredSocksPort <= 0)
+            return GetFreeTcpPort();
+
+        if (!AdvancedSettingsValidator.IsPortFree(PreferredSocksPort))
+            throw new InvalidOperationException(
+                $"本地端口 {PreferredSocksPort} 已被占用，请在高级设置中更换端口或改为自动");
+
+        return PreferredSocksPort;
     }
 
     private static int NextDistinctPort(params int[] taken)

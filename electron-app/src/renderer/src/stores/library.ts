@@ -1,7 +1,16 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { Game, Server, Subscription } from '@shared/types'
+import type {
+  DetectedGame,
+  Game,
+  LibraryScanResult,
+  RulesStatus,
+  RulesUpdateResult,
+  Server,
+  Subscription
+} from '@shared/types'
 import { backend } from '@/api/backend'
+import { useAccelStore } from '@/stores/accel'
 
 export const useLibraryStore = defineStore('library', () => {
   const games = ref<Game[]>([])
@@ -9,6 +18,10 @@ export const useLibraryStore = defineStore('library', () => {
   const subscriptions = ref<Subscription[]>([])
   const loaded = ref(false)
   const pinging = ref(false)
+
+  const scanResult = ref<LibraryScanResult | null>(null)
+  const scanning = ref(false)
+  const rulesStatus = ref<RulesStatus | null>(null)
 
   async function load(): Promise<void> {
     if (loaded.value) return
@@ -22,6 +35,10 @@ export const useLibraryStore = defineStore('library', () => {
     servers.value = s
     subscriptions.value = subs
     loaded.value = true
+  }
+
+  async function reloadServers(): Promise<void> {
+    servers.value = await backend.listServers()
   }
 
   async function pingAll(): Promise<void> {
@@ -44,6 +61,26 @@ export const useLibraryStore = defineStore('library', () => {
 
   async function toggleFavorite(id: string): Promise<void> {
     games.value = await backend.toggleFavorite(id)
+  }
+
+  async function setGameAuto(id: string, enabled: boolean): Promise<void> {
+    games.value = await backend.setGameAuto(id, enabled)
+  }
+
+  /**
+   * Persists the per-game 国服/国际服 choice. When the game is the one currently selected in the
+   * accel store, keeps that snapshot in sync and refreshes the smart-routing ranking so the
+   * recommendation reflects the new server.
+   */
+  async function setGameServer(id: string, server: 'cn' | 'intl'): Promise<void> {
+    games.value = await backend.setGameServer(id, server)
+
+    const accel = useAccelStore()
+    if (accel.selectedGame?.id === id) {
+      const updated = games.value.find((g) => g.id === id)
+      if (updated) accel.selectedGame = updated
+      await accel.refreshRanking(false)
+    }
   }
 
   async function addGame(data: Partial<Game>): Promise<void> {
@@ -72,8 +109,11 @@ export const useLibraryStore = defineStore('library', () => {
     servers.value = await backend.removeServer(id)
   }
 
-  async function addSubscription(remark: string, link: string): Promise<void> {
+  /** Adds a subscription and returns the newly-created entry (so callers can immediately update it). */
+  async function addSubscription(remark: string, link: string): Promise<Subscription | null> {
+    const before = new Set(subscriptions.value.map((s) => s.id))
     subscriptions.value = await backend.addSubscription(remark, link)
+    return subscriptions.value.find((s) => !before.has(s.id)) ?? null
   }
 
   async function removeSubscription(id: string): Promise<void> {
@@ -105,16 +145,51 @@ export const useLibraryStore = defineStore('library', () => {
     return failed
   }
 
+  /** Scans the local machine for installed games. Result is kept in `scanResult`. */
+  async function scan(): Promise<LibraryScanResult> {
+    scanning.value = true
+    try {
+      const result = await backend.scanLibrary()
+      scanResult.value = result
+      return result
+    } finally {
+      scanning.value = false
+    }
+  }
+
+  /** Adds a detected game to the library and refreshes the game list. */
+  async function addDetected(d: DetectedGame): Promise<void> {
+    games.value = await backend.addDetectedGame(d.name, d.executables, d.source)
+  }
+
+  async function refreshRulesStatus(): Promise<void> {
+    rulesStatus.value = await backend.rulesStatus()
+  }
+
+  /** Checks the remote rules source; replaces the game list when the rules were updated. */
+  async function updateRules(): Promise<RulesUpdateResult> {
+    const result = await backend.updateRules()
+    if (result.status === 'updated') games.value = result.games
+    await refreshRulesStatus()
+    return result
+  }
+
   return {
     games,
     servers,
     subscriptions,
     loaded,
     pinging,
+    scanResult,
+    scanning,
+    rulesStatus,
     sortedGames,
     load,
+    reloadServers,
     pingAll,
     toggleFavorite,
+    setGameAuto,
+    setGameServer,
     addGame,
     updateGame,
     removeGame,
@@ -124,6 +199,10 @@ export const useLibraryStore = defineStore('library', () => {
     addSubscription,
     removeSubscription,
     updateSubscription,
-    updateAllSubscriptions
+    updateAllSubscriptions,
+    scan,
+    addDetected,
+    refreshRulesStatus,
+    updateRules
   }
 })

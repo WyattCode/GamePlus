@@ -2,19 +2,24 @@
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
+import EffectChart from '@/components/EffectChart.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
 import { gameColor } from '@/utils/gameIcon'
 import { useAccelStore } from '@/stores/accel'
+import { useDiagnosticsStore } from '@/stores/diagnostics'
 import { useLibraryStore } from '@/stores/library'
-import { errorMessage } from '@/stores/toast'
+import { errorMessage, useToastStore } from '@/stores/toast'
 import { fmtDelay, fmtDuration, fmtLatency, fmtRate } from '@/utils/format'
 
 const accel = useAccelStore()
+const diagnostics = useDiagnosticsStore()
 const library = useLibraryStore()
+const toast = useToastStore()
 const router = useRouter()
 
 const error = ref<string | null>(null)
 const busy = ref(false)
+const candidatesOpen = ref(true)
 
 // If the selected node id disappears from the list (e.g. after a subscription refresh), clear the
 // selection and fall back to smart node rather than silently showing a blank select.
@@ -60,6 +65,131 @@ const metrics = computed(() => [
   { icon: 'clock', color: '#9b5de5', label: '时长', value: fmtDuration(accel.status.durationSec) }
 ])
 
+// The effect card is visible while accelerating, or when a finished report is still available.
+const effect = computed(() => accel.effect)
+const effectVisible = computed(() => {
+  if (!effect.value) return false
+  if (accel.status.state === 'accelerating') return true
+  return effect.value.series.length > 0 || effect.value.baseline != null
+})
+const effectIsLast = computed(() => accel.status.state !== 'accelerating')
+const effectColor = computed(() => {
+  const pct = effect.value?.latencyPct
+  if (pct == null) return 'var(--text-3)'
+  if (pct >= 5) return 'var(--ok)'
+  if (pct <= -5) return 'var(--warn)'
+  return 'var(--text-3)'
+})
+const effectCompare = computed(() => {
+  const e = effect.value
+  if (!e || !e.baseline) return null
+  const b = e.baseline
+  const c = e.current
+  const base = `直连（参考） ${b.latency >= 0 ? b.latency + ' ms' : '—'} · 丢包 ${b.loss}%`
+  if (!c) return base
+  return `${base} → 加速 ${c.latency >= 0 ? c.latency + ' ms' : '—'} · 丢包 ${c.loss}%`
+})
+
+// Local date-time of the cached baseline, e.g. "2025/06/01 14:32".
+const baselineMeasuredText = computed(() => {
+  const iso = effect.value?.baselineMeasuredAt
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+})
+
+const remeasuring = ref(false)
+
+async function remeasure(): Promise<void> {
+  const gameId = accel.selectedGame?.id
+  if (!gameId || remeasuring.value) return
+  if (running.value) {
+    if (!window.confirm('重新测量需要先暂停加速约 3 秒，是否继续？')) return
+  }
+  remeasuring.value = true
+  error.value = null
+  try {
+    await accel.remeasure()
+    if (running.value) {
+      // Restart so the new baseline is measured immediately (same flow as switching nodes).
+      await accel.stop()
+      await accel.start()
+    } else {
+      toast.info('下次加速时将重新测量直连基线')
+    }
+  } catch (e) {
+    error.value = errorMessage(e)
+  } finally {
+    remeasuring.value = false
+  }
+}
+
+// --- smart routing (P2) ---
+
+const recommended = computed(() => {
+  const r = accel.ranking
+  if (!r || !r.recommendedId) return null
+  return r.candidates.find((c) => c.id === r.recommendedId) ?? null
+})
+
+const topCandidates = computed(() => (accel.ranking?.candidates ?? []).slice(0, 6))
+
+// The node the UI currently considers "in use": the live accel node, else the manual selection, else
+// the smart recommendation.
+const currentNodeId = computed<string | null>(() => {
+  if (running.value) return accel.status.nodeId
+  if (!accel.smartNode) return accel.selectedNodeId
+  return accel.ranking?.recommendedId ?? null
+})
+
+function barColor(score: number, delay: number): string {
+  if (delay < 0 || score < 0) return 'var(--text-3)'
+  if (score <= 80) return 'var(--ok)'
+  if (score <= 150) return 'var(--warn)'
+  return 'var(--danger)'
+}
+
+function barWidth(score: number, delay: number): string {
+  if (delay < 0 || score < 0) return '0%'
+  const pct = Math.min(100, Math.max(4, (score / 200) * 100))
+  return `${pct}%`
+}
+
+async function refreshRanking(ping = false): Promise<void> {
+  error.value = null
+  try {
+    await accel.refreshRanking(ping)
+  } catch (e) {
+    error.value = errorMessage(e)
+  }
+}
+
+async function switchNode(id: string): Promise<void> {
+  error.value = null
+  try {
+    await accel.switchNode(id)
+  } catch (e) {
+    error.value = errorMessage(e)
+  }
+}
+
+// Fetch the ranking on mount, when the selected game changes, and when the node pool changes (no ping).
+watch(
+  () => accel.selectedGame?.id,
+  () => {
+    void refreshRanking(false)
+  },
+  { immediate: true }
+)
+watch(
+  () => library.servers.length,
+  () => {
+    void refreshRanking(false)
+  }
+)
+
 async function toggle(): Promise<void> {
   if (busy.value) return
   error.value = null
@@ -70,6 +200,48 @@ async function toggle(): Promise<void> {
     error.value = errorMessage(e)
   } finally {
     busy.value = false
+  }
+}
+
+// --- auto-accelerate (P6b) ---
+
+// The selected game object is a snapshot; look it up in the library so the toggle reflects the
+// latest autoAccelerate flag after setGameAuto replaces the game list.
+const selectedGame = computed(() => {
+  const id = accel.selectedGame?.id
+  if (!id) return null
+  return library.games.find((g) => g.id === id) ?? accel.selectedGame
+})
+
+const hasProcessRules = computed(
+  () => (selectedGame.value?.proxyProcesses?.length ?? 0) > 0
+)
+
+async function toggleAuto(enabled: boolean): Promise<void> {
+  const g = selectedGame.value
+  if (!g) return
+  try {
+    await library.setGameAuto(g.id, enabled)
+  } catch (e) {
+    toast.error(errorMessage(e))
+  }
+}
+
+// --- per-game server choice (Q1) ---
+
+const hasServerChoice = computed(() => selectedGame.value?.hasServerChoice === true)
+const serverChoice = computed<'cn' | 'intl'>(() =>
+  selectedGame.value?.serverChoice === 'cn' ? 'cn' : 'intl'
+)
+
+async function setServer(server: 'cn' | 'intl'): Promise<void> {
+  const g = selectedGame.value
+  if (!g || running.value || server === serverChoice.value) return
+  error.value = null
+  try {
+    await library.setGameServer(g.id, server)
+  } catch (e) {
+    error.value = errorMessage(e)
   }
 }
 </script>
@@ -111,6 +283,7 @@ async function toggle(): Promise<void> {
       <div v-if="error" class="card error-banner">
         <AppIcon name="warning" :size="16" />
         <span class="err-msg">{{ error }}</span>
+        <button class="err-diag" @click="diagnostics.open(error)">诊断</button>
         <button class="err-close" title="关闭" @click="error = null">
           <AppIcon name="close" :size="14" />
         </button>
@@ -118,6 +291,32 @@ async function toggle(): Promise<void> {
 
       <!-- Node + action -->
       <div class="card panel">
+        <!-- Per-game server choice (国服 / 国际服) -->
+        <div v-if="hasServerChoice" class="server-row">
+          <div class="server-label">服务器</div>
+          <div class="seg" :class="{ disabled: running }" :title="running ? '停止加速后可切换' : ''">
+            <button
+              type="button"
+              class="seg-btn"
+              :class="{ active: serverChoice === 'intl' }"
+              :disabled="running"
+              @click="setServer('intl')"
+            >
+              国际服
+            </button>
+            <button
+              type="button"
+              class="seg-btn"
+              :class="{ active: serverChoice === 'cn' }"
+              :disabled="running"
+              @click="setServer('cn')"
+            >
+              国服
+            </button>
+          </div>
+          <span class="muted small server-hint">按所选服务器挑选线路</span>
+        </div>
+
         <div class="row">
           <div>
             <div class="row-title">智能选路</div>
@@ -141,9 +340,86 @@ async function toggle(): Promise<void> {
           </option>
         </select>
 
+        <!-- Smart routing: recommendation (only when smart routing is on) -->
+        <div v-if="accel.smartNode && recommended" class="rec">
+          <div class="rec-line">
+            <AppIcon name="bolt" :size="14" />
+            <span class="rec-label">推荐：</span>
+            <span class="rec-name">{{ recommended.remark }}</span>
+          </div>
+          <div class="muted small rec-reason">{{ accel.ranking?.reason }}</div>
+        </div>
+
+        <!-- Ranked candidates: shown in both smart and manual mode so the user can compare/switch -->
+        <div v-if="topCandidates.length" class="cand">
+          <div class="cand-head">
+            <button type="button" class="cand-toggle" @click="candidatesOpen = !candidatesOpen">
+              <AppIcon name="chevron" :size="14" :class="{ open: candidatesOpen }" />
+              <span class="cand-title">候选线路</span>
+              <span class="muted small">{{ topCandidates.length }}</span>
+            </button>
+            <span class="cand-spacer" />
+            <button
+              type="button"
+              class="cand-refresh"
+              :disabled="accel.rankLoading"
+              @click="refreshRanking(true)"
+            >
+              <AppIcon name="refresh" :size="13" />
+              {{ accel.rankLoading ? '测速中…' : '重新测速' }}
+            </button>
+          </div>
+
+          <div v-if="candidatesOpen" class="cand-list">
+            <div v-for="c in topCandidates" :key="c.id" class="cand-row">
+              <span class="chip">{{ c.regionName ?? '未知' }}</span>
+              <div class="cand-main">
+                <div class="cand-remark" :title="c.remark">{{ c.remark }}</div>
+                <div class="cand-bar">
+                  <span
+                    class="cand-bar-fill"
+                    :style="{ width: barWidth(c.score, c.delay), background: barColor(c.score, c.delay) }"
+                  />
+                </div>
+                <div class="muted small">{{ c.note }}</div>
+              </div>
+              <div class="cand-right">
+                <div class="cand-delay" :style="{ color: barColor(c.score, c.delay) }">
+                  {{ fmtDelay(c.delay) }}
+                </div>
+                <span v-if="c.id === currentNodeId" class="badge">当前</span>
+                <button v-else class="btn small-btn" @click="switchNode(c.id)">切换</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div v-if="accel.nodeUnavailable" class="capture-hint warn">
           <AppIcon name="info" :size="14" />
           之前选择的线路已不存在，已切换为智能选路
+        </div>
+
+        <!-- Auto-accelerate for the selected game -->
+        <div class="row auto-row">
+          <div>
+            <div class="row-title">游戏启动时自动加速</div>
+            <div class="muted small">
+              {{
+                hasProcessRules
+                  ? '检测到游戏进程后自动开始，游戏退出后自动停止'
+                  : '该游戏没有进程规则，无法自动加速'
+              }}
+            </div>
+          </div>
+          <label class="switch" :class="{ disabled: !hasProcessRules }">
+            <input
+              type="checkbox"
+              :checked="selectedGame?.autoAccelerate ?? false"
+              :disabled="!hasProcessRules"
+              @change="toggleAuto(($event.target as HTMLInputElement).checked)"
+            />
+            <span class="track"><span class="thumb" /></span>
+          </label>
         </div>
 
         <button class="action" :class="{ stop: running }" :disabled="busy" @click="toggle">
@@ -165,6 +441,32 @@ async function toggle(): Promise<void> {
             <span class="muted small">{{ m.label }}</span>
           </div>
           <div class="metric-val">{{ m.value }}</div>
+        </div>
+      </div>
+
+      <!-- Acceleration effect -->
+      <div v-if="effectVisible && effect" class="card effect">
+        <div class="effect-head">
+          <div class="effect-title">
+            加速效果（参考）
+            <span v-if="effectIsLast" class="muted small">上次加速</span>
+          </div>
+          <div class="effect-summary" :style="{ color: effectColor }">{{ effect.summary }}</div>
+        </div>
+        <div class="muted small effect-note">
+          基于应用内对游戏域名的 TLS 握手延迟测得，仅供参考，不等同于游戏内显示的延迟。
+        </div>
+        <div v-if="effectCompare" class="effect-compare muted small">{{ effectCompare }}</div>
+        <div v-if="effect.baselineFromCache && baselineMeasuredText" class="muted small effect-baseline">
+          直连基线测于 {{ baselineMeasuredText }}
+        </div>
+        <div v-if="effect.target" class="effect-target muted small">目标 {{ effect.target }}</div>
+        <EffectChart :series="effect.series" :baseline="effect.baseline?.latency ?? null" />
+        <div class="effect-actions">
+          <button class="btn ghost-btn" :disabled="remeasuring" @click="remeasure">
+            <AppIcon name="refresh" :size="13" />
+            {{ remeasuring ? '处理中…' : '重新测量' }}
+          </button>
         </div>
       </div>
 
@@ -293,6 +595,19 @@ async function toggle(): Promise<void> {
   flex: 1;
   word-break: break-word;
 }
+.err-diag {
+  flex: none;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.err-diag:hover {
+  background: rgba(220, 53, 69, 0.1);
+}
 .err-close {
   color: var(--danger);
   display: flex;
@@ -321,6 +636,11 @@ async function toggle(): Promise<void> {
   width: 100%;
   margin-top: 14px;
   cursor: pointer;
+}
+.auto-row {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
 }
 .action {
   width: 100%;
@@ -363,6 +683,188 @@ async function toggle(): Promise<void> {
   color: var(--warn);
 }
 
+/* per-game server choice */
+.server-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.server-label {
+  font-weight: 600;
+  font-size: 14px;
+}
+.server-hint {
+  margin-left: auto;
+}
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.seg.disabled {
+  opacity: 0.6;
+}
+.seg-btn {
+  padding: 4px 14px;
+  border-radius: calc(var(--radius-sm) - 2px);
+  font-size: 13px;
+  color: var(--text-2);
+  transition: all 0.14s;
+}
+.seg-btn:hover:not(:disabled) {
+  color: var(--text);
+}
+.seg-btn.active {
+  background: var(--brand);
+  color: #fff;
+  font-weight: 600;
+}
+.seg-btn:disabled {
+  cursor: not-allowed;
+}
+
+/* smart routing */
+.rec {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.rec-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--brand);
+}
+.rec-label {
+  color: var(--text-2);
+}
+.rec-name {
+  font-weight: 600;
+  color: var(--text);
+}
+.rec-reason {
+  margin-top: 4px;
+}
+
+.cand {
+  margin-top: 12px;
+}
+.cand-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.cand-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.cand-toggle .open {
+  transform: rotate(180deg);
+}
+.cand-title {
+  font-weight: 600;
+  color: var(--text);
+}
+.cand-spacer {
+  flex: 1;
+}
+.cand-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--brand);
+  font-size: 12px;
+  cursor: pointer;
+}
+.cand-refresh:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.cand-list {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cand-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.chip {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.cand-main {
+  flex: 1;
+  min-width: 0;
+}
+.cand-remark {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cand-bar {
+  height: 3px;
+  margin: 4px 0 3px;
+  border-radius: 2px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.cand-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+}
+.cand-right {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cand-delay {
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 52px;
+  text-align: right;
+}
+.badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 11px;
+}
+.small-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -381,6 +883,64 @@ async function toggle(): Promise<void> {
   font-size: 25px;
   font-weight: 700;
   margin-top: 8px;
+}
+
+.effect {
+  margin-top: 16px;
+  padding: 20px 22px;
+}
+.effect-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.effect-title {
+  font-weight: 600;
+  font-size: 14px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.effect-summary {
+  font-size: 14px;
+  font-weight: 600;
+}
+.effect-note {
+  margin-top: 6px;
+}
+.effect-compare {
+  margin-top: 8px;
+}
+.effect-baseline {
+  margin-top: 2px;
+}
+.effect-target {
+  margin-top: 2px;
+}
+.effect-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+.ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--brand);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ghost-btn:hover:not(:disabled) {
+  background: var(--brand-soft);
+}
+.ghost-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .traffic {
@@ -420,6 +980,9 @@ async function toggle(): Promise<void> {
 /* switch */
 .switch input {
   display: none;
+}
+.switch.disabled {
+  opacity: 0.5;
 }
 .track {
   display: block;

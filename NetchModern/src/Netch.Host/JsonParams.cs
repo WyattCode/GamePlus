@@ -22,6 +22,25 @@ internal static class JsonParams
             ? v.GetBoolean()
             : null;
 
+    /// <summary>
+    ///     Returns an optional integer field, or <c>null</c> if the property is absent. Throws when the
+    ///     property is present but not an integer (a non-number, a fractional number or an out-of-range
+    ///     value) so a bad client payload can't be silently coerced to 0.
+    /// </summary>
+    public static int? OptionalInt(in JsonElement obj, string name)
+    {
+        if (!obj.TryGetProperty(name, out var v))
+            return null;
+
+        if (v.ValueKind != JsonValueKind.Number)
+            throw new InvalidOperationException($"{name} 必须是整数");
+
+        if (!v.TryGetInt32(out var value))
+            throw new InvalidOperationException($"{name} 必须是整数");
+
+        return value;
+    }
+
     /// <summary>True if the property is present (any JSON kind).</summary>
     public static bool HasProperty(in JsonElement obj, string name) =>
         obj.ValueKind == JsonValueKind.Object && obj.TryGetProperty(name, out _);

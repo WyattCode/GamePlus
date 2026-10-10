@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Netch.Core.Models.Games;
 using Netch.Core.Models.Servers;
+using Netch.Core.Services;
 
 namespace Netch.Core.Abstractions;
 
@@ -23,4 +24,7 @@ public interface IAcceleratorService : INotifyPropertyChanged
     Task StartAsync(Game game, Server node, CancellationToken ct = default);
 
     Task StopAsync(CancellationToken ct = default);
+
+    /// <summary>Current acceleration-effect report, or null when no effect monitor is wired up.</summary>
+    EffectReport? EffectReport();
 }

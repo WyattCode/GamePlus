@@ -8,6 +8,7 @@ using Netch.Core.Enums;
 using Netch.Core.Models.Games;
 using Netch.Core.Models.Modes;
 using Netch.Core.Models.Servers;
+using Netch.Core.Models.Settings;
 
 namespace Netch.Core.Services;
 
@@ -30,9 +31,14 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     private readonly ILogService _log;
     private readonly Queue<int> _samples = new();
     private readonly ISystemProxyService _systemProxy;
+    private readonly EffectMonitor? _effect;
+    private readonly Func<IReadOnlyList<ExtraApp>>? _extraApps;
+    private readonly Func<AdvancedSettings>? _advanced;
+    private readonly IBaselineStore? _baselines;
 
     private IServerController? _controller;
     private IModeController? _modeController;
+    private Socks5Server? _socks;
     private long _lastDown;
     private long _lastUp;
     private int _pinging;
@@ -51,12 +57,18 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     private AccelerationState _state = AccelerationState.Idle;
 
     public AcceleratorService(ILogService log, Func<Server, IServerController> controllerFactory,
-        ISystemProxyService systemProxy, IModeControllerFactory modeControllerFactory)
+        ISystemProxyService systemProxy, IModeControllerFactory modeControllerFactory, EffectMonitor? effect = null,
+        Func<IReadOnlyList<ExtraApp>>? extraApps = null, Func<AdvancedSettings>? advanced = null,
+        IBaselineStore? baselines = null)
     {
         _log = log;
         _controllerFactory = controllerFactory;
         _systemProxy = systemProxy;
         _modeControllerFactory = modeControllerFactory;
+        _effect = effect;
+        _extraApps = extraApps;
+        _advanced = advanced;
+        _baselines = baselines;
     }
 
     /// <summary>Convenience overload using the default <see cref="ModeControllerFactory" /> (real drivers).</summary>
@@ -67,7 +79,12 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
 
     public AccelerationStatus Status { get; } = new();
 
+    /// <summary>The effect monitor, when one is wired up (null in tests / minimal hosts).</summary>
+    public EffectMonitor? Effect => _effect;
+
     public event EventHandler<AccelerationState>? StateChanged;
+
+    public EffectReport? EffectReport() => _effect?.Report();
 
     public async Task StartAsync(Game game, Server node, CancellationToken ct = default)
     {
@@ -85,6 +102,52 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         {
             _log.Log(LogLevel.Info, $"Accelerating {game.Name} via {node.DisplayName}");
 
+            var adv = _advanced?.Invoke();
+
+            // Baseline policy: the direct baseline (~3.5 s) runs automatically only on the FIRST
+            // acceleration of each game (persisted) or when the user explicitly asks for it
+            // (MeasureEffect = "measure before EVERY acceleration", or the one-shot remeasure flag).
+            // Otherwise the stored baseline is reused — the accelerated sampling still runs every session.
+            if (_effect != null)
+            {
+                // Consume the one-shot flag unconditionally first so it is cleared even when another
+                // condition already forces a measurement.
+                var remeasure = _baselines?.ConsumeRemeasure(game.Id) ?? false;
+                var stored = _baselines?.Get(game.Id);
+                var measure = adv is { MeasureEffect: true } || _baselines is null || stored is null || remeasure;
+
+                if (measure)
+                {
+                    await _effect.MeasureBaselineAsync(game, ct);
+                    var snapshot = _effect.CurrentBaseline();
+                    if (snapshot is { Samples: >= 3 } && _baselines is not null)
+                    {
+                        var target = EffectProbeTarget.Resolve(game);
+                        _baselines.Save(game.Id, new StoredBaseline
+                        {
+                            Latency = snapshot.Latency,
+                            Loss = snapshot.Loss,
+                            Jitter = snapshot.Jitter,
+                            Samples = snapshot.Samples,
+                            Target = target is null ? "" : $"{target.Value.Host}:{target.Value.Port}",
+                            MeasuredUtc = DateTime.UtcNow
+                        });
+                    }
+                }
+                else if (stored is not null)
+                {
+                    _effect.UseStoredBaseline(game,
+                        new EffectSnapshot(stored.Latency, stored.Loss, stored.Jitter, stored.Samples),
+                        stored.MeasuredUtc);
+                    _log.Log(LogLevel.Info,
+                        $"已使用 {stored.MeasuredUtc.ToLocalTime():yyyy-MM-dd} 测得的直连基线（如需更新可在“加速效果”中重新测量）");
+                }
+                else
+                {
+                    _effect.BeginWithoutBaseline(game);
+                }
+            }
+
             // Games use raw sockets that ignore the Windows system proxy. To actually redirect their
             // traffic we capture it at driver level: by process (netfilter Redirector) when process names
             // are configured, else by destination IP (WinTUN + tun2socks). In those cases xray runs in
@@ -100,6 +163,9 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             var useCapture = hasProcess || hasIp;
 
             _controller = _controllerFactory(node);
+            // Fixed local SOCKS5 port (0 = automatic). Set before StartAsync; persists across the
+            // restart in StartDomainProxyAsync because it reuses the same controller instance.
+            _controller.PreferredSocksPort = adv?.LocalSocksPort ?? 0;
             if (!useCapture)
             {
                 // Domain-only game: system proxy with xray domain/IP routing (works for apps that honour
@@ -108,10 +174,10 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
                 _controller.ProxyIps = game.ProxyIps;
             }
 
-            var socks5 = await _controller.StartAsync(node, ct);
+            _socks = await _controller.StartAsync(node, ct);
 
             if (useCapture)
-                await StartCaptureAsync(game, node, socks5, hasProcess, hasIp, hasDomain, ct);
+                await StartCaptureAsync(game, node, _socks, hasProcess, hasIp, hasDomain, ct);
             else if (hasDomain)
             {
                 _systemProxy.Enable("127.0.0.1", _controller.HttpPort);
@@ -126,6 +192,11 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             _pingTimer = new Timer(PollPing, null, TimeSpan.Zero, TimeSpan.FromSeconds(2));
 
             SetState(AccelerationState.Accelerating);
+
+            // Start the accelerated sampling loop against the SOCKS endpoint of the controller that is
+            // actually running (StartDomainProxyAsync restarts it, so _socks is re-assigned there).
+            if (_effect != null && _socks != null)
+                _effect.Begin(_socks.Hostname, _socks.Port);
         }
         catch (Exception e)
         {
@@ -151,8 +222,16 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             try
             {
                 _modeController = _modeControllerFactory.Create(ModeType.ProcessMode);
-                await _modeController.StartAsync(socks5, BuildMode(ModeType.ProcessMode, game.ProxyProcesses), ct);
+                var extras = _extraApps?.Invoke() ?? Array.Empty<ExtraApp>();
+                var mode = SplitRouting.BuildProcessMode(game.ProxyProcesses, extras);
+                await _modeController.StartAsync(socks5, mode, ct);
                 Status.CaptureMode = "process";
+
+                var extraProxy = extras.Count(a => a is { Enabled: true, Mode: ExtraAppMode.Proxy });
+                var extraBypass = extras.Count(a => a is { Enabled: true, Mode: ExtraAppMode.Bypass });
+                if (extraProxy > 0 || extraBypass > 0)
+                    _log.Log(LogLevel.Info, $"分应用分流：额外代理 {extraProxy} 个，绕过 {extraBypass} 个");
+
                 _log.Log(LogLevel.Info,
                     $"Capturing {game.ProxyProcesses.Count} process(es) via {_modeController.Name} → {node.Hostname}");
                 return;
@@ -222,9 +301,12 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         try { await _controller.StopAsync(ct); }
         catch (Exception e) { _log.Log(LogLevel.Warning, $"Node stop error during fallback: {e.Message}"); }
 
+        // Re-apply the fixed local port: the controller instance is reused, but be explicit so a future
+        // refactor that swaps the instance can't silently drop the setting.
+        _controller.PreferredSocksPort = _advanced?.Invoke()?.LocalSocksPort ?? 0;
         _controller.ProxyDomains = game.ProxyDomains;
         _controller.ProxyIps = game.ProxyIps;
-        await _controller.StartAsync(node, ct);
+        _socks = await _controller.StartAsync(node, ct);
 
         _systemProxy.Enable("127.0.0.1", _controller.HttpPort);
         Status.CaptureMode = "proxy";
@@ -249,6 +331,8 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
         _pingTimer?.Dispose();
         _statsTimer = _pingTimer = null;
 
+        _effect?.End();
+
         if (_modeController != null)
         {
             try { await _modeController.StopAsync(ct); }
@@ -272,6 +356,8 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             catch (Exception e) { _log.Log(LogLevel.Warning, $"Node stop error: {e.Message}"); }
             _controller = null;
         }
+
+        _socks = null;
 
         Status.Reset();
         CurrentGame = null;

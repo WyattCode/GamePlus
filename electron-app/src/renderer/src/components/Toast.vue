@@ -2,6 +2,11 @@
 import { useToastStore } from '@/stores/toast'
 
 const toast = useToastStore()
+
+function runAction(id: number, run: () => void): void {
+  run()
+  toast.dismiss(id)
+}
 </script>
 
 <template>
@@ -14,7 +19,14 @@ const toast = useToastStore()
         :class="t.kind"
         @click="toast.dismiss(t.id)"
       >
-        {{ t.message }}
+        <span class="msg">{{ t.message }}</span>
+        <button
+          v-if="t.action"
+          class="toast-action"
+          @click.stop="runAction(t.id, t.action.run)"
+        >
+          {{ t.action.label }}
+        </button>
       </div>
     </TransitionGroup>
   </div>
@@ -42,6 +54,25 @@ const toast = useToastStore()
   box-shadow: var(--shadow-md);
   cursor: pointer;
   word-break: break-word;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.msg {
+  flex: 1;
+}
+.toast-action {
+  flex: none;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.toast-action:hover {
+  background: rgba(255, 255, 255, 0.34);
 }
 .toast.error {
   background: var(--danger);

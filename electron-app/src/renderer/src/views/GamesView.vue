@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
 import GameEditorDialog from '@/components/GameEditorDialog.vue'
+import LibraryScanDialog from '@/components/LibraryScanDialog.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useAccelStore } from '@/stores/accel'
 import { useToastStore, errorMessage } from '@/stores/toast'
@@ -20,6 +21,7 @@ const activeCat = ref('全部')
 
 const editorOpen = ref(false)
 const editing = ref<Game | null>(null)
+const scanOpen = ref(false)
 
 function openAdd(): void {
   editing.value = null
@@ -61,6 +63,23 @@ async function onToggleFavorite(id: string): Promise<void> {
   }
 }
 
+async function onToggleAuto(g: Game): Promise<void> {
+  try {
+    await library.setGameAuto(g.id, !g.autoAccelerate)
+  } catch (e) {
+    toast.error(errorMessage(e))
+  }
+}
+
+async function onToggleServer(g: Game): Promise<void> {
+  const next = g.serverChoice === 'cn' ? 'intl' : 'cn'
+  try {
+    await library.setGameServer(g.id, next)
+  } catch (e) {
+    toast.error(errorMessage(e))
+  }
+}
+
 const categories = computed(() => {
   const set = new Set<string>()
   library.games.forEach((g) => g.categories.forEach((c) => set.add(c)))
@@ -91,7 +110,10 @@ function pick(g: Game): void {
         <h1 class="page-title">游戏库</h1>
         <p class="page-sub">{{ library.games.length }} 款游戏 · 点击卡片开始加速</p>
       </div>
-      <button class="btn btn-primary" @click="openAdd"><AppIcon name="plus" :size="18" /> 添加游戏</button>
+      <div class="head-actions">
+        <button class="btn" @click="scanOpen = true"><AppIcon name="search" :size="18" /> 扫描本机游戏</button>
+        <button class="btn btn-primary" @click="openAdd"><AppIcon name="plus" :size="18" /> 添加游戏</button>
+      </div>
     </div>
 
     <div class="toolbar">
@@ -130,11 +152,33 @@ function pick(g: Game): void {
         <div class="tile-tags">
           <span v-if="g.custom" class="tag custom">自定义</span>
           <span v-for="c in g.categories.slice(0, 2)" :key="c" class="tag">{{ c }}</span>
+          <button
+            v-if="g.hasServerChoice"
+            class="tag server-tag"
+            title="点击切换服务器"
+            @click.stop="onToggleServer(g)"
+          >
+            {{ g.serverChoice === 'cn' ? '国服' : '国际服' }}
+          </button>
         </div>
+        <button
+          class="auto-chip"
+          :class="{ on: g.autoAccelerate, disabled: !g.proxyProcesses || g.proxyProcesses.length === 0 }"
+          :title="
+            !g.proxyProcesses || g.proxyProcesses.length === 0
+              ? '该游戏没有进程规则，无法自动加速'
+              : '游戏启动时自动加速'
+          "
+          :disabled="!g.proxyProcesses || g.proxyProcesses.length === 0"
+          @click.stop="onToggleAuto(g)"
+        >
+          <AppIcon name="bolt" :size="12" /> 自动加速
+        </button>
       </div>
     </div>
 
     <GameEditorDialog :open="editorOpen" :game="editing" @close="editorOpen = false" @save="onSave" />
+    <LibraryScanDialog :open="scanOpen" @close="scanOpen = false" />
   </div>
 </template>
 
@@ -147,6 +191,10 @@ function pick(g: Game): void {
   align-items: flex-end;
   justify-content: space-between;
   margin-bottom: 18px;
+}
+.head-actions {
+  display: flex;
+  gap: 10px;
 }
 .toolbar {
   margin-bottom: 14px;
@@ -276,6 +324,7 @@ function pick(g: Game): void {
 }
 .tile-tags {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 12px;
 }
@@ -289,5 +338,41 @@ function pick(g: Game): void {
 .tag.custom {
   background: var(--brand-soft);
   color: var(--brand-600);
+}
+.server-tag {
+  background: var(--brand-soft);
+  color: var(--brand-600);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.14s;
+}
+.server-tag:hover {
+  background: var(--brand);
+  color: #fff;
+}
+.auto-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  background: var(--surface-2);
+  color: var(--text-3);
+  transition: all 0.14s;
+}
+.auto-chip:hover:not(:disabled) {
+  color: var(--text);
+}
+.auto-chip.on {
+  background: var(--brand-soft);
+  color: var(--brand-600);
+  font-weight: 600;
+}
+.auto-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

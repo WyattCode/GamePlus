@@ -1,4 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type {
+  CrashFileInfo,
+  TelemetryConfig,
+  TelemetryEvent,
+  TrayAction,
+  TrayInfo,
+  UiPrefs,
+  UpdateConfig,
+  UpdateConfigView,
+  UpdateState
+} from '../shared/types'
 
 // Minimal, typed surface exposed to the renderer. Window chrome + theme now; the
 // backend RPC channel to the C# sidecar will be added here as it comes online.
@@ -28,6 +39,51 @@ const api = {
     onLost: (cb: () => void): void => {
       ipcRenderer.on('backend:lost', () => cb())
     }
+  },
+  prefs: {
+    get: (): Promise<UiPrefs> => ipcRenderer.invoke('prefs:get'),
+    set: (patch: Partial<UiPrefs>): Promise<UiPrefs> => ipcRenderer.invoke('prefs:set', patch)
+  },
+  app: {
+    notify: (title: string, body: string): Promise<void> =>
+      ipcRenderer.invoke('app:notify', title, body)
+  },
+  tray: {
+    update: (info: TrayInfo): Promise<void> => ipcRenderer.invoke('tray:update', info),
+    // Returns an unsubscribe function so callers can detach the listener.
+    onAction: (cb: (action: TrayAction) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, action: TrayAction): void => cb(action)
+      ipcRenderer.on('tray:action', listener)
+      return () => ipcRenderer.removeListener('tray:action', listener)
+    }
+  },
+  update: {
+    getState: (): Promise<UpdateState | null> => ipcRenderer.invoke('update:get-state'),
+    check: (): Promise<UpdateState | null> => ipcRenderer.invoke('update:check'),
+    download: (): Promise<UpdateState | null> => ipcRenderer.invoke('update:download'),
+    cancel: (): Promise<void> => ipcRenderer.invoke('update:cancel'),
+    install: (): Promise<UpdateState | null> => ipcRenderer.invoke('update:install'),
+    getConfig: (): Promise<UpdateConfigView | null> => ipcRenderer.invoke('update:get-config'),
+    setConfig: (patch: Partial<UpdateConfig>): Promise<UpdateConfigView | null> =>
+      ipcRenderer.invoke('update:set-config', patch),
+    setToken: (token: string | null): Promise<boolean> => ipcRenderer.invoke('update:set-token', token),
+    // Returns an unsubscribe function so callers can detach the listener.
+    onState: (cb: (state: UpdateState) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, state: UpdateState): void => cb(state)
+      ipcRenderer.on('update:state', listener)
+      return () => ipcRenderer.removeListener('update:state', listener)
+    }
+  },
+  telemetry: {
+    getConfig: (): Promise<TelemetryConfig> => ipcRenderer.invoke('telemetry:get-config'),
+    setConfig: (patch: Partial<TelemetryConfig>): Promise<TelemetryConfig> =>
+      ipcRenderer.invoke('telemetry:set-config', patch),
+    record: (event: TelemetryEvent): Promise<void> => ipcRenderer.invoke('telemetry:record', event),
+    getRecent: (limit: number): Promise<TelemetryEvent[]> =>
+      ipcRenderer.invoke('telemetry:get-recent', limit),
+    clear: (): Promise<void> => ipcRenderer.invoke('telemetry:clear'),
+    listCrashes: (): Promise<CrashFileInfo[]> => ipcRenderer.invoke('telemetry:list-crashes'),
+    openCrashFolder: (): Promise<void> => ipcRenderer.invoke('telemetry:open-crash-folder')
   }
 }
 

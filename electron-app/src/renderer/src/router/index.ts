@@ -17,6 +17,12 @@ export const router = createRouter({
       component: () => import('@/views/SubscriptionsView.vue')
     },
     { path: '/logs', name: 'logs', component: () => import('@/views/LogsView.vue') },
-    { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue') }
+    { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
+    {
+      path: '/settings/advanced',
+      name: 'advanced',
+      component: () => import('@/views/AdvancedSettingsView.vue'),
+      meta: { section: 'settings' }
+    }
   ]
 })

@@ -5,8 +5,10 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Netch.Core;
 using Netch.Core.Abstractions;
 using Netch.Core.Services;
+using Netch.Core.Services.AutoStart;
 using Netch.Host;
 
 // Headless Game+ backend. Electron spawns this, reads the "GAMEPLUS_READY {port,pid}" line from stdout,
@@ -19,6 +21,16 @@ if (Directory.Exists(nativeDir))
     SetDllDirectory(nativeDir);
 
 var services = Composition.Build();
+
+// Local crash reporting: always on, never uploaded unless the user opts in (handled by Electron).
+var crash = new CrashReporter(Path.Combine(AppPaths.DataDirectory, "crashes"));
+AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+    crash.Write("AppDomain.UnhandledException", e.ExceptionObject as Exception, $"terminating={e.IsTerminating}");
+TaskScheduler.UnobservedTaskException += (_, e) =>
+{
+    crash.Write("TaskScheduler.UnobservedTaskException", e.Exception);
+    e.SetObserved();
+};
 
 // Load persisted settings + servers/subscriptions before serving.
 await services.GetRequiredService<ISettingsService>().LoadAsync();
@@ -44,6 +56,31 @@ catch (Exception e)
     Console.Error.WriteLine("orphan cleanup failed: " + e.Message);
 }
 
+// Remove a stale "launch at login" task: one that points at a different exe, or at an exe that is no
+// longer in an admin-only-writable location. Fire-and-forget so startup is never delayed.
+_ = Task.Run(async () =>
+{
+    try
+    {
+        var message = await services.GetRequiredService<AutoStartService>()
+            .ReconcileAsync(CancellationToken.None);
+        if (message is not null)
+            services.GetRequiredService<ILogService>().Log(Netch.Core.Enums.LogLevel.Warning, message);
+    }
+    catch (Exception e)
+    {
+        try
+        {
+            services.GetRequiredService<ILogService>()
+                .Log(Netch.Core.Enums.LogLevel.Warning, "autostart reconcile failed: " + e.Message);
+        }
+        catch
+        {
+            // best effort
+        }
+    }
+});
+
 // When elevated via UAC we lose the stdin/stdout pipe to the parent, so the handshake goes through a
 // file (--conn-file) and lifecycle is bound to the parent's PID (--parent-pid) instead of stdin EOF.
 string? connFile = null;
@@ -57,6 +94,38 @@ for (var i = 0; i < args.Length - 1; i++)
 }
 
 var router = new RpcRouter(services);
+
+// Auto-acceleration: watch for game launches/exits every few seconds and start/stop acceleration.
+var autoAccel = new AutoAccelHost(router, log: services.GetRequiredService<ILogService>());
+using var autoAccelCts = new CancellationTokenSource();
+_ = autoAccel.RunAsync(autoAccelCts.Token);
+
+// Remote game rules: refresh in the background shortly after startup when a URL is configured. Failures
+// are logged and swallowed — the bundled/cached rules stay active.
+var rulesUrl = services.GetRequiredService<ISettingsService>().Settings.RulesUrl;
+if (!string.IsNullOrWhiteSpace(rulesUrl))
+{
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(10));
+            await router.RefreshRulesAsync(CancellationToken.None);
+        }
+        catch (Exception e)
+        {
+            try
+            {
+                services.GetRequiredService<ILogService>()
+                    .Log(Netch.Core.Enums.LogLevel.Warning, $"后台更新游戏规则失败：{e.Message}");
+            }
+            catch
+            {
+                // best effort
+            }
+        }
+    });
+}
 
 // Security: the elevated host must not hand its bearer token to any same-user process via a world-readable
 // temp file. When the launcher supplies --token-sha256 we never know the token at all — we only verify the
@@ -144,7 +213,7 @@ using var acceptCts = new CancellationTokenSource();
 try
 {
     await server.AcceptLoopAsync(
-        ws => new ClientSession(ws, router, services).RunAsync(),
+        ws => new ClientSession(ws, router, services, autoAccel).RunAsync(),
         acceptCts.Token);
 }
 catch (Exception e)

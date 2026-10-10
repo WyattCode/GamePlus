@@ -1,11 +1,25 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
+import PrivacyCard from '@/components/PrivacyCard.vue'
+import SplitRoutingCard from '@/components/SplitRoutingCard.vue'
+import UpdateCard from '@/components/UpdateCard.vue'
 import { useAppStore } from '@/stores/app'
+import { useDiagnosticsStore } from '@/stores/diagnostics'
+import { useLibraryStore } from '@/stores/library'
+import { useOnboardingStore } from '@/stores/onboarding'
+import { useToastStore, errorMessage } from '@/stores/toast'
 import { backend } from '@/api/backend'
-import type { EngineSettings, UpdateInfo } from '@shared/types'
+import { getPrefs, setPrefs } from '@/api/prefs'
+import type { AutoStartState, EngineSettings } from '@shared/types'
 
 const app = useAppStore()
+const diagnostics = useDiagnosticsStore()
+const library = useLibraryStore()
+const onboarding = useOnboardingStore()
+const toast = useToastStore()
+const router = useRouter()
 const themes = [
   { v: 'light', label: '浅色', icon: 'sun' },
   { v: 'dark', label: '深色', icon: 'moon' },
@@ -26,41 +40,117 @@ async function patch(p: Partial<EngineSettings>): Promise<void> {
   settings.value = await backend.setSettings(p)
 }
 
-const update = ref<UpdateInfo | null>(null)
-const updateError = ref<string | null>(null)
-const updateChecked = ref(false)
+// Prefer the build-time injected package.json version.
+const version = computed(() => __APP_VERSION__)
+
+// --- 游戏规则库 ---
+const rulesUrl = ref('')
+const rulesSaving = ref(false)
+const rulesChecking = ref(false)
+
+const rulesSourceLabel = computed<string>(() => {
+  switch (library.rulesStatus?.source) {
+    case 'bundled':
+      return '内置'
+    case 'cached':
+      return '本地缓存'
+    case 'remote':
+      return '在线更新'
+    default:
+      return '内置'
+  }
+})
+
+const rulesLastCheck = computed<string | null>(() => {
+  const t = library.rulesStatus?.lastCheck
+  if (!t) return null
+  const d = new Date(t)
+  return Number.isNaN(d.getTime()) ? t : d.toLocaleString()
+})
 
 onMounted(async () => {
   try {
-    update.value = await backend.checkUpdate()
+    settings.value = settings.value ?? (await backend.getSettings())
+    rulesUrl.value = settings.value?.rulesUrl ?? ''
+  } catch {
+    // backend not reachable (e.g. browser preview)
+  }
+  try {
+    await library.refreshRulesStatus()
+  } catch {
+    // ignore
+  }
+})
+
+async function saveRulesUrl(): Promise<void> {
+  rulesSaving.value = true
+  try {
+    settings.value = await backend.setSettings({ rulesUrl: rulesUrl.value.trim() })
+    rulesUrl.value = settings.value.rulesUrl
+    toast.info('已保存')
+    await library.refreshRulesStatus()
   } catch (e) {
-    update.value = null
-    updateError.value = e instanceof Error ? e.message : String(e)
+    toast.error('保存失败：' + errorMessage(e))
   } finally {
-    updateChecked.value = true
+    rulesSaving.value = false
+  }
+}
+
+async function checkRules(): Promise<void> {
+  rulesChecking.value = true
+  try {
+    const result = await library.updateRules()
+    if (result.status === 'failed') toast.error(result.message)
+    else toast.info(result.message)
+  } catch (e) {
+    toast.error('检查失败：' + errorMessage(e))
+  } finally {
+    rulesChecking.value = false
+  }
+}
+
+// --- 启动与托盘 ---
+const autoStart = ref<AutoStartState>({ enabled: false, supported: true, reason: null })
+const startHidden = ref(false)
+
+onMounted(async () => {
+  try {
+    const p = await getPrefs()
+    startHidden.value = p.startHidden
+  } catch {
+    // ignore
+  }
+  try {
+    autoStart.value = await backend.getAutoStart()
+  } catch {
+    autoStart.value = { enabled: false, supported: false, reason: '无法连接后台服务' }
   }
 })
 
-// Prefer the backend's reported version; fall back to the build-time injected package.json version.
-const version = computed(() => update.value?.current || __APP_VERSION__)
-
-const updateText = computed<string | null>(() => {
-  if (!updateChecked.value) return null
-  if (updateError.value) return `无法检查更新：${updateError.value}`
-  const u = update.value
-  if (!u) return '无法检查更新：未知错误'
-  switch (u.status) {
-    case 'upToDate':
-      return `已是最新版本 (v${u.current})`
-    case 'updateAvailable':
-      return `发现新版本 ${u.tag ?? u.latest ?? ''}，点击查看`
-    case 'notConfigured':
-      return '未配置更新源'
-    case 'failed':
-    default:
-      return `无法检查更新：${u.error ?? '未知错误'}`
+async function toggleAutoStart(enabled: boolean): Promise<void> {
+  try {
+    autoStart.value = await backend.setAutoStart(enabled)
+    if (!autoStart.value.supported && autoStart.value.reason) {
+      toast.info(autoStart.value.reason)
+    }
+  } catch (e) {
+    toast.error('设置失败：' + errorMessage(e))
+    try {
+      autoStart.value = await backend.getAutoStart()
+    } catch {
+      // ignore
+    }
   }
-})
+}
+
+async function toggleStartHidden(v: boolean): Promise<void> {
+  startHidden.value = v
+  try {
+    await setPrefs({ startHidden: v })
+  } catch (e) {
+    toast.error('保存失败：' + errorMessage(e))
+  }
+}
 </script>
 
 <template>
@@ -105,7 +195,135 @@ const updateText = computed<string | null>(() => {
           <span class="track"><span class="thumb" /></span>
         </label>
       </div>
+      <div class="setting">
+        <div>
+          <div class="s-name">新手引导</div>
+          <div class="muted small">重新查看首次使用的引导步骤</div>
+        </div>
+        <button class="btn diag-btn" @click="onboarding.reopen()">重新查看新手引导</button>
+      </div>
     </div>
+
+    <div class="card group">
+      <div class="g-title">启动与托盘</div>
+      <div class="setting">
+        <div>
+          <div class="s-name">开机自动启动</div>
+          <div class="muted small">
+            通过 Windows 计划任务以管理员权限启动，登录时不再弹出权限确认。
+          </div>
+          <div v-if="!autoStart.supported && autoStart.reason" class="muted small">
+            {{ autoStart.reason }}
+          </div>
+        </div>
+        <label class="switch" :class="{ disabled: !autoStart.supported }">
+          <input
+            type="checkbox"
+            :checked="autoStart.enabled"
+            :disabled="!autoStart.supported"
+            @change="toggleAutoStart(($event.target as HTMLInputElement).checked)"
+          />
+          <span class="track"><span class="thumb" /></span>
+        </label>
+      </div>
+      <div class="setting">
+        <div>
+          <div class="s-name">开机启动时最小化到托盘</div>
+          <div class="muted small">开机启动后不显示主窗口，仅在托盘运行</div>
+        </div>
+        <label class="switch" :class="{ disabled: !autoStart.enabled }">
+          <input
+            type="checkbox"
+            :checked="startHidden"
+            :disabled="!autoStart.enabled"
+            @change="toggleStartHidden(($event.target as HTMLInputElement).checked)"
+          />
+          <span class="track"><span class="thumb" /></span>
+        </label>
+      </div>
+      <div class="setting">
+        <div>
+          <div class="s-name">游戏启动时自动加速（总开关）</div>
+          <div class="muted small">关闭后所有游戏的自动加速都不会生效</div>
+        </div>
+        <label class="switch" :class="{ disabled: !settings }">
+          <input
+            type="checkbox"
+            :checked="settings?.autoAccelerate ?? false"
+            :disabled="!settings"
+            @change="patch({ autoAccelerate: ($event.target as HTMLInputElement).checked })"
+          />
+          <span class="track"><span class="thumb" /></span>
+        </label>
+      </div>
+    </div>
+
+    <SplitRoutingCard />
+
+    <div class="card group">
+      <div class="g-title">游戏规则库</div>
+      <div class="setting">
+        <div>
+          <div class="s-name">
+            当前版本：v{{ library.rulesStatus?.version ?? '—' }}（{{ rulesSourceLabel }}）
+          </div>
+          <div class="muted small">{{ library.rulesStatus?.gameCount ?? 0 }} 个游戏</div>
+          <div v-if="rulesLastCheck" class="muted small">上次检查：{{ rulesLastCheck }}</div>
+          <div v-if="library.rulesStatus?.lastError" class="small danger">
+            {{ library.rulesStatus.lastError }}
+          </div>
+          <div v-else-if="library.rulesStatus?.lastResult" class="muted small">
+            {{ library.rulesStatus.lastResult }}
+          </div>
+        </div>
+      </div>
+      <div class="setting">
+        <div class="rules-input">
+          <div class="s-name">规则更新地址</div>
+          <input
+            v-model="rulesUrl"
+            class="input"
+            placeholder="https://…/game-rules.json，留空则不联网更新"
+          />
+        </div>
+        <div class="rules-actions">
+          <button class="btn diag-btn" :disabled="rulesSaving" @click="saveRulesUrl">保存</button>
+          <button
+            class="btn btn-primary diag-btn"
+            :disabled="!rulesUrl.trim() || rulesChecking"
+            @click="checkRules"
+          >
+            {{ rulesChecking ? '检查中…' : '立即检查' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card group">
+      <div class="g-title">诊断</div>
+      <div class="setting">
+        <div>
+          <div class="s-name">网络诊断</div>
+          <div class="muted small">检查驱动、权限、端口、线路和 DNS 等常见问题</div>
+        </div>
+        <button class="btn btn-primary diag-btn" @click="diagnostics.open()">开始诊断</button>
+      </div>
+    </div>
+
+    <div class="card group">
+      <div class="g-title">高级</div>
+      <div class="setting">
+        <div>
+          <div class="s-name">高级设置</div>
+          <div class="muted small">TUN DNS、本地端口、选路策略等进阶选项</div>
+        </div>
+        <button class="btn diag-btn" @click="router.push('/settings/advanced')">打开</button>
+      </div>
+    </div>
+
+    <PrivacyCard />
+
+    <UpdateCard />
 
     <div class="card group">
       <div class="g-title">关于</div>
@@ -114,19 +332,6 @@ const updateText = computed<string | null>(() => {
         <div>
           <div class="s-name">Game+ <span class="muted">v{{ version }}</span></div>
           <div class="muted small">Electron + Vue 3 · 游戏加速器</div>
-          <div v-if="updateText" class="muted small">
-            <a
-              v-if="update?.status === 'updateAvailable'"
-              :href="update.url ?? '#'"
-              target="_blank"
-              rel="noopener"
-            >
-              {{ updateText }}
-            </a>
-            <span v-else :class="{ warn: update?.status === 'failed' || !!updateError }">
-              {{ updateText }}
-            </span>
-          </div>
         </div>
       </div>
     </div>
@@ -171,6 +376,15 @@ const updateText = computed<string | null>(() => {
 }
 .warn {
   color: var(--warn);
+}
+.danger {
+  color: var(--danger);
+}
+.diag-btn {
+  flex: none;
+  height: 36px;
+  padding: 0 18px;
+  font-size: 13px;
 }
 .seg {
   display: flex;
@@ -228,6 +442,20 @@ const updateText = computed<string | null>(() => {
 }
 .switch input:checked + .track .thumb {
   transform: translateX(18px);
+}
+.rules-input {
+  flex: 1;
+  min-width: 0;
+  margin-right: 14px;
+}
+.rules-input .input {
+  margin-top: 8px;
+  width: 100%;
+}
+.rules-actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
 }
 .about {
   display: flex;

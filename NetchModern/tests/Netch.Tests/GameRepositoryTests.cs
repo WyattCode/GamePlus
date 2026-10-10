@@ -23,6 +23,8 @@ public class GameRepositoryTests
         return dir;
     }
 
+    private static Game Clone(Game g) => new() { Id = g.Id, Name = g.Name };
+
     [Fact]
     public void AddCustomGamePersistsToDisk()
     {
@@ -65,7 +67,7 @@ public class GameRepositoryTests
         }
         finally
         {
-            try { Directory.Delete(dir, true); } catch { /* ignored */ }
+            try { Directory.Delete(dir, true); } catch { /* ignored# */ }
         }
     }
 
@@ -135,6 +137,72 @@ public class GameRepositoryTests
             Assert.Equal(0, settings.SaveCount);
             Assert.True(game.IsFavorite);
             Assert.Contains(game.Id, settings.Settings.FavoriteGames);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* ignored */ }
+        }
+    }
+
+    [Fact]
+    public void ReplaceSeedGamesKeepsCustomGamesAndFavorites()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var path = Path.Combine(dir, "custom-games.json");
+            var settings = new FakeSettings();
+            var seeds = new List<Game> { new() { Id = "seed1", Name = "Seed 1" } };
+            var repo = new GameRepository(settings, path, null, () => seeds.Select(Clone).ToList());
+
+            var custom = new Game { Name = "My Custom" };
+            repo.AddCustomGame(custom);
+            settings.Settings.FavoriteGames.Add("seed1");
+            settings.Settings.FavoriteGames.Add(custom.Id);
+
+            repo.ReplaceSeedGames(new List<Game>
+            {
+                new() { Id = "seed1", Name = "Seed 1 v2" },
+                new() { Id = "seed2", Name = "Seed 2" }
+            });
+
+            Assert.Equal(3, repo.Games.Count);
+            Assert.Equal("seed1", repo.Games[0].Id);
+            Assert.Equal("seed2", repo.Games[1].Id);
+            Assert.Equal(custom.Id, repo.Games[2].Id);
+            Assert.True(repo.Games[0].IsFavorite);
+            Assert.True(repo.Games[2].IsFavorite);
+            Assert.False(repo.Games[1].IsFavorite);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* ignored */ }
+        }
+    }
+
+    [Fact]
+    public void ReplaceSeedGamesSkipsIdsCollidingWithCustomGames()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var path = Path.Combine(dir, "custom-games.json");
+            var repo = new GameRepository(new FakeSettings(), path, null,
+                () => new List<Game> { new() { Id = "seed1", Name = "Seed 1" } });
+
+            var custom = new Game { Id = "custom-abc", Name = "Custom" };
+            repo.AddCustomGame(custom);
+
+            repo.ReplaceSeedGames(new List<Game>
+            {
+                new() { Id = "custom-abc", Name = "Collides" },
+                new() { Id = "seed2", Name = "Seed 2" }
+            });
+
+            Assert.Equal(2, repo.Games.Count);
+            Assert.Equal("seed2", repo.Games[0].Id);
+            Assert.Equal("custom-abc", repo.Games[1].Id);
+            Assert.True(repo.Games[1].IsCustom);
         }
         finally
         {

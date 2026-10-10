@@ -4,7 +4,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Netch.Core.Abstractions;
 using Netch.Core.Models.Games;
 using Netch.Core.Models.Servers;
+using Netch.Core.Models.Settings;
 using Netch.Core.Services;
+using Netch.Core.Services.AutoStart;
+using Netch.Core.Services.Diagnostics;
+using Netch.Core.Services.Library;
+using Netch.Core.Services.Rules;
 
 namespace Netch.Host;
 
@@ -37,8 +42,19 @@ internal sealed class RpcRouter
     private IAcceleratorService Accel => _sp.GetRequiredService<IAcceleratorService>();
     private IPersistenceService Persistence => _sp.GetRequiredService<IPersistenceService>();
     private ISettingsService SettingsSvc => _sp.GetRequiredService<ISettingsService>();
+    private IBaselineStore Baselines => _sp.GetRequiredService<IBaselineStore>();
     private IUpdateChecker UpdateChecker => _sp.GetRequiredService<IUpdateChecker>();
     private ILogService Logs => _sp.GetRequiredService<ILogService>();
+    private DiagnosticsService Diagnostics => _sp.GetRequiredService<DiagnosticsService>();
+    private GameLibraryScanner LibraryScanner => _sp.GetRequiredService<GameLibraryScanner>();
+    private GameRulesService Rules => _sp.GetRequiredService<GameRulesService>();
+    private AutoStartService AutoStart => _sp.GetRequiredService<AutoStartService>();
+
+    /// <summary>Current acceleration state (used by the auto-acceleration policy).</summary>
+    internal AccelerationState CurrentAccelState => Accel.State;
+
+    /// <summary>Id of the game currently being accelerated, or null.</summary>
+    internal string? CurrentAccelGameId => Accel.CurrentGame?.Id;
 
     public Task<object?> DispatchAsync(string method, JsonElement @params, CancellationToken ct) =>
         DispatchCoreAsync(method, @params, ct);
@@ -48,7 +64,7 @@ internal sealed class RpcRouter
         switch (method)
         {
             case "games.list":
-                return await WithStateValue(() => Games.Games.Select(Mapping.ToDto).ToArray(), ct);
+                return await WithStateValue(() => GameList(), ct);
 
             case "servers.list":
                 return await WithStateValue(ServerList, ct);
@@ -67,6 +83,40 @@ internal sealed class RpcRouter
                 var snapshot = await WithStateValue(() => Servers.Servers.ToList(), ct);
                 await Servers.PingAsync(snapshot, ct);
                 return await WithStateValue(ServerList, ct);
+            }
+
+            case "nodes.rank":
+            {
+                var gameId = JsonParams.OptionalString(@params, "gameId");
+                var ping = JsonParams.OptionalBool(@params, "ping") ?? false;
+
+                // Snapshot under the lock; ping the snapshot outside it (network I/O).
+                var pool = await WithStateValue(() => Servers.Servers.ToList(), ct);
+                if (ping || pool.All(s => s.Delay < 0))
+                {
+                    await Servers.PingAsync(pool, ct);
+                    pool = await WithStateValue(() => Servers.Servers.ToList(), ct);
+                }
+
+                // Unknown gameId → rank without preference (do not throw).
+                var game = string.IsNullOrEmpty(gameId)
+                    ? null
+                    : await WithStateValue(() => Games.Games.FirstOrDefault(g => g.Id == gameId), ct);
+
+                // Read the penalty + per-game server choice under the state lock: GameServerChoice is a
+                // plain Dictionary written by games.setServer under the same lock, so reading it outside
+                // would race with a concurrent write. No network I/O happens inside this block.
+                var (penalty, choice) = await WithStateValue(() =>
+                {
+                    var p = SettingsSvc.Settings.Advanced.RegionPenaltyMs;
+                    var c = game is null
+                        ? null
+                        : SettingsSvc.Settings.GameServerChoice.GetValueOrDefault(game.Id);
+                    return (p, c);
+                }, ct);
+
+                var ranking = NodeRanker.Rank(game, pool, penalty, choice);
+                return Mapping.ToDto(ranking, pool);
             }
 
             case "servers.export":
@@ -93,6 +143,56 @@ internal sealed class RpcRouter
 
             case "accel.status":
                 return await WithStateValue(() => Mapping.StatusDto(Accel, Servers.Servers.ToList()), ct);
+
+            case "effect.get":
+                return EffectDto();
+
+            case "effect.remeasure":
+            {
+                var gameId = JsonParams.RequiredString(@params, "gameId");
+                // The store owns the RemeasureGames dictionary (ConcurrentDictionary) and its own
+                // persistence, so no state lock is needed here.
+                Baselines.MarkRemeasure(gameId);
+                return new { ok = true };
+            }
+
+            case "diag.run":
+            {
+                var gameId = JsonParams.OptionalString(@params, "gameId");
+                var nodeId = JsonParams.OptionalString(@params, "nodeId");
+                var error = JsonParams.OptionalString(@params, "error");
+
+                // Snapshot game/node/servers + accelerating flag under the lock, then run the checks
+                // OUTSIDE it (DNS + node probes are network I/O and can take seconds).
+                var (game, node, servers, accelerating) = await WithStateValue(() =>
+                {
+                    var g = string.IsNullOrEmpty(gameId)
+                        ? null
+                        : Games.Games.FirstOrDefault(x => x.Id == gameId);
+                    var pool = Servers.Servers.ToList();
+                    var n = string.IsNullOrEmpty(nodeId)
+                        ? null
+                        : ServerIds.Resolve(nodeId!, pool);
+                    var accel = Accel.State == AccelerationState.Accelerating
+                                || Accel.State == AccelerationState.Connecting;
+                    return (g, n, pool, accel);
+                }, ct);
+
+                var ctx = new DiagnosticContext(game, node, servers, accelerating, error);
+                var report = await Diagnostics.RunAsync(ctx, ct);
+                return Mapping.ToDto(report);
+            }
+
+            case "diag.fix":
+            {
+                var action = JsonParams.RequiredString(@params, "action");
+                if (action == "fixProxy")
+                {
+                    var fixedOk = await Diagnostics.FixProxyAsync();
+                    return new { @fixed = fixedOk };
+                }
+                throw new InvalidOperationException("未知的修复操作");
+            }
 
             case "servers.add":
             {
@@ -191,7 +291,53 @@ internal sealed class RpcRouter
                                ?? throw new InvalidOperationException("游戏不存在");
                     Games.ToggleFavorite(game);
                     await SettingsSvc.SaveAsync();
-                    return Games.Games.Select(Mapping.ToDto).ToArray();
+                    return GameList();
+                }, ct);
+            }
+
+            case "games.setAuto":
+            {
+                var id = JsonParams.RequiredString(@params, "id");
+                var enabled = JsonParams.OptionalBool(@params, "enabled") ?? false;
+                return await WithStateValueAsync(async () =>
+                {
+                    var game = Games.Games.FirstOrDefault(g => g.Id == id)
+                               ?? throw new InvalidOperationException("游戏不存在");
+                    if (enabled && game.ProxyProcesses.Count == 0)
+                        throw new InvalidOperationException("该游戏没有配置进程规则，无法自动加速");
+
+                    var list = SettingsSvc.Settings.AutoAccelerateGames;
+                    if (enabled)
+                    {
+                        if (!list.Contains(id))
+                            list.Add(id);
+                    }
+                    else
+                    {
+                        list.RemoveAll(x => x == id);
+                    }
+
+                    await SettingsSvc.SaveAsync();
+                    return GameList();
+                }, ct);
+            }
+
+            case "games.setServer":
+            {
+                var id = JsonParams.RequiredString(@params, "id");
+                var server = JsonParams.RequiredString(@params, "server");
+                if (server is not ("cn" or "intl"))
+                    throw new InvalidOperationException("服务器只能是 cn 或 intl");
+                return await WithStateValueAsync(async () =>
+                {
+                    var game = Games.Games.FirstOrDefault(g => g.Id == id)
+                               ?? throw new InvalidOperationException("游戏不存在");
+                    if (!GameRegionPreference.HasServerChoice(game))
+                        throw new InvalidOperationException("该游戏没有国服/国际服之分");
+
+                    SettingsSvc.Settings.GameServerChoice[id] = server;
+                    await SettingsSvc.SaveAsync();
+                    return GameList();
                 }, ct);
             }
 
@@ -203,7 +349,7 @@ internal sealed class RpcRouter
                 return await WithStateValue(() =>
                 {
                     Games.AddCustomGame(game);
-                    return Games.Games.Select(Mapping.ToDto).ToArray();
+                    return GameList();
                 }, ct);
             }
 
@@ -236,7 +382,7 @@ internal sealed class RpcRouter
                             throw;
                         }
                     }
-                    return Games.Games.Select(Mapping.ToDto).ToArray();
+                    return GameList();
                 }, ct);
             }
 
@@ -248,7 +394,58 @@ internal sealed class RpcRouter
                     var game = Games.Games.FirstOrDefault(g => g.Id == id)
                                ?? throw new InvalidOperationException("游戏不存在");
                     Games.RemoveGame(game);
-                    return Games.Games.Select(Mapping.ToDto).ToArray();
+                    return GameList();
+                }, ct);
+            }
+
+            case "library.scan":
+            {
+                // Snapshot the library under the lock, then run the scan OUTSIDE it (file I/O can take
+                // seconds) on a background thread.
+                var library = await WithStateValue(() => Games.Games.ToList(), ct);
+                var result = await Task.Run(() => LibraryScanner.ScanAll(library, ct), ct);
+                return Mapping.ToDto(result);
+            }
+
+            case "library.addDetected":
+            {
+                var name = JsonParams.RequiredString(@params, "name").Trim();
+                if (string.IsNullOrWhiteSpace(name))
+                    throw new InvalidOperationException("游戏名称不能为空");
+
+                var executables = JsonParams.StringList(@params, "executables")
+                    .Select(e => e.Trim())
+                    .Where(e => e.Length > 0)
+                    .ToList();
+                if (executables.Count == 0)
+                    throw new InvalidOperationException("请至少提供一个可执行文件");
+
+                foreach (var exe in executables)
+                {
+                    if (!exe.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException($"可执行文件必须以 .exe 结尾：{exe}");
+                    if (exe.Contains('/') || exe.Contains('\\'))
+                        throw new InvalidOperationException($"可执行文件不能包含路径分隔符：{exe}");
+                }
+
+                var source = JsonParams.OptionalString(@params, "source");
+
+                return await WithStateValue(() =>
+                {
+                    var game = new Game
+                    {
+                        Name = name,
+                        Icon = "🎮",
+                        Category = GameCategory.Pc,
+                        Platforms = new List<string> { "PC" },
+                        ProxyProcesses = executables,
+                        Regions = new List<string>(),
+                        Aliases = new List<string>()
+                    };
+                    if (!string.IsNullOrWhiteSpace(source))
+                        game.EnglishName = source!;
+                    Games.AddCustomGame(game);
+                    return GameList();
                 }, ct);
             }
 
@@ -262,6 +459,27 @@ internal sealed class RpcRouter
                     await SettingsSvc.SaveAsync();
                     return Mapping.ToDto(SettingsSvc.Settings);
                 }, ct);
+
+            case "settings.resetAdvanced":
+                return await WithStateValueAsync(async () =>
+                {
+                    SettingsSvc.Settings.Advanced = new AdvancedSettings();
+                    SettingsSvc.Settings.Dns.OtherDns = "1.1.1.1";
+                    await SettingsSvc.SaveAsync();
+                    return Mapping.ToDto(SettingsSvc.Settings);
+                }, ct);
+
+            case "rules.status":
+                return await WithStateValue(() =>
+                {
+                    var st = Rules.Status;
+                    return new RulesStatusDto(st.Version, st.Source, st.GameCount,
+                        st.LastCheckUtc?.ToString("o"), st.LastError, st.LastResult,
+                        SettingsSvc.Settings.RulesUrl ?? "");
+                }, ct);
+
+            case "rules.update":
+                return await RefreshRulesAsync(ct);
 
             case "update.check":
             {
@@ -284,9 +502,61 @@ internal sealed class RpcRouter
                 };
             }
 
+            case "autostart.get":
+            {
+                // No shared state — schtasks.exe is the source of truth, so no lock.
+                var state = await AutoStart.GetAsync(ct);
+                return new { enabled = state.Enabled, supported = state.Supported, reason = state.Reason };
+            }
+
+            case "autostart.set":
+            {
+                var enabled = JsonParams.OptionalBool(@params, "enabled") ?? false;
+                var state = await AutoStart.SetAsync(enabled, ct);
+                return new { enabled = state.Enabled, supported = state.Supported, reason = state.Reason };
+            }
+
             default:
                 throw new InvalidOperationException($"unknown method: {method}");
         }
+    }
+
+    /// <summary>
+    ///     Downloads the configured rules file and, when it is newer, swaps the seed games. Network I/O
+    ///     happens outside the state lock; only the swap is done under it. Also used by the startup
+    ///     background refresh in Program.cs.
+    /// </summary>
+    internal async Task<RulesUpdateDto> RefreshRulesAsync(CancellationToken ct)
+    {
+        var url = SettingsSvc.Settings.RulesUrl ?? "";
+        if (string.IsNullOrWhiteSpace(url))
+            throw new InvalidOperationException("未配置规则更新地址");
+
+        var result = await Rules.UpdateAsync(url.Trim(), ct);
+
+        if (result.Status == RulesUpdateStatus.Updated)
+        {
+            return await WithStateValue(() =>
+            {
+                Games.ReplaceSeedGames(Rules.CreateGames());
+                return new RulesUpdateDto("updated", result.Message, result.Version, GameList());
+            }, ct);
+        }
+
+        var status = result.Status == RulesUpdateStatus.UpToDate ? "upToDate" : "failed";
+        return await WithStateValue(
+            () => new RulesUpdateDto(status, result.Message, result.Version, GameList()),
+            ct);
+    }
+
+    /// <summary>Builds the effect report DTO, or an empty "not started" report when no monitor is wired up.</summary>
+    private EffectReportDto EffectDto()
+    {
+        var report = Accel.EffectReport();
+        return report is null
+            ? new EffectReportDto(false, null, null, null, null,
+                "尚未开始测量", Array.Empty<EffectPointDto>(), false, null, false)
+            : Mapping.ToDto(report);
     }
 
     // Distinct names (rather than overloads) so statement lambdas and value-returning lambdas bind
@@ -330,6 +600,54 @@ internal sealed class RpcRouter
     private SubscriptionDto[] SubList() =>
         Subs.Subscriptions.ToList().Select(Mapping.ToDto).ToArray();
 
+    /// <summary>Builds the games DTO list, marking the per-game auto-acceleration toggle + server choice.</summary>
+    private GameDto[] GameList()
+    {
+        var auto = SettingsSvc.Settings.AutoAccelerateGames;
+        var choices = SettingsSvc.Settings.GameServerChoice;
+        return Games.Games.Select(g => Mapping.ToDto(g, auto, choices)).ToArray();
+    }
+
+    /// <summary>Game name for a given id, or null when unknown (used for auto-accel event payloads).</summary>
+    internal string? GameNameOf(string gameId)
+    {
+        try
+        {
+            return Games.Games.FirstOrDefault(g => g.Id == gameId)?.Name;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    ///     Games to watch for auto-acceleration plus the global master switch. Read under the state lock.
+    /// </summary>
+    internal async Task<(IReadOnlyList<Game> Games, bool Enabled)> AutoWatchedGamesAsync(CancellationToken ct)
+    {
+        return await WithStateValue(() =>
+        {
+            var settings = SettingsSvc.Settings;
+            var ids = settings.AutoAccelerateGames;
+            var watched = Games.Games
+                .Where(g => ids.Contains(g.Id) && g.ProxyProcesses.Count > 0)
+                .ToList();
+            return ((IReadOnlyList<Game>)watched, settings.AutoAccelerate);
+        }, ct);
+    }
+
+    /// <summary>
+    ///     Starts acceleration for an auto-acceleration launch edge, using the same code path as
+    ///     accel.start with a null nodeId (smart routing).
+    /// </summary>
+    internal Task StartAccelForAutoAsync(string gameId, CancellationToken ct) =>
+        StartAccelAsync(gameId, null, ct);
+
+    /// <summary>Stops acceleration for an auto-acceleration exit edge.</summary>
+    internal Task StopAccelForAutoAsync(CancellationToken ct) =>
+        StopAccelAsync(ct);
+
     private void ApplySettings(JsonElement p)
     {
         var s = SettingsSvc.Settings;
@@ -339,6 +657,121 @@ internal sealed class RpcRouter
             s.Language = language;
         if (JsonParams.OptionalBool(p, "minimizeToTray") is { } minimizeToTray)
             s.MinimizeToTray = minimizeToTray;
+        if (JsonParams.OptionalBool(p, "autoAccelerate") is { } autoAccelerate)
+            s.AutoAccelerate = autoAccelerate;
+        if (JsonParams.OptionalString(p, "rulesUrl") is { } rulesUrl)
+        {
+            // Validate BEFORE mutating anything so a bad value can't leave settings half-applied.
+            var trimmed = rulesUrl.Trim();
+            if (trimmed.Length > 0 && !IsValidRulesUrl(trimmed))
+                throw new InvalidOperationException("规则更新地址必须是 https:// 开头的网址");
+            s.RulesUrl = trimmed;
+        }
+        if (JsonParams.HasProperty(p, "extraApps"))
+        {
+            // Validate the whole array BEFORE mutating anything (same style as rulesUrl).
+            var parsed = ParseExtraApps(p);
+            s.ExtraApps = parsed;
+        }
+        if (JsonParams.HasProperty(p, "advanced"))
+            ApplyAdvanced(p, s);
+    }
+
+    /// <summary>
+    ///     Applies the <c>advanced</c> object. Validates ALL provided fields first (throwing on the first
+    ///     error without mutating anything), then applies them.
+    /// </summary>
+    private static void ApplyAdvanced(JsonElement p, AppSettings s)
+    {
+        if (!p.TryGetProperty("advanced", out var adv) || adv.ValueKind != JsonValueKind.Object)
+            throw new InvalidOperationException("advanced 必须是对象");
+
+        string? tunDns = null;
+        bool? measureEffect = null;
+        int? regionPenalty = null;
+        int? localPort = null;
+
+        if (JsonParams.HasProperty(adv, "tunDns"))
+            tunDns = AdvancedSettingsValidator.ValidateDns(JsonParams.OptionalString(adv, "tunDns"));
+        if (JsonParams.HasProperty(adv, "measureEffect"))
+            measureEffect = JsonParams.OptionalBool(adv, "measureEffect") ?? false;
+        if (JsonParams.HasProperty(adv, "regionPenaltyMs"))
+            regionPenalty = AdvancedSettingsValidator.ValidateRegionPenalty(
+                JsonParams.OptionalInt(adv, "regionPenaltyMs") ?? 0);
+        if (JsonParams.HasProperty(adv, "localSocksPort"))
+            localPort = AdvancedSettingsValidator.ValidateLocalPort(
+                JsonParams.OptionalInt(adv, "localSocksPort") ?? 0);
+
+        // All fields validated — now apply.
+        if (tunDns is not null)
+            s.Dns.OtherDns = tunDns;
+        if (measureEffect is { } me)
+            s.Advanced.MeasureEffect = me;
+        if (regionPenalty is { } rp)
+            s.Advanced.RegionPenaltyMs = rp;
+        if (localPort is { } lp)
+            s.Advanced.LocalSocksPort = lp;
+    }
+
+    /// <summary>
+    ///     Parses and validates the <c>extraApps</c> array. Throws before any mutation so a bad entry
+    ///     can't leave settings half-applied.
+    /// </summary>
+    private static List<ExtraApp> ParseExtraApps(JsonElement p)
+    {
+        if (!p.TryGetProperty("extraApps", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException("extraApps 必须是数组");
+
+        var result = new List<ExtraApp>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                throw new InvalidOperationException("extraApps 的每一项必须是对象");
+
+            var process = (JsonParams.OptionalString(item, "process") ?? "").Trim();
+            if (!SplitRouting.IsValidProcessName(process))
+                throw new InvalidOperationException($"无效的进程名：{process}（应为 xxx.exe）");
+
+            if (!seen.Add(process))
+                throw new InvalidOperationException($"进程 {process} 重复");
+
+            var modeRaw = (JsonParams.OptionalString(item, "mode") ?? "proxy").Trim().ToLowerInvariant();
+            if (modeRaw is not ("proxy" or "bypass"))
+                throw new InvalidOperationException($"无效的分流方式：{modeRaw}（可选：proxy / bypass）");
+
+            var name = (JsonParams.OptionalString(item, "name") ?? "").Trim();
+            if (name.Length == 0)
+                name = process;
+            if (name.Length > 40)
+                name = name[..40];
+
+            var enabled = JsonParams.OptionalBool(item, "enabled") ?? true;
+
+            result.Add(new ExtraApp
+            {
+                Name = name,
+                Process = process,
+                Mode = modeRaw == "bypass" ? ExtraAppMode.Bypass : ExtraAppMode.Proxy,
+                Enabled = enabled
+            });
+
+            if (result.Count > 50)
+                throw new InvalidOperationException("分应用分流最多 50 条");
+        }
+
+        return result;
+    }
+
+    /// <summary>https:// anywhere; plain http:// only for loopback hosts (local testing).</summary>
+    private static bool IsValidRulesUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return false;
+        if (uri.Scheme == Uri.UriSchemeHttps)
+            return true;
+        return uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback;
     }
 
     /// <summary>Formats a version as Major.Minor.Build (Build clamped to &gt;= 0), e.g. "3.0.0".</summary>
@@ -361,7 +794,7 @@ internal sealed class RpcRouter
         Server node;
         if (string.IsNullOrEmpty(nodeId))
         {
-            node = await PickBestNodeAsync(ct);
+            node = await PickBestNodeAsync(game, ct);
         }
         else
         {
@@ -424,8 +857,10 @@ internal sealed class RpcRouter
         }
     }
 
-    /// <summary>Smart routing: lowest tested latency; if nothing is tested yet, ping first.</summary>
-    private async Task<Server> PickBestNodeAsync(CancellationToken ct)
+    /// <summary>
+    ///     Smart routing: region-aware lowest-latency pick. If nothing is tested yet, ping first.
+    /// </summary>
+    private async Task<Server> PickBestNodeAsync(Game game, CancellationToken ct)
     {
         // Snapshot under the lock; ping the snapshot outside it (network I/O).
         var pool = await WithStateValue(() => Servers.Servers.ToList(), ct);
@@ -438,6 +873,18 @@ internal sealed class RpcRouter
             pool = await WithStateValue(() => Servers.Servers.ToList(), ct);
         }
 
-        return pool.Where(s => s.Delay >= 0).OrderBy(s => s.Delay).FirstOrDefault() ?? pool[0];
+        // Read the penalty + per-game server choice under the state lock (GameServerChoice is a plain
+        // Dictionary written by games.setServer under the same lock). No network I/O inside this block.
+        var (penalty, choice) = await WithStateValue(() =>
+        {
+            var p = SettingsSvc.Settings.Advanced.RegionPenaltyMs;
+            var c = SettingsSvc.Settings.GameServerChoice.GetValueOrDefault(game.Id);
+            return (p, c);
+        }, ct);
+
+        var ranking = NodeRanker.Rank(game, pool, penalty, choice);
+        var node = ranking.Recommended?.Server ?? pool[0];
+        Logs.Log(Netch.Core.Enums.LogLevel.Info, $"智能选路：{node.Remark}（{ranking.Reason}）");
+        return node;
     }
 }

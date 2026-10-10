@@ -1,9 +1,18 @@
 import type {
   AccelStatus,
+  AutoAccelEvent,
+  AutoStartState,
+  DiagnosticReport,
+  EffectReport,
   EngineSettings,
   Game,
+  LibraryScanResult,
   LogEntry,
+  NodeRanking,
+  RulesStatus,
+  RulesUpdateResult,
   Server,
+  SettingsPatch,
   Subscription,
   UpdateInfo
 } from '@shared/types'
@@ -15,7 +24,25 @@ const DEFAULT_TIMEOUT_MS = 30_000
 const METHOD_TIMEOUTS: Record<string, number> = {
   'subs.update': 90_000,
   'servers.ping': 60_000,
-  'accel.start': 60_000
+  'nodes.rank': 60_000,
+  'accel.start': 60_000,
+  'diag.run': 30_000,
+  'library.scan': 60_000,
+  'rules.update': 30_000
+}
+
+// Module-level gate: nothing may spawn/elevate the sidecar until the app explicitly allows it. The
+// onboarding flow shows an explanation of the UAC prompt first, so any store that eagerly connects
+// (e.g. the accel store on the default route) must wait here instead of triggering elevation.
+let releaseGate!: () => void
+const gate = new Promise<void>((r) => (releaseGate = r))
+let gateOpen = false
+
+/** Opens the backend connection gate. Idempotent — safe to call from multiple places. */
+export function allowBackendConnection(): void {
+  if (gateOpen) return
+  gateOpen = true
+  releaseGate()
 }
 
 // Speaks the JSON-RPC/WebSocket protocol of the headless C# sidecar (see Netch.Host).
@@ -28,7 +55,10 @@ export class WebSocketBackend implements Backend {
 
   private readonly statusCbs = new Set<(s: AccelStatus) => void>()
   private readonly logCbs = new Set<(l: LogEntry) => void>()
+  private readonly effectCbs = new Set<(r: EffectReport) => void>()
+  private readonly autoAccelCbs = new Set<(e: AutoAccelEvent) => void>()
   private lastStatus: AccelStatus | null = null
+  private lastEffect: EffectReport | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor() {
@@ -56,6 +86,8 @@ export class WebSocketBackend implements Backend {
     if (this.connecting) return this.connecting
 
     this.connecting = (async () => {
+      // Wait for the app to allow connecting (onboarding may still be explaining the UAC prompt).
+      await gate
       const { port, token } = await window.gameplus.backend.getConnection()
       await new Promise<void>((resolve, reject) => {
         const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${token}`)
@@ -102,7 +134,7 @@ export class WebSocketBackend implements Backend {
       this.statusCbs.forEach((cb) => cb(idle))
     }
     // A respawned sidecar comes up on a new port; ensure() re-fetches it. Retry while anyone is listening.
-    if (this.reconnectTimer || (!this.statusCbs.size && !this.logCbs.size)) return
+    if (this.reconnectTimer || (!this.statusCbs.size && !this.logCbs.size && !this.effectCbs.size)) return
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
       if (!this.ws) this.ensure().catch(() => this.onDisconnected())
@@ -129,6 +161,12 @@ export class WebSocketBackend implements Backend {
         this.statusCbs.forEach((cb) => cb(this.lastStatus!))
       } else if (msg.event === 'log') {
         this.logCbs.forEach((cb) => cb(msg.data as LogEntry))
+      } else if (msg.event === 'effect') {
+        this.lastEffect = msg.data as EffectReport
+        this.effectCbs.forEach((cb) => cb(this.lastEffect!))
+      } else if (msg.event === 'auto.accel') {
+        const e = msg.data as AutoAccelEvent
+        this.autoAccelCbs.forEach((cb) => cb(e))
       }
       return
     }
@@ -176,6 +214,9 @@ export class WebSocketBackend implements Backend {
   pingAll(): Promise<Server[]> {
     return this.call('servers.ping')
   }
+  rankNodes(gameId: string | null, ping: boolean): Promise<NodeRanking> {
+    return this.call('nodes.rank', { gameId, ping })
+  }
   async startAccelerate(gameId: string, nodeId: string | null): Promise<void> {
     await this.call('accel.start', { gameId, nodeId })
   }
@@ -199,6 +240,27 @@ export class WebSocketBackend implements Backend {
     return this.call('logs.recent')
   }
 
+  getEffect(): Promise<EffectReport> {
+    return this.call('effect.get')
+  }
+  onEffect(cb: (r: EffectReport) => void): () => void {
+    this.effectCbs.add(cb)
+    if (this.lastEffect) cb(this.lastEffect)
+    this.ensure().catch(() => this.onDisconnected())
+    return () => this.effectCbs.delete(cb)
+  }
+
+  remeasureEffect(gameId: string): Promise<{ ok: boolean }> {
+    return this.call('effect.remeasure', { gameId })
+  }
+
+  onAutoAccel(cb: (e: AutoAccelEvent) => void): () => void {
+    this.autoAccelCbs.add(cb)
+    // Make sure we're connected so events start flowing even before the first RPC.
+    this.ensure().catch(() => this.onDisconnected())
+    return () => this.autoAccelCbs.delete(cb)
+  }
+
   addServerFromLink(link: string): Promise<Server[]> {
     return this.call('servers.add', { link })
   }
@@ -217,6 +279,12 @@ export class WebSocketBackend implements Backend {
   toggleFavorite(id: string): Promise<Game[]> {
     return this.call('games.toggleFavorite', { id })
   }
+  setGameAuto(id: string, enabled: boolean): Promise<Game[]> {
+    return this.call('games.setAuto', { id, enabled })
+  }
+  setGameServer(id: string, server: 'cn' | 'intl'): Promise<Game[]> {
+    return this.call('games.setServer', { id, server })
+  }
   addGame(data: Partial<Game>): Promise<Game[]> {
     return this.call('games.add', data)
   }
@@ -232,10 +300,53 @@ export class WebSocketBackend implements Backend {
   getSettings(): Promise<EngineSettings> {
     return this.call('settings.get')
   }
-  setSettings(patch: Partial<EngineSettings>): Promise<EngineSettings> {
+  setSettings(patch: SettingsPatch): Promise<EngineSettings> {
     return this.call('settings.set', patch)
+  }
+  resetAdvancedSettings(): Promise<EngineSettings> {
+    return this.call('settings.resetAdvanced')
   }
   checkUpdate(): Promise<UpdateInfo> {
     return this.call('update.check')
+  }
+
+  runDiagnostics(opts: {
+    gameId?: string | null
+    nodeId?: string | null
+    error?: string | null
+  }): Promise<DiagnosticReport> {
+    return this.call('diag.run', {
+      gameId: opts.gameId ?? null,
+      nodeId: opts.nodeId ?? null,
+      error: opts.error ?? null
+    })
+  }
+
+  fixDiagnostic(action: string): Promise<{ fixed: boolean }> {
+    return this.call('diag.fix', { action })
+  }
+
+  scanLibrary(): Promise<LibraryScanResult> {
+    return this.call('library.scan')
+  }
+
+  addDetectedGame(name: string, executables: string[], source?: string): Promise<Game[]> {
+    return this.call('library.addDetected', { name, executables, source: source ?? null })
+  }
+
+  rulesStatus(): Promise<RulesStatus> {
+    return this.call('rules.status')
+  }
+
+  updateRules(): Promise<RulesUpdateResult> {
+    return this.call('rules.update')
+  }
+
+  getAutoStart(): Promise<AutoStartState> {
+    return this.call('autostart.get')
+  }
+
+  setAutoStart(enabled: boolean): Promise<AutoStartState> {
+    return this.call('autostart.set', { enabled })
   }
 }

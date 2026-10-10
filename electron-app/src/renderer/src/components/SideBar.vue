@@ -1,5 +1,8 @@
 <script setup lang="ts">
+import { useRoute } from 'vue-router'
 import AppIcon from './AppIcon.vue'
+
+const route = useRoute()
 
 const nav = [
   { to: '/accelerate', icon: 'rocket', label: '加速' },
@@ -11,12 +14,25 @@ const footNav = [
   { to: '/logs', icon: 'list', label: '日志' },
   { to: '/settings', icon: 'settings', label: '设置' }
 ]
+
+// RouterLink's router-link-active only matches the exact route (or a nested child), so sibling
+// routes such as /settings/advanced would leave 设置 unhighlighted. Match by path prefix instead.
+function isActive(to: string): boolean {
+  return route.path === to || route.path.startsWith(to + '/')
+}
 </script>
 
 <template>
   <aside class="sidebar">
     <nav class="nav">
-      <RouterLink v-for="item in nav" :key="item.to" :to="item.to" class="nav-item" draggable="false">
+      <RouterLink
+        v-for="item in nav"
+        :key="item.to"
+        :to="item.to"
+        class="nav-item"
+        :class="{ active: isActive(item.to) }"
+        draggable="false"
+      >
         <span class="ind" />
         <AppIcon :name="item.icon" :size="20" />
         <span class="label">{{ item.label }}</span>
@@ -26,7 +42,14 @@ const footNav = [
     <div class="spacer" />
 
     <nav class="nav">
-      <RouterLink v-for="item in footNav" :key="item.to" :to="item.to" class="nav-item" draggable="false">
+      <RouterLink
+        v-for="item in footNav"
+        :key="item.to"
+        :to="item.to"
+        class="nav-item"
+        :class="{ active: isActive(item.to) }"
+        draggable="false"
+      >
         <span class="ind" />
         <AppIcon :name="item.icon" :size="20" />
         <span class="label">{{ item.label }}</span>
@@ -70,7 +93,8 @@ const footNav = [
   background: var(--surface-2);
   color: var(--text);
 }
-.nav-item.router-link-active {
+.nav-item.router-link-active,
+.nav-item.active {
   background: var(--brand-soft);
   color: var(--brand-600);
   font-weight: 600;
@@ -86,7 +110,8 @@ const footNav = [
   background: var(--brand);
   transition: transform 0.16s;
 }
-.nav-item.router-link-active .ind {
+.nav-item.router-link-active .ind,
+.nav-item.active .ind {
   transform: translateY(-50%) scaleY(1);
 }
 .label {

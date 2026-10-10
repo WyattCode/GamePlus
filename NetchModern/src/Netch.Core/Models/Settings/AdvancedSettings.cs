@@ -42,4 +42,31 @@ public partial class AdvancedSettings : ObservableObject
     /// </summary>
     [ObservableProperty]
     private string _defaultCaptureMode = "auto";
+
+    /// <summary>
+    ///     Master switch for automatic node switching: while accelerating, replace the current node with
+    ///     the next-ranked candidate when its quality is bad for a sustained window (default off).
+    /// </summary>
+    [ObservableProperty]
+    private bool _autoSwitchEnabled;
+
+    /// <summary>Auto-switch loss threshold (%): a sample with loss ≥ this value counts as bad (1..50).</summary>
+    [ObservableProperty]
+    private int _autoSwitchLossPct = 5;
+
+    /// <summary>Auto-switch latency threshold (ms): a sample with latency ≥ this value counts as bad (50..2000).</summary>
+    [ObservableProperty]
+    private int _autoSwitchLatencyMs = 200;
+
+    /// <summary>Auto-switch sustain window (s): the bad streak must last this long before a switch fires (5..120).</summary>
+    [ObservableProperty]
+    private int _autoSwitchSustainSec = 15;
+
+    /// <summary>Auto-switch cooldown (s): after a switch, no bad streak is evaluated for this long (10..600).</summary>
+    [ObservableProperty]
+    private int _autoSwitchCooldownSec = 60;
+
+    /// <summary>Maximum automatic switches per acceleration session (1..10).</summary>
+    [ObservableProperty]
+    private int _autoSwitchMaxSwitches = 3;
 }

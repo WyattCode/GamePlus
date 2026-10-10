@@ -4,6 +4,7 @@ import type {
   AdvancedSettings,
   AutoAccelEvent,
   AutoStartState,
+  AutoSwitchEvent,
   CaptureMode,
   CaptureModeKind,
   DetectedGame,
@@ -61,6 +62,8 @@ export interface Backend {
   /** Sets (or clears, with "default") the per-game capture-mode override. */
   setGameMode(id: string, mode: CaptureMode | 'default'): Promise<Game[]>
   onAutoAccel(cb: (e: AutoAccelEvent) => void): () => void
+  /** Pushes AutoSwitchEvent when the auto node switcher reacts to sustained bad quality. */
+  onAutoSwitch(cb: (e: AutoSwitchEvent) => void): () => void
   addGame(data: Partial<Game>): Promise<Game[]>
   updateGame(id: string, data: Partial<Game>): Promise<Game[]>
   removeGame(id: string): Promise<Game[]>
@@ -230,6 +233,7 @@ class MockBackend implements Backend {
   private statusCbs = new Set<(s: AccelStatus) => void>()
   private logCbs = new Set<(l: LogEntry) => void>()
   private effectCbs = new Set<(r: EffectReport) => void>()
+  private autoSwitchCbs = new Set<(e: AutoSwitchEvent) => void>()
   private timer: ReturnType<typeof setInterval> | null = null
   private startedAt = 0
   private status: AccelStatus = {
@@ -477,7 +481,16 @@ class MockBackend implements Backend {
     autoAccelerate: true,
     subscriptionAutoUpdateHours: 12,
     extraApps: [],
-    advanced: { ...ADVANCED_DEFAULTS, defaultCaptureMode: 'auto' as CaptureMode }
+    advanced: {
+      ...ADVANCED_DEFAULTS,
+      defaultCaptureMode: 'auto' as CaptureMode,
+      autoSwitchEnabled: false,
+      autoSwitchLossPct: 5,
+      autoSwitchLatencyMs: 200,
+      autoSwitchSustainSec: 15,
+      autoSwitchCooldownSec: 60,
+      autoSwitchMaxSwitches: 3
+    }
   }
 
   private mockAutoStart: AutoStartState = { enabled: false, supported: true, reason: null }
@@ -661,6 +674,11 @@ class MockBackend implements Backend {
     // The mock never detects real game processes, so this event never fires.
     return () => {}
   }
+  onAutoSwitch(cb: (e: AutoSwitchEvent) => void): () => void {
+    // Stored but never fired: the mock has no real quality measurement to trigger a switch.
+    this.autoSwitchCbs.add(cb)
+    return () => this.autoSwitchCbs.delete(cb)
+  }
   async addGame(data: Partial<Game>): Promise<Game[]> {
     const id = 'custom-' + crypto.randomUUID().slice(0, 8)
     this.mockGames.push({
@@ -750,6 +768,21 @@ class MockBackend implements Backend {
           throw new Error('加速模式只能是 auto、process、tun 或 proxy')
         }
       }
+      if (adv.autoSwitchLossPct !== undefined && (adv.autoSwitchLossPct < 1 || adv.autoSwitchLossPct > 50)) {
+        throw new Error('自动切换丢包阈值必须在 1–50% 之间')
+      }
+      if (adv.autoSwitchLatencyMs !== undefined && (adv.autoSwitchLatencyMs < 50 || adv.autoSwitchLatencyMs > 2000)) {
+        throw new Error('自动切换延迟阈值必须在 50–2000 ms 之间')
+      }
+      if (adv.autoSwitchSustainSec !== undefined && (adv.autoSwitchSustainSec < 5 || adv.autoSwitchSustainSec > 120)) {
+        throw new Error('自动切换持续时间必须在 5–120 秒之间')
+      }
+      if (adv.autoSwitchCooldownSec !== undefined && (adv.autoSwitchCooldownSec < 10 || adv.autoSwitchCooldownSec > 600)) {
+        throw new Error('自动切换冷却时间必须在 10–600 秒之间')
+      }
+      if (adv.autoSwitchMaxSwitches !== undefined && (adv.autoSwitchMaxSwitches < 1 || adv.autoSwitchMaxSwitches > 10)) {
+        throw new Error('自动切换次数必须在 1–10 次之间')
+      }
       this.mockSettings = {
         ...this.mockSettings,
         ...rest,
@@ -762,7 +795,19 @@ class MockBackend implements Backend {
   }
 
   async resetAdvancedSettings(): Promise<EngineSettings> {
-    this.mockSettings = { ...this.mockSettings, advanced: { ...ADVANCED_DEFAULTS, defaultCaptureMode: 'auto' as CaptureMode } }
+    this.mockSettings = {
+      ...this.mockSettings,
+      advanced: {
+        ...ADVANCED_DEFAULTS,
+        defaultCaptureMode: 'auto' as CaptureMode,
+        autoSwitchEnabled: false,
+        autoSwitchLossPct: 5,
+        autoSwitchLatencyMs: 200,
+        autoSwitchSustainSec: 15,
+        autoSwitchCooldownSec: 60,
+        autoSwitchMaxSwitches: 3
+      }
+    }
     return structuredClone(this.mockSettings)
   }
 

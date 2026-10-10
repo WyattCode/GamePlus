@@ -3,6 +3,7 @@ import type {
   AccelStatus,
   AutoAccelEvent,
   AutoStartState,
+  AutoSwitchEvent,
   CaptureMode,
   DiagnosticBundle,
   DiagnosticReport,
@@ -63,6 +64,7 @@ export class WebSocketBackend implements Backend {
   private readonly logCbs = new Set<(l: LogEntry) => void>()
   private readonly effectCbs = new Set<(r: EffectReport) => void>()
   private readonly autoAccelCbs = new Set<(e: AutoAccelEvent) => void>()
+  private readonly autoSwitchCbs = new Set<(e: AutoSwitchEvent) => void>()
   private lastStatus: AccelStatus | null = null
   private lastEffect: EffectReport | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -173,6 +175,9 @@ export class WebSocketBackend implements Backend {
       } else if (msg.event === 'auto.accel') {
         const e = msg.data as AutoAccelEvent
         this.autoAccelCbs.forEach((cb) => cb(e))
+      } else if (msg.event === 'autoSwitch') {
+        const e = msg.data as AutoSwitchEvent
+        this.autoSwitchCbs.forEach((cb) => cb(e))
       }
       return
     }
@@ -265,6 +270,13 @@ export class WebSocketBackend implements Backend {
     // Make sure we're connected so events start flowing even before the first RPC.
     this.ensure().catch(() => this.onDisconnected())
     return () => this.autoAccelCbs.delete(cb)
+  }
+
+  onAutoSwitch(cb: (e: AutoSwitchEvent) => void): () => void {
+    this.autoSwitchCbs.add(cb)
+    // Make sure we're connected so events start flowing even before the first RPC.
+    this.ensure().catch(() => this.onDisconnected())
+    return () => this.autoSwitchCbs.delete(cb)
   }
 
   addServerFromLink(link: string): Promise<Server[]> {

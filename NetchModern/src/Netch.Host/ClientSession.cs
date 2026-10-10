@@ -9,6 +9,7 @@ using Netch.Core.Models;
 using Netch.Core.Models.Games;
 using Netch.Core.Services;
 using Netch.Core.Services.AutoAccel;
+using Netch.Core.Services.AutoSwitch;
 
 namespace Netch.Host;
 
@@ -37,9 +38,11 @@ internal sealed class ClientSession
     private readonly IServerRepository _servers;
     private readonly EffectMonitor? _effect;
     private readonly AutoAccelHost? _autoAccel;
+    private readonly AutoSwitchHost? _autoSwitch;
     private readonly SemaphoreSlim _inFlight = new(MaxInFlight, MaxInFlight);
 
-    public ClientSession(WebSocket ws, RpcRouter router, IServiceProvider sp, AutoAccelHost? autoAccel = null)
+    public ClientSession(WebSocket ws, RpcRouter router, IServiceProvider sp,
+        AutoAccelHost? autoAccel = null, AutoSwitchHost? autoSwitch = null)
     {
         _ws = ws;
         _router = router;
@@ -49,6 +52,7 @@ internal sealed class ClientSession
         _servers = sp.GetRequiredService<IServerRepository>();
         _effect = sp.GetService<EffectMonitor>();
         _autoAccel = autoAccel;
+        _autoSwitch = autoSwitch;
     }
 
     public async Task RunAsync()
@@ -62,6 +66,8 @@ internal sealed class ClientSession
             _effect.Updated += OnEffectUpdated;
         if (_autoAccel != null)
             _autoAccel.Event += OnAutoAccel;
+        if (_autoSwitch != null)
+            _autoSwitch.Event += OnAutoSwitch;
 
         // Initial snapshot so the UI reflects current state on connect.
         Enqueue("accel.status", StatusDto());
@@ -81,6 +87,8 @@ internal sealed class ClientSession
                 _effect.Updated -= OnEffectUpdated;
             if (_autoAccel != null)
                 _autoAccel.Event -= OnAutoAccel;
+            if (_autoSwitch != null)
+                _autoSwitch.Event -= OnAutoSwitch;
             _out.Writer.TryComplete();
             cts.Cancel();
             try { await writer; } catch { /* ignore */ }
@@ -215,6 +223,17 @@ internal sealed class ClientSession
             kind = e.Kind,
             gameId = e.GameId,
             gameName = _router.GameNameOf(e.GameId),
+            message = e.Message
+        });
+
+    private void OnAutoSwitch(AutoSwitchEvent e) =>
+        Enqueue("autoSwitch", new
+        {
+            kind = e.Kind,
+            gameId = e.GameId,
+            fromNode = e.FromNode,
+            toNode = e.ToNode,
+            reason = e.Reason,
             message = e.Message
         });
 }

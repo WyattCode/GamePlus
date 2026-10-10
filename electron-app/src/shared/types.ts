@@ -128,6 +128,18 @@ export interface AdvancedSettings {
   localSocksPort: number
   /** Global default acceleration mode; per-game overrides take precedence. */
   defaultCaptureMode: CaptureMode
+  /** Master switch for automatic node switching on sustained bad quality. */
+  autoSwitchEnabled: boolean
+  /** Loss percentage threshold (1–50); loss >= this counts as a bad sample. */
+  autoSwitchLossPct: number
+  /** Latency threshold in ms (50–2000); latency >= this (or < 0 = timeout) counts as bad. */
+  autoSwitchLatencyMs: number
+  /** Sustain window in seconds (5–120); bad samples must span this long to trigger. */
+  autoSwitchSustainSec: number
+  /** Cooldown after a switch in seconds (10–600) before evaluating again. */
+  autoSwitchCooldownSec: number
+  /** Maximum switches per acceleration session (1–10). */
+  autoSwitchMaxSwitches: number
 }
 
 /** Engine-side settings persisted by the C# backend (subset of the full AppSettings). */
@@ -443,6 +455,19 @@ export interface AutoAccelEvent {
   gameId: string | null
   gameName: string
   message: string
+}
+
+/** Push event emitted when the auto node switcher reacts to sustained bad line quality. */
+export interface AutoSwitchEvent {
+  kind: 'switched' | 'failed' | 'exhausted'
+  gameId: string
+  /** Node display names/remarks; null when unknown. */
+  fromNode: string | null
+  toNode: string | null
+  /** Chinese description of the trigger, e.g. "丢包 8% ≥ 5%，持续 15 秒". */
+  reason: string
+  /** Extra failure detail for kind === 'failed'; null otherwise. */
+  message: string | null
 }
 
 /** State of the "launch at login" scheduled task, reported by the C# host. */

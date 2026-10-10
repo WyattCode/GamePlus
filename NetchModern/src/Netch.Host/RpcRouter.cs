@@ -11,6 +11,7 @@ using Netch.Core.Models.Servers;
 using Netch.Core.Models.Settings;
 using Netch.Core.Services;
 using Netch.Core.Services.AutoStart;
+using Netch.Core.Services.AutoSwitch;
 using Netch.Core.Services.Diagnostics;
 using Netch.Core.Services.History;
 using Netch.Core.Services.Import;
@@ -953,6 +954,100 @@ internal sealed class RpcRouter
     }
 
     /// <summary>
+    ///     Per-tick snapshot for the auto-switch host: the current game/node (with stable ids, same
+    ///     scheme as <see cref="Mapping.StatusDto" />), the latest measured quality and the current
+    ///     auto-switch options. Null unless we are actively accelerating. Read under the state lock.
+    /// </summary>
+    internal async Task<AutoSwitchSnapshot?> AutoSwitchSnapshotAsync(CancellationToken ct)
+    {
+        return await WithStateValue<AutoSwitchSnapshot?>(() =>
+        {
+            if (Accel.State != AccelerationState.Accelerating)
+                return null;
+            var game = Accel.CurrentGame;
+            var node = Accel.CurrentNode;
+            if (game is null || node is null)
+                return null;
+
+            var pool = Servers.Servers.ToList();
+            var map = ServerIds.Assign(pool);
+            var nodeId = map.TryGetValue(node, out var id) ? id : ServerIds.Fingerprint(node);
+            var st = Accel.Status;
+            var options = AutoSwitchOptions.FromSettings(SettingsSvc.Settings.Advanced);
+            return new AutoSwitchSnapshot(game.Id, nodeId,
+                string.IsNullOrWhiteSpace(node.Remark) ? node.Hostname : node.Remark,
+                st.Latency, st.Loss, options);
+        }, ct);
+    }
+
+    /// <summary>
+    ///     Switches acceleration to the next-ranked node for <paramref name="gameId" />, excluding the
+    ///     given node ids (current node + nodes already tried this session). Ranks exactly like
+    ///     <see cref="PickBestNodeAsync" /> but never pings. Returns the candidate's display name, or
+    ///     null when no candidate is left.
+    /// </summary>
+    internal async Task<string?> SwitchToNextNodeAsync(
+        string gameId, IReadOnlySet<string> excludeNodeIds, CancellationToken ct)
+    {
+        var game = await WithStateValue(
+            () => Games.Games.FirstOrDefault(x => x.Id == gameId)
+                  ?? throw new InvalidOperationException("游戏不存在"),
+            ct);
+
+        // Snapshot the pool + its stable ids under the lock (no pinging — reuse the last measurements).
+        var (pool, ids) = await WithStateValue(() =>
+        {
+            var list = Servers.Servers.ToList();
+            return (list, ServerIds.Assign(list));
+        }, ct);
+        if (pool.Count == 0)
+            return null;
+
+        // Same penalty/choice reads as PickBestNodeAsync — no network I/O inside this block.
+        var (penalty, choice) = await WithStateValue(() =>
+        {
+            var p = SettingsSvc.Settings.Advanced.RegionPenaltyMs;
+            var c = SettingsSvc.Settings.GameServerChoice.GetValueOrDefault(game.Id);
+            return (p, c);
+        }, ct);
+
+        var ranking = NodeRanker.Rank(game, pool, penalty, choice);
+
+        // The ranking orders tested (Delay >= 0) nodes first, so the first pass over it already prefers
+        // tested nodes; the second pass only falls back when nothing tested is left at all.
+        Server? candidate = null;
+        foreach (var c in ranking.Candidates)
+        {
+            if (c.Delay < 0)
+                continue;
+            if (ids.TryGetValue(c.Server, out var cid) && !excludeNodeIds.Contains(cid))
+            {
+                candidate = c.Server;
+                break;
+            }
+        }
+
+        if (candidate is null)
+        {
+            foreach (var c in ranking.Candidates)
+            {
+                if (ids.TryGetValue(c.Server, out var cid) && !excludeNodeIds.Contains(cid))
+                {
+                    candidate = c.Server;
+                    break;
+                }
+            }
+        }
+
+        if (candidate is null)
+            return null;
+
+        await StopAccelAsync(ct);
+        await StartAccelAsync(gameId, ids[candidate], ct);
+        return string.IsNullOrWhiteSpace(candidate.Remark) ? candidate.Hostname : candidate.Remark;
+    }
+
+    /// <summary>
     ///     Starts acceleration for an auto-acceleration launch edge, using the same code path as
     ///     accel.start with a null nodeId (smart routing).
     /// </summary>
@@ -1014,6 +1109,12 @@ internal sealed class RpcRouter
         int? regionPenalty = null;
         int? localPort = null;
         string? defaultCaptureMode = null;
+        bool? autoSwitchEnabled = null;
+        int? autoSwitchLossPct = null;
+        int? autoSwitchLatencyMs = null;
+        int? autoSwitchSustainSec = null;
+        int? autoSwitchCooldownSec = null;
+        int? autoSwitchMaxSwitches = null;
 
         if (JsonParams.HasProperty(adv, "tunDns"))
             tunDns = AdvancedSettingsValidator.ValidateDns(JsonParams.OptionalString(adv, "tunDns"));
@@ -1028,6 +1129,23 @@ internal sealed class RpcRouter
         if (JsonParams.HasProperty(adv, "defaultCaptureMode"))
             defaultCaptureMode = AdvancedSettingsValidator.ValidateCaptureMode(
                 JsonParams.OptionalString(adv, "defaultCaptureMode"));
+        if (JsonParams.HasProperty(adv, "autoSwitchEnabled"))
+            autoSwitchEnabled = JsonParams.OptionalBool(adv, "autoSwitchEnabled") ?? false;
+        if (JsonParams.HasProperty(adv, "autoSwitchLossPct"))
+            autoSwitchLossPct = AdvancedSettingsValidator.ValidateAutoSwitchLossPct(
+                JsonParams.OptionalInt(adv, "autoSwitchLossPct") ?? 0);
+        if (JsonParams.HasProperty(adv, "autoSwitchLatencyMs"))
+            autoSwitchLatencyMs = AdvancedSettingsValidator.ValidateAutoSwitchLatencyMs(
+                JsonParams.OptionalInt(adv, "autoSwitchLatencyMs") ?? 0);
+        if (JsonParams.HasProperty(adv, "autoSwitchSustainSec"))
+            autoSwitchSustainSec = AdvancedSettingsValidator.ValidateAutoSwitchSustainSec(
+                JsonParams.OptionalInt(adv, "autoSwitchSustainSec") ?? 0);
+        if (JsonParams.HasProperty(adv, "autoSwitchCooldownSec"))
+            autoSwitchCooldownSec = AdvancedSettingsValidator.ValidateAutoSwitchCooldownSec(
+                JsonParams.OptionalInt(adv, "autoSwitchCooldownSec") ?? 0);
+        if (JsonParams.HasProperty(adv, "autoSwitchMaxSwitches"))
+            autoSwitchMaxSwitches = AdvancedSettingsValidator.ValidateAutoSwitchMaxSwitches(
+                JsonParams.OptionalInt(adv, "autoSwitchMaxSwitches") ?? 0);
 
         // All fields validated — now apply.
         if (tunDns is not null)
@@ -1040,6 +1158,18 @@ internal sealed class RpcRouter
             s.Advanced.LocalSocksPort = lp;
         if (defaultCaptureMode is not null)
             s.Advanced.DefaultCaptureMode = defaultCaptureMode;
+        if (autoSwitchEnabled is { } enabled)
+            s.Advanced.AutoSwitchEnabled = enabled;
+        if (autoSwitchLossPct is { } lossPct)
+            s.Advanced.AutoSwitchLossPct = lossPct;
+        if (autoSwitchLatencyMs is { } latencyMs)
+            s.Advanced.AutoSwitchLatencyMs = latencyMs;
+        if (autoSwitchSustainSec is { } sustainSec)
+            s.Advanced.AutoSwitchSustainSec = sustainSec;
+        if (autoSwitchCooldownSec is { } cooldownSec)
+            s.Advanced.AutoSwitchCooldownSec = cooldownSec;
+        if (autoSwitchMaxSwitches is { } maxSwitches)
+            s.Advanced.AutoSwitchMaxSwitches = maxSwitches;
     }
 
     /// <summary>
@@ -1219,3 +1349,7 @@ internal sealed class RpcRouter
         return node;
     }
 }
+
+/// <summary>Per-tick snapshot for the auto-switch host, read under the state lock.</summary>
+internal sealed record AutoSwitchSnapshot(
+    string GameId, string NodeId, string NodeName, int Latency, double Loss, AutoSwitchOptions Options);

@@ -144,6 +144,46 @@ public static class AdvancedSettingsValidator
         return normalized;
     }
 
+    /// <summary>Validates the auto-switch loss threshold (1..50 %).</summary>
+    public static int ValidateAutoSwitchLossPct(int value)
+    {
+        if (value is < 1 or > 50)
+            throw new InvalidOperationException("自动切换丢包阈值必须在 1–50% 之间");
+        return value;
+    }
+
+    /// <summary>Validates the auto-switch latency threshold (50..2000 ms).</summary>
+    public static int ValidateAutoSwitchLatencyMs(int value)
+    {
+        if (value is < 50 or > 2000)
+            throw new InvalidOperationException("自动切换延迟阈值必须在 50–2000 ms 之间");
+        return value;
+    }
+
+    /// <summary>Validates the auto-switch sustain window (5..120 s).</summary>
+    public static int ValidateAutoSwitchSustainSec(int value)
+    {
+        if (value is < 5 or > 120)
+            throw new InvalidOperationException("自动切换持续窗口必须在 5–120 秒之间");
+        return value;
+    }
+
+    /// <summary>Validates the auto-switch cooldown (10..600 s).</summary>
+    public static int ValidateAutoSwitchCooldownSec(int value)
+    {
+        if (value is < 10 or > 600)
+            throw new InvalidOperationException("自动切换冷却时间必须在 10–600 秒之间");
+        return value;
+    }
+
+    /// <summary>Validates the maximum auto-switches per acceleration session (1..10).</summary>
+    public static int ValidateAutoSwitchMaxSwitches(int value)
+    {
+        if (value is < 1 or > 10)
+            throw new InvalidOperationException("自动切换次数必须在 1–10 次之间");
+        return value;
+    }
+
     /// <summary>Checks whether a TCP port on 127.0.0.1 is currently free (bind + release).</summary>
     public static bool IsPortFree(int port)
     {

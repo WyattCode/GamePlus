@@ -33,7 +33,8 @@ internal record SettingsDto(string Theme, string Language, bool MinimizeToTray, 
 internal record ExtraAppDto(string Name, string Process, string Mode, bool Enabled);
 
 internal record AdvancedSettingsDto(string TunDns, bool MeasureEffect, int RegionPenaltyMs, int LocalSocksPort,
-    string DefaultCaptureMode);
+    string DefaultCaptureMode, bool AutoSwitchEnabled, int AutoSwitchLossPct, int AutoSwitchLatencyMs,
+    int AutoSwitchSustainSec, int AutoSwitchCooldownSec, int AutoSwitchMaxSwitches);
 
 internal record EffectSnapshotDto(int Latency, double Loss, int Jitter, int Samples);
 
@@ -252,7 +253,9 @@ internal static class Mapping
     /// </summary>
     public static AdvancedSettingsDto ToAdvancedDto(Netch.Core.Models.Settings.AppSettings s) =>
         new(s.Dns.OtherDns, s.Advanced.MeasureEffect, s.Advanced.RegionPenaltyMs, s.Advanced.LocalSocksPort,
-            s.Advanced.DefaultCaptureMode);
+            s.Advanced.DefaultCaptureMode, s.Advanced.AutoSwitchEnabled, s.Advanced.AutoSwitchLossPct,
+            s.Advanced.AutoSwitchLatencyMs, s.Advanced.AutoSwitchSustainSec, s.Advanced.AutoSwitchCooldownSec,
+            s.Advanced.AutoSwitchMaxSwitches);
 
     public static ExtraAppDto ToDto(ExtraApp a) =>
         new(a.Name, a.Process, a.Mode == ExtraAppMode.Bypass ? "bypass" : "proxy", a.Enabled);

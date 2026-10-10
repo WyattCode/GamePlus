@@ -110,6 +110,11 @@ var autoAccel = new AutoAccelHost(router, log: services.GetRequiredService<ILogS
 using var autoAccelCts = new CancellationTokenSource();
 _ = autoAccel.RunAsync(autoAccelCts.Token);
 
+// Automatic node switching: sample the acceleration quality every second and switch nodes when it is
+// bad for a sustained window (feature is off by default; see AdvancedSettings).
+var autoSwitch = new AutoSwitchHost(router, services.GetRequiredService<ILogService>());
+_ = autoSwitch.RunAsync(autoAccelCts.Token);
+
 // Scheduled subscription refresh: check 60 s after startup, then every 10 minutes. Fire-and-forget like
 // the other background work; cancelled on shutdown via the same token as auto-acceleration.
 var subscriptionScheduler = new SubscriptionScheduler(router, services.GetRequiredService<ILogService>());
@@ -228,7 +233,7 @@ using var acceptCts = new CancellationTokenSource();
 try
 {
     await server.AcceptLoopAsync(
-        ws => new ClientSession(ws, router, services, autoAccel).RunAsync(),
+        ws => new ClientSession(ws, router, services, autoAccel, autoSwitch).RunAsync(),
         acceptCts.Token);
 }
 catch (Exception e)

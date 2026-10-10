@@ -22,6 +22,7 @@ const DEFAULT_TELEMETRY: TelemetryConfig = {
 const DEFAULTS: UiPrefs = {
   onboardingDone: false,
   startHidden: false,
+  migratedLoginItem: false,
   update: { ...DEFAULT_UPDATE },
   telemetry: { ...DEFAULT_TELEMETRY }
 }
@@ -58,6 +59,7 @@ function readLocal(): UiPrefs {
     return {
       onboardingDone: typeof parsed.onboardingDone === 'boolean' ? parsed.onboardingDone : false,
       startHidden: typeof parsed.startHidden === 'boolean' ? parsed.startHidden : false,
+      migratedLoginItem: typeof parsed.migratedLoginItem === 'boolean' ? parsed.migratedLoginItem : false,
       update: parseUpdate(parsed.update),
       telemetry: parseTelemetry(parsed.telemetry)
     }

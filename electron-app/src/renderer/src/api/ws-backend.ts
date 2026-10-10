@@ -1,6 +1,7 @@
 import type {
   AccelStatus,
   AutoAccelEvent,
+  AutoStartState,
   DiagnosticReport,
   EffectReport,
   EngineSettings,
@@ -335,5 +336,13 @@ export class WebSocketBackend implements Backend {
 
   updateRules(): Promise<RulesUpdateResult> {
     return this.call('rules.update')
+  }
+
+  getAutoStart(): Promise<AutoStartState> {
+    return this.call('autostart.get')
+  }
+
+  setAutoStart(enabled: boolean): Promise<AutoStartState> {
+    return this.call('autostart.set', { enabled })
   }
 }

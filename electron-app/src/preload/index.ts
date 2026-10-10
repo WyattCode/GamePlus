@@ -1,7 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   CrashFileInfo,
-  LoginItemState,
   TelemetryConfig,
   TelemetryEvent,
   TrayAction,
@@ -46,9 +45,6 @@ const api = {
     set: (patch: Partial<UiPrefs>): Promise<UiPrefs> => ipcRenderer.invoke('prefs:set', patch)
   },
   app: {
-    getLoginItem: (): Promise<LoginItemState> => ipcRenderer.invoke('app:get-login-item'),
-    setLoginItem: (openAtLogin: boolean): Promise<LoginItemState> =>
-      ipcRenderer.invoke('app:set-login-item', openAtLogin),
     notify: (title: string, body: string): Promise<void> =>
       ipcRenderer.invoke('app:notify', title, body)
   },

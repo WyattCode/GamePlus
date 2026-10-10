@@ -12,7 +12,7 @@ import { useOnboardingStore } from '@/stores/onboarding'
 import { useToastStore, errorMessage } from '@/stores/toast'
 import { backend } from '@/api/backend'
 import { getPrefs, setPrefs } from '@/api/prefs'
-import type { EngineSettings, LoginItemState } from '@shared/types'
+import type { AutoStartState, EngineSettings } from '@shared/types'
 
 const app = useAppStore()
 const diagnostics = useDiagnosticsStore()
@@ -110,8 +110,7 @@ async function checkRules(): Promise<void> {
 }
 
 // --- 启动与托盘 ---
-const loginItem = ref<LoginItemState>({ openAtLogin: false })
-const loginUnsupported = ref(false)
+const autoStart = ref<AutoStartState>({ enabled: false, supported: true, reason: null })
 const startHidden = ref(false)
 
 onMounted(async () => {
@@ -122,30 +121,25 @@ onMounted(async () => {
     // ignore
   }
   try {
-    const state = await window.gameplus?.app?.getLoginItem?.()
-    if (state) {
-      loginItem.value = state
-      loginUnsupported.value = !!state.unsupported
-    } else {
-      loginUnsupported.value = true
-    }
+    autoStart.value = await backend.getAutoStart()
   } catch {
-    loginUnsupported.value = true
+    autoStart.value = { enabled: false, supported: false, reason: '无法连接后台服务' }
   }
 })
 
-async function toggleLoginItem(openAtLogin: boolean): Promise<void> {
+async function toggleAutoStart(enabled: boolean): Promise<void> {
   try {
-    const state = await window.gameplus?.app?.setLoginItem?.(openAtLogin)
-    if (state) {
-      loginItem.value = state
-      loginUnsupported.value = !!state.unsupported
-    }
-    if (loginUnsupported.value) {
-      toast.info('当前版本不支持开机自启（仅安装版可用）')
+    autoStart.value = await backend.setAutoStart(enabled)
+    if (!autoStart.value.supported && autoStart.value.reason) {
+      toast.info(autoStart.value.reason)
     }
   } catch (e) {
     toast.error('设置失败：' + errorMessage(e))
+    try {
+      autoStart.value = await backend.getAutoStart()
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -215,14 +209,19 @@ async function toggleStartHidden(v: boolean): Promise<void> {
       <div class="setting">
         <div>
           <div class="s-name">开机自动启动</div>
-          <div class="muted small">由于加速需要管理员权限，开机启动时 Windows 可能会弹出权限确认。</div>
+          <div class="muted small">
+            通过 Windows 计划任务以管理员权限启动，登录时不再弹出权限确认。
+          </div>
+          <div v-if="!autoStart.supported && autoStart.reason" class="muted small">
+            {{ autoStart.reason }}
+          </div>
         </div>
-        <label class="switch" :class="{ disabled: loginUnsupported }">
+        <label class="switch" :class="{ disabled: !autoStart.supported }">
           <input
             type="checkbox"
-            :checked="loginItem.openAtLogin"
-            :disabled="loginUnsupported"
-            @change="toggleLoginItem(($event.target as HTMLInputElement).checked)"
+            :checked="autoStart.enabled"
+            :disabled="!autoStart.supported"
+            @change="toggleAutoStart(($event.target as HTMLInputElement).checked)"
           />
           <span class="track"><span class="thumb" /></span>
         </label>
@@ -232,11 +231,11 @@ async function toggleStartHidden(v: boolean): Promise<void> {
           <div class="s-name">开机启动时最小化到托盘</div>
           <div class="muted small">开机启动后不显示主窗口，仅在托盘运行</div>
         </div>
-        <label class="switch" :class="{ disabled: !loginItem.openAtLogin }">
+        <label class="switch" :class="{ disabled: !autoStart.enabled }">
           <input
             type="checkbox"
             :checked="startHidden"
-            :disabled="!loginItem.openAtLogin"
+            :disabled="!autoStart.enabled"
             @change="toggleStartHidden(($event.target as HTMLInputElement).checked)"
           />
           <span class="track"><span class="thumb" /></span>

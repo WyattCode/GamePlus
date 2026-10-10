@@ -1,10 +1,12 @@
 using System.Net.Http;
+using System.Security.Principal;
 using Microsoft.Extensions.DependencyInjection;
 using Netch.Core;
 using Netch.Core.Abstractions;
 using Netch.Core.Controllers;
 using Netch.Core.Models.Servers;
 using Netch.Core.Services;
+using Netch.Core.Services.AutoStart;
 using Netch.Core.Services.Diagnostics;
 using Netch.Core.Services.Library;
 using Netch.Core.Services.Rules;
@@ -99,6 +101,47 @@ internal static class Composition
                 options.Url,
                 options.Enabled));
 
+        // Launch-at-login scheduled task. The host runs elevated, so it can create a
+        // highest-privileges task without a UAC prompt at each logon. Windows-only APIs are guarded
+        // so the host still builds/runs on other platforms (where the feature reports unsupported).
+        services.AddSingleton(_ => new AutoStartService(
+            new SystemProcessRunner(),
+            IsElevated,
+            () => AutoStartTask.ResolveAppExe(AppContext.BaseDirectory, File.Exists),
+            CurrentUserName,
+            Path.GetTempPath()));
+
         return services.BuildServiceProvider();
+    }
+
+    /// <summary>True when the current process runs with administrator rights (false on non-Windows).</summary>
+    private static bool IsElevated()
+    {
+        if (!OperatingSystem.IsWindows())
+            return false;
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Current user name in DOMAIN\user form on Windows, Environment.UserName elsewhere.</summary>
+    private static string CurrentUserName()
+    {
+        if (!OperatingSystem.IsWindows())
+            return Environment.UserName;
+        try
+        {
+            return WindowsIdentity.GetCurrent().Name;
+        }
+        catch
+        {
+            return Environment.UserName;
+        }
     }
 }

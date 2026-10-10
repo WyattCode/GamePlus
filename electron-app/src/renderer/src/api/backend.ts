@@ -2,6 +2,7 @@ import type {
   AccelStatus,
   AdvancedSettings,
   AutoAccelEvent,
+  AutoStartState,
   DetectedGame,
   DiagnosticReport,
   EffectReport,
@@ -71,6 +72,8 @@ export interface Backend {
   addDetectedGame(name: string, executables: string[], source?: string): Promise<Game[]>
   rulesStatus(): Promise<RulesStatus>
   updateRules(): Promise<RulesUpdateResult>
+  getAutoStart(): Promise<AutoStartState>
+  setAutoStart(enabled: boolean): Promise<AutoStartState>
 }
 
 // Re-exported so callers can open the connection gate without importing the transport directly.
@@ -417,6 +420,8 @@ class MockBackend implements Backend {
     advanced: { ...ADVANCED_DEFAULTS }
   }
 
+  private mockAutoStart: AutoStartState = { enabled: false, supported: true, reason: null }
+
   async addServerFromLink(link: string): Promise<Server[]> {
     this.mockServers.push({
       id: crypto.randomUUID(),
@@ -685,6 +690,15 @@ class MockBackend implements Backend {
       version: this.mockRules.version,
       games: structuredClone(this.mockGames)
     }
+  }
+
+  async getAutoStart(): Promise<AutoStartState> {
+    return { ...this.mockAutoStart }
+  }
+
+  async setAutoStart(enabled: boolean): Promise<AutoStartState> {
+    this.mockAutoStart = { ...this.mockAutoStart, enabled }
+    return { ...this.mockAutoStart }
   }
 
   async runDiagnostics(opts: {

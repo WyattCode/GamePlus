@@ -221,26 +221,6 @@ function registerWindowControls(): void {
   ipcMain.handle('prefs:get', () => getPrefs())
   ipcMain.handle('prefs:set', (_e, patch) => setPrefs(patch ?? {}))
 
-  // --- Login item (auto-start at login) ---
-  ipcMain.handle('app:get-login-item', () => {
-    if (!app.isPackaged) return { openAtLogin: false, unsupported: true }
-    try {
-      return { openAtLogin: app.getLoginItemSettings().openAtLogin }
-    } catch {
-      return { openAtLogin: false, unsupported: true }
-    }
-  })
-  ipcMain.handle('app:set-login-item', (_e, openAtLogin: unknown) => {
-    if (typeof openAtLogin !== 'boolean') return { openAtLogin: false, unsupported: true }
-    if (!app.isPackaged) return { openAtLogin: false, unsupported: true }
-    try {
-      app.setLoginItemSettings({ openAtLogin, args: ['--hidden'] })
-      return { openAtLogin: app.getLoginItemSettings().openAtLogin }
-    } catch {
-      return { openAtLogin: false, unsupported: true }
-    }
-  })
-
   // --- Desktop notifications (only when the window isn't visible/focused) ---
   ipcMain.handle('app:notify', (_e, title: unknown, body: unknown) => {
     if (typeof title !== 'string' || typeof body !== 'string') return
@@ -334,6 +314,11 @@ if (!gotSingleInstanceLock) {
     // Telemetry: records app_start when enabled and schedules periodic flushes.
     startTelemetry()
 
+    // Migrate the old Electron login-item to the scheduled-task mechanism. The old mechanism would
+    // double-launch (and prompt UAC) now that the task also starts the app, so turn it off once and
+    // let the renderer offer to re-enable via the task.
+    migrateLoginItem()
+
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
@@ -361,4 +346,22 @@ if (!gotSingleInstanceLock) {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit()
   })
+}
+
+/**
+ * One-time migration away from the Electron login-item. Only runs in a packaged build (dev builds
+ * never registered a login item). If the old mechanism was enabled, disable it and flag the prefs so
+ * the renderer can offer to re-enable auto-start via the scheduled task.
+ */
+function migrateLoginItem(): void {
+  if (!app.isPackaged) return
+  if (getPrefs().migratedLoginItem) return
+  try {
+    if (app.getLoginItemSettings().openAtLogin) {
+      app.setLoginItemSettings({ openAtLogin: false })
+      setPrefs({ migratedLoginItem: true })
+    }
+  } catch {
+    // ignore — nothing to migrate
+  }
 }

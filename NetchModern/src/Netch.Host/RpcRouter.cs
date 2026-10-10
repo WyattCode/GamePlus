@@ -6,6 +6,7 @@ using Netch.Core.Models.Games;
 using Netch.Core.Models.Servers;
 using Netch.Core.Models.Settings;
 using Netch.Core.Services;
+using Netch.Core.Services.AutoStart;
 using Netch.Core.Services.Diagnostics;
 using Netch.Core.Services.Library;
 using Netch.Core.Services.Rules;
@@ -46,6 +47,7 @@ internal sealed class RpcRouter
     private DiagnosticsService Diagnostics => _sp.GetRequiredService<DiagnosticsService>();
     private GameLibraryScanner LibraryScanner => _sp.GetRequiredService<GameLibraryScanner>();
     private GameRulesService Rules => _sp.GetRequiredService<GameRulesService>();
+    private AutoStartService AutoStart => _sp.GetRequiredService<AutoStartService>();
 
     /// <summary>Current acceleration state (used by the auto-acceleration policy).</summary>
     internal AccelerationState CurrentAccelState => Accel.State;
@@ -488,6 +490,20 @@ internal sealed class RpcRouter
                     url = result.Url,
                     error = result.Error
                 };
+            }
+
+            case "autostart.get":
+            {
+                // No shared state — schtasks.exe is the source of truth, so no lock.
+                var state = await AutoStart.GetAsync(ct);
+                return new { enabled = state.Enabled, supported = state.Supported, reason = state.Reason };
+            }
+
+            case "autostart.set":
+            {
+                var enabled = JsonParams.OptionalBool(@params, "enabled") ?? false;
+                var state = await AutoStart.SetAsync(enabled, ct);
+                return new { enabled = state.Enabled, supported = state.Supported, reason = state.Reason };
             }
 
             default:

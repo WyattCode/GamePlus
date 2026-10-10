@@ -24,6 +24,7 @@ const DEFAULT_TELEMETRY: TelemetryConfig = {
 const DEFAULTS: UiPrefs = {
   onboardingDone: false,
   startHidden: false,
+  migratedLoginItem: false,
   update: { ...DEFAULT_UPDATE },
   telemetry: { ...DEFAULT_TELEMETRY }
 }
@@ -74,6 +75,7 @@ function isTelemetryConfig(v: unknown): boolean {
 const VALIDATORS: { [K in keyof UiPrefs]: Validator } = {
   onboardingDone: (v) => typeof v === 'boolean',
   startHidden: (v) => typeof v === 'boolean',
+  migratedLoginItem: (v) => typeof v === 'boolean',
   update: isUpdateConfig,
   telemetry: isTelemetryConfig
 }

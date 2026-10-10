@@ -337,6 +337,8 @@ export interface UiPrefs {
   onboardingDone: boolean
   /** True when the app was launched at login and should start minimized to the tray. */
   startHidden: boolean
+  /** True once the old Electron login-item has been migrated to the scheduled task. */
+  migratedLoginItem: boolean
   /** Client auto-update configuration. */
   update: UpdateConfig
   /** Telemetry configuration. */
@@ -407,11 +409,13 @@ export interface AutoAccelEvent {
   message: string
 }
 
-/** Login-item state reported by the Electron main process. */
-export interface LoginItemState {
-  openAtLogin: boolean
-  /** True when the platform/build does not support login items (e.g. dev builds). */
-  unsupported?: boolean
+/** State of the "launch at login" scheduled task, reported by the C# host. */
+export interface AutoStartState {
+  enabled: boolean
+  /** False when the app is not running from an installed layout. */
+  supported: boolean
+  /** Short user-facing reason when unsupported (or null). */
+  reason: string | null
 }
 
 /** Tray status snapshot pushed from the renderer to the main process. */

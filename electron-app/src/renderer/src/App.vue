@@ -13,6 +13,7 @@ import { useOnboardingStore } from './stores/onboarding'
 import { useUpdateStore } from './stores/update'
 import { useToastStore, errorMessage } from './stores/toast'
 import { allowBackendConnection } from './api/backend'
+import { getPrefs, setPrefs } from './api/prefs'
 
 const app = useAppStore()
 const auto = useAutoStore()
@@ -34,6 +35,20 @@ function startApp(): void {
   auto.start()
   update.init()
   library.load().catch((e) => toast.error('加载数据失败：' + errorMessage(e)))
+  void showLoginItemMigrationToast()
+}
+
+// The old Electron login-item was migrated to a scheduled task by the main process. Tell the user
+// once, then clear the flag so the toast doesn't reappear.
+async function showLoginItemMigrationToast(): Promise<void> {
+  try {
+    const prefs = await getPrefs()
+    if (!prefs.migratedLoginItem) return
+    toast.info('开机启动已改为计划任务方式，请在设置中重新开启')
+    await setPrefs({ migratedLoginItem: false })
+  } catch {
+    // ignore
+  }
 }
 
 onMounted(async () => {

@@ -60,6 +60,10 @@ export const zhCN = {
   'settings.autoStart.desc': '通过 Windows 计划任务以管理员权限启动，登录时不再弹出权限确认。',
   'settings.startHidden.name': '开机启动时最小化到托盘',
   'settings.startHidden.desc': '开机启动后不显示主窗口，仅在托盘运行',
+  'settings.launchNode.name': '加速并启动时的节点',
+  'settings.launchNode.desc': '「加速并启动」按钮和桌面快捷方式使用哪个节点。没有手动选过节点时总是智能选节点。',
+  'settings.launchNode.keep': '保留当前选择',
+  'settings.launchNode.smart': '始终使用智能选节点',
   'settings.autoAccelerate.name': '游戏启动时自动加速（总开关）',
   'settings.autoAccelerate.desc': '关闭后所有游戏的自动加速都不会生效',
 

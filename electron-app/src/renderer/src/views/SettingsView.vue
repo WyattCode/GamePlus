@@ -15,7 +15,7 @@ import { backend } from '@/api/backend'
 import { getPrefs, setPrefs } from '@/api/prefs'
 import { DEFAULT_RELEASE_CHANNEL } from '@shared/release-channel'
 import { useI18n, type Locale } from '@/i18n'
-import type { AutoStartState, EngineSettings } from '@shared/types'
+import type { AutoStartState, EngineSettings, LaunchNodeMode } from '@shared/types'
 
 const app = useAppStore()
 const diagnostics = useDiagnosticsStore()
@@ -132,11 +132,13 @@ async function checkRules(): Promise<void> {
 // --- 启动与托盘 ---
 const autoStart = ref<AutoStartState>({ enabled: false, supported: true, reason: null })
 const startHidden = ref(false)
+const launchNodeMode = ref<LaunchNodeMode>('keep')
 
 onMounted(async () => {
   try {
     const p = await getPrefs()
     startHidden.value = p.startHidden
+    launchNodeMode.value = p.launchNodeMode === 'smart' ? 'smart' : 'keep'
   } catch {
     // ignore
   }
@@ -167,6 +169,18 @@ async function toggleStartHidden(v: boolean): Promise<void> {
   startHidden.value = v
   try {
     await setPrefs({ startHidden: v })
+  } catch (e) {
+    toast.error(t('toast.saveFailed', { error: errorMessage(e) }))
+  }
+}
+
+async function onLaunchNodeModeChange(e: Event): Promise<void> {
+  const raw = (e.target as HTMLSelectElement).value
+  if (raw !== 'keep' && raw !== 'smart') return
+  const v = raw
+  launchNodeMode.value = v
+  try {
+    await setPrefs({ launchNodeMode: v })
   } catch (e) {
     toast.error(t('toast.saveFailed', { error: errorMessage(e) }))
   }
@@ -289,6 +303,16 @@ async function toggleStartHidden(v: boolean): Promise<void> {
           />
           <span class="track"><span class="thumb" /></span>
         </label>
+      </div>
+      <div class="setting">
+        <div>
+          <div class="s-name">{{ t('settings.launchNode.name') }}</div>
+          <div class="muted small">{{ t('settings.launchNode.desc') }}</div>
+        </div>
+        <select class="input" :value="launchNodeMode" @change="onLaunchNodeModeChange">
+          <option value="keep">{{ t('settings.launchNode.keep') }}</option>
+          <option value="smart">{{ t('settings.launchNode.smart') }}</option>
+        </select>
       </div>
     </div>
 

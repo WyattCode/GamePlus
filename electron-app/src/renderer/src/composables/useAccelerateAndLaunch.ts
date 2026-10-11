@@ -7,6 +7,8 @@ import { useAccelStore } from '@/stores/accel'
 import { useLibraryStore } from '@/stores/library'
 import { errorMessage, useToastStore } from '@/stores/toast'
 import { launchGame } from '@/utils/launchApi'
+import { getPrefs } from '@/api/prefs'
+import { useSmartNodeForLaunch } from '@/utils/launchNode'
 
 /** How long to wait for the accelerating state before giving up (ms). */
 const ACCEL_WAIT_MS = 30_000
@@ -70,8 +72,10 @@ export function useAccelerateAndLaunch() {
   }
 
   /**
-   * Starts acceleration for the game (smart node, like the normal start), waits until the state is
-   * 'accelerating' (30 s timeout → error toast), then asks the main process to launch the target.
+   * Starts acceleration for the game, waits until the state is 'accelerating' (30 s timeout →
+   * error toast), then asks the main process to launch the target. The node is chosen by
+   * launchNodeMode: 'smart' uses the smart node, 'keep' (default) keeps a manually picked node
+   * when one is actually selected, otherwise falls back to the smart node.
    * Without a configured target: error toast + open the launch-target dialog.
    */
   async function accelerateAndLaunch(gameId?: string): Promise<void> {
@@ -91,10 +95,16 @@ export function useAccelerateAndLaunch() {
       if (router.currentRoute.value.path !== '/accelerate') void router.push('/accelerate')
       return
     }
+    const prefs = await getPrefs().catch(() => null)
+    const useSmartNode = useSmartNodeForLaunch(
+      prefs?.launchNodeMode,
+      accel.smartNode,
+      accel.selectedNode !== null
+    )
     try {
-      // Already accelerating this very game → just launch; otherwise start (smart node).
+      // Already accelerating this very game → just launch; otherwise start.
       if (!(accel.status.state === 'accelerating' && accel.status.gameId === game.id)) {
-        accel.smartNode = true
+        if (useSmartNode) accel.smartNode = true
         await accel.start()
       }
     } catch (e) {

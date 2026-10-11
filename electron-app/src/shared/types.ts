@@ -446,6 +446,12 @@ export interface CrashFileInfo {
   mtime: number
 }
 
+/**
+ * 「加速并启动时的节点」: 'keep' keeps the user's manual node choice (smart node when there is none),
+ * 'smart' always uses smart node selection.
+ */
+export type LaunchNodeMode = 'keep' | 'smart'
+
 /** UI preferences persisted by the Electron main process (userData/prefs.json). */
 export interface UiPrefs {
   /** True once the user has completed (or skipped) the first-run onboarding. */
@@ -458,6 +464,8 @@ export interface UiPrefs {
   update: UpdateConfig
   /** Telemetry configuration. */
   telemetry: TelemetryConfig
+  /** Node used by 「加速并启动」 (button and --launch/desktop shortcut): keep the manual choice or always smart. */
+  launchNodeMode: LaunchNodeMode
 }
 
 /** One game found by scanning the local machine's launchers/registries. */

@@ -23,6 +23,7 @@ const DEFAULTS: UiPrefs = {
   onboardingDone: false,
   startHidden: false,
   migratedLoginItem: false,
+  launchNodeMode: 'keep',
   update: { ...DEFAULT_UPDATE },
   telemetry: { ...DEFAULT_TELEMETRY }
 }
@@ -60,6 +61,7 @@ function readLocal(): UiPrefs {
       onboardingDone: typeof parsed.onboardingDone === 'boolean' ? parsed.onboardingDone : false,
       startHidden: typeof parsed.startHidden === 'boolean' ? parsed.startHidden : false,
       migratedLoginItem: typeof parsed.migratedLoginItem === 'boolean' ? parsed.migratedLoginItem : false,
+      launchNodeMode: parsed.launchNodeMode === 'smart' ? 'smart' : 'keep',
       update: parseUpdate(parsed.update),
       telemetry: parseTelemetry(parsed.telemetry)
     }

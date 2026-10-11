@@ -63,6 +63,11 @@ export const en: Partial<Record<MessageKey, string>> = {
     'Starts via a Windows scheduled task with administrator rights, so no permission prompt appears at sign-in.',
   'settings.startHidden.name': 'Start minimized to tray',
   'settings.startHidden.desc': 'Do not show the main window on launch; run in the tray only',
+  'settings.launchNode.name': 'Node for "Accelerate & launch"',
+  'settings.launchNode.desc':
+    'Which node the Accelerate & launch button and desktop shortcuts use. Smart node is used when no node was picked manually.',
+  'settings.launchNode.keep': 'Keep current choice',
+  'settings.launchNode.smart': 'Always use smart node',
   'settings.autoAccelerate.name': 'Auto-boost when a game starts (master switch)',
   'settings.autoAccelerate.desc': 'When off, auto-boost is disabled for all games',
 

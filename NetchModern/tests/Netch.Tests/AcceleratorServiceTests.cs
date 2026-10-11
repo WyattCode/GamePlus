@@ -80,16 +80,24 @@ public class AcceleratorServiceTests
     {
         private readonly bool _failProcess;
         private readonly bool _failTun;
-        public FakeModeControllerFactory(bool failProcess = false, bool failTun = false)
+        private readonly bool _processAvailable;
+        public FakeModeControllerFactory(bool failProcess = false, bool failTun = false, bool processAvailable = true)
         {
             _failProcess = failProcess;
             _failTun = failTun;
+            _processAvailable = processAvailable;
         }
 
         public FakeModeController? Last { get; private set; }
 
+        /// <summary>Every mode controller type that was created, in creation order.</summary>
+        public List<ModeType> Created { get; } = new();
+
+        public bool IsAvailable(ModeType type) => type != ModeType.ProcessMode || _processAvailable;
+
         public IModeController Create(ModeType type)
         {
+            Created.Add(type);
             var fail = type == ModeType.ProcessMode ? _failProcess : _failTun;
             Last = new FakeModeController(type, fail);
             return Last;
@@ -354,6 +362,109 @@ public class AcceleratorServiceTests
         Assert.False(proxy.IsEnabled);
         // No fallback to TUN or system proxy.
         Assert.Equal("", accel.Status.CaptureMode ?? "");
+    }
+
+    [Fact]
+    public async Task StartAsync_ForcedProcess_WhenNetFilterMissing_ThrowsBeforeSideEffects()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(processAvailable: false);
+        var accel = MakeAccelerator(controller, proxy, modeFactory, _ => "process");
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" },
+            ProxyIps = new List<string> { "1.2.3.4" }
+        };
+        var server = MakeServer();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => accel.StartAsync(game, server));
+
+        Assert.Contains("进程模式暂不可用：未包含 NetFilter 组件", ex.Message);
+        // No side effects: the node controller never started, the proxy stayed off, and no mode
+        // controller was ever created.
+        Assert.Equal(0, controller.StartCalls);
+        Assert.False(proxy.IsEnabled);
+        Assert.Empty(modeFactory.Created);
+        Assert.Equal(AccelerationState.Idle, accel.State);
+    }
+
+    [Fact]
+    public async Task StartAsync_Auto_WhenNetFilterMissing_WithIps_UsesTunAndSkipsProcessCapture()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(processAvailable: false);
+        var accel = MakeAccelerator(controller, proxy, modeFactory);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" },
+            ProxyIps = new List<string> { "1.2.3.4" }
+        };
+        var server = MakeServer();
+
+        await accel.StartAsync(game, server);
+
+        Assert.Equal(AccelerationState.Accelerating, accel.State);
+        Assert.Equal("tun", accel.Status.CaptureMode);
+        // Process capture was skipped entirely: no driver load attempt, no LastProcessCaptureError.
+        Assert.DoesNotContain(ModeType.ProcessMode, modeFactory.Created);
+        Assert.Null(accel.LastProcessCaptureError);
+        Assert.False(proxy.IsEnabled);
+    }
+
+    [Fact]
+    public async Task StartAsync_Auto_WhenNetFilterMissing_ProcessOnlyGame_ThrowsAndCleansUp()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(processAvailable: false);
+        var accel = MakeAccelerator(controller, proxy, modeFactory);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" }
+        };
+        var server = MakeServer();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => accel.StartAsync(game, server));
+
+        Assert.Contains("只有进程规则", ex.Message);
+        Assert.Equal(0, controller.StartCalls);
+        Assert.False(proxy.IsEnabled);
+        Assert.Equal(AccelerationState.Idle, accel.State);
+    }
+
+    [Fact]
+    public async Task StartAsync_Auto_WhenNetFilterMissing_WithDomains_UsesSystemProxy()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(processAvailable: false);
+        var accel = MakeAccelerator(controller, proxy, modeFactory);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" },
+            ProxyDomains = new List<string> { "game.example.com" }
+        };
+        var server = MakeServer();
+
+        await accel.StartAsync(game, server);
+
+        Assert.Equal(AccelerationState.Accelerating, accel.State);
+        Assert.Equal("proxy", accel.Status.CaptureMode);
+        Assert.True(proxy.IsEnabled);
+        Assert.Equal("127.0.0.1", proxy.Host);
+        Assert.Equal(controller.HttpPort, proxy.Port);
+        // No capture driver was ever created.
+        Assert.Empty(modeFactory.Created);
     }
 
     [Fact]

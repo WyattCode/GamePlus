@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.RegularExpressions;
 using Netch.Core.Models.Servers;
+using Netch.Core.Services;
 
 namespace Netch.Core.Services.Diagnostics;
 
@@ -109,6 +110,18 @@ public sealed class DiagnosticsService
         }
     }
 
+    /// <summary>
+    ///     NetFilter files (deliberately not shipped — commercial licence) that are missing from
+    ///     <c>&lt;baseDirectory&gt;\bin</c>.
+    /// </summary>
+    private string[] MissingNetfilterFiles()
+    {
+        var bin = Path.Combine(_env.BaseDirectory, "bin");
+        return ProcessModeSupport.RequiredFiles
+            .Where(f => !_env.FileExists(Path.Combine(bin, f)))
+            .ToArray();
+    }
+
     private DiagnosticItem CheckCore()
     {
         var bin = Path.Combine(_env.BaseDirectory, "bin");
@@ -135,13 +148,11 @@ public sealed class DiagnosticsService
 
     private DiagnosticItem CheckNetfilter()
     {
-        var bin = Path.Combine(_env.BaseDirectory, "bin");
-        var bundled = new[] { "Redirector.bin", "nfapi.dll", "nfdriver.sys" };
-        var missing = bundled.Where(f => !_env.FileExists(Path.Combine(bin, f))).ToArray();
+        var missing = MissingNetfilterFiles();
 
         if (missing.Length > 0)
-            return new DiagnosticItem("netfilter", "进程模式驱动", DiagnosticStatus.Warning,
-                "未附带进程模式驱动，将自动改用 TUN 模式", null, null);
+            return new DiagnosticItem("netfilter", "进程模式驱动", DiagnosticStatus.Skipped,
+                $"{ProcessModeSupport.UnavailableMessage}，「自动」模式会改用 TUN 或系统代理", null, null);
 
         if (!_env.IsAdministrator())
             return new DiagnosticItem("netfilter", "进程模式驱动", DiagnosticStatus.Skipped,
@@ -231,6 +242,10 @@ public sealed class DiagnosticsService
     {
         const string suggestion =
             "netfilter 驱动可能被驱动签名强制、Windows「内存完整性」或安全软件拦截。建议在加速页把加速模式改为「TUN 模式」（WinTUN 为微软签名驱动），或以管理员身份运行；若开启了内存完整性，可在 Windows 安全中心 → 设备安全性 → 内核隔离 中关闭后重启再试。";
+
+        if (MissingNetfilterFiles().Length > 0)
+            return new DiagnosticItem("netfilterLoad", "进程模式驱动加载", DiagnosticStatus.Skipped,
+                "未包含 NetFilter 组件，无需检查进程模式驱动", null, null);
 
         if (!string.IsNullOrWhiteSpace(ctx.LastProcessCaptureError))
             return new DiagnosticItem("netfilterLoad", "进程模式驱动加载", DiagnosticStatus.Error,

@@ -39,7 +39,10 @@ internal record ExtraAppDto(string Name, string Process, string Mode, bool Enabl
 
 internal record AdvancedSettingsDto(string TunDns, bool MeasureEffect, int RegionPenaltyMs, int LocalSocksPort,
     string DefaultCaptureMode, bool AutoSwitchEnabled, int AutoSwitchLossPct, int AutoSwitchLatencyMs,
-    int AutoSwitchSustainSec, int AutoSwitchCooldownSec, int AutoSwitchMaxSwitches);
+    int AutoSwitchSustainSec, int AutoSwitchCooldownSec, int AutoSwitchMaxSwitches,
+    // Read-only capability flag for the UI: whether process mode (netfilter2 / Redirector) is usable
+    // in this install. Not a user setting — the UI must not send it back.
+    bool ProcessModeAvailable);
 
 /// <summary>LAN-share settings as seen by the UI. The password is NEVER returned — only <c>HasPassword</c>.</summary>
 internal record LanShareDto(bool Enabled, string BindAddress, int HttpPort, int SocksPort,
@@ -115,12 +118,15 @@ internal static class Mapping
     ///     (null → no override). <paramref name="downloadViaProxy" /> maps game ids to their
     ///     「游戏下载走代理」 toggle (null → false for every game). <paramref name="launchTargets" />
     ///     maps game ids to their 「加速并启动」 target (null → no target).
+    ///     <paramref name="processModeAvailable" /> gates the "process" entry in <c>AvailableModes</c>
+    ///     (process mode needs NetFilter files that may deliberately not be shipped).
     /// </summary>
     public static GameDto ToDto(Game g, IReadOnlyCollection<string>? autoAccelerateIds,
         IReadOnlyDictionary<string, string>? serverChoices,
         IReadOnlyDictionary<string, string>? captureModes,
         IReadOnlyDictionary<string, bool>? downloadViaProxy = null,
-        IReadOnlyDictionary<string, string>? launchTargets = null)
+        IReadOnlyDictionary<string, string>? launchTargets = null,
+        bool processModeAvailable = true)
     {
         var hasChoice = GameRegionPreference.HasServerChoice(g);
         string? choice = null;
@@ -141,7 +147,7 @@ internal static class Mapping
             launchTarget = lt;
 
         var available = new List<string>();
-        if (g.ProxyProcesses.Count > 0) available.Add("process");
+        if (g.ProxyProcesses.Count > 0 && processModeAvailable) available.Add("process");
         if (g.ProxyIps.Count > 0) available.Add("tun");
         if (g.ProxyDomains.Count > 0) available.Add("proxy");
 
@@ -287,7 +293,7 @@ internal static class Mapping
         new(s.Dns.OtherDns, s.Advanced.MeasureEffect, s.Advanced.RegionPenaltyMs, s.Advanced.LocalSocksPort,
             s.Advanced.DefaultCaptureMode, s.Advanced.AutoSwitchEnabled, s.Advanced.AutoSwitchLossPct,
             s.Advanced.AutoSwitchLatencyMs, s.Advanced.AutoSwitchSustainSec, s.Advanced.AutoSwitchCooldownSec,
-            s.Advanced.AutoSwitchMaxSwitches);
+            s.Advanced.AutoSwitchMaxSwitches, ProcessModeSupport.IsAvailable());
 
     /// <summary>Builds the LAN-share DTO. The password is never sent to the UI — only <c>HasPassword</c>.</summary>
     public static LanShareDto ToLanShareDto(LanShareSettings l) =>

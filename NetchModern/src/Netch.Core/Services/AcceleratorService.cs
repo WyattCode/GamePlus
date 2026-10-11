@@ -123,13 +123,26 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             var hasProcess = game.ProxyProcesses.Count > 0;
             var hasIp = game.ProxyIps.Count > 0;
             var hasDomain = game.ProxyDomains.Count > 0;
+            // Process mode (netfilter2 / Redirector) needs NetFilter SDK files that are not shipped;
+            // the factory reports whether the components are present so we can fail gracefully.
+            var processAvailable = _modeControllerFactory.IsAvailable(ModeType.ProcessMode);
 
+            if (mode == "process" && !processAvailable)
+                throw new InvalidOperationException($"{ProcessModeSupport.UnavailableMessage}。请在加速模式中改用「自动」或「TUN」。");
             if (mode == "process" && !hasProcess)
                 throw new InvalidOperationException("该游戏没有进程规则，无法使用进程模式");
             if (mode == "tun" && !hasIp)
                 throw new InvalidOperationException("该游戏没有 IP 规则，无法使用 TUN 模式");
             if (mode == "proxy" && !hasDomain)
                 throw new InvalidOperationException("该游戏没有域名规则，无法使用系统代理模式");
+            if (mode == "auto" && hasProcess && !processAvailable && !hasIp && !hasDomain)
+                throw new InvalidOperationException($"{ProcessModeSupport.UnavailableMessage}，而该游戏只有进程规则，无法加速。请在游戏设置里补充 IP 或域名规则。");
+
+            // In auto mode process capture is only attempted when the NetFilter components are present;
+            // otherwise it is skipped entirely (no driver load attempt, no LastProcessCaptureError).
+            var effectiveHasProcess = hasProcess && processAvailable;
+            if (mode == "auto" && hasProcess && !processAvailable)
+                _log.Log(LogLevel.Info, "进程模式暂不可用（未包含 NetFilter 组件），已跳过进程抓包");
 
             // Baseline policy: the direct baseline (~3.5 s) runs automatically only on the FIRST
             // acceleration of each game (persisted) or when the user explicitly asks for it
@@ -185,7 +198,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             // driver-signature enforcement), and finally domain system-proxy routing when neither driver
             // is available and the game lists domains.
             var useCapture = mode is "auto" or "process" or "tun"
-                ? (mode == "auto" ? hasProcess || hasIp : true)
+                ? (mode == "auto" ? effectiveHasProcess || hasIp : true)
                 : false;
 
             // Steam download split: CDN download domains go DIRECT by default (personal VPS bandwidth is
@@ -254,7 +267,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             if (mode == "auto")
             {
                 if (useCapture)
-                    await StartCaptureAsync(game, node, _socks, hasProcess, hasIp, hasDomain, ct);
+                    await StartCaptureAsync(game, node, _socks, effectiveHasProcess, hasIp, hasDomain, ct);
                 else if (hasDomain)
                 {
                     _systemProxy.Enable("127.0.0.1", _controller.HttpPort);

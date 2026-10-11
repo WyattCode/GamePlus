@@ -379,6 +379,8 @@ internal sealed partial class RpcRouter
                                ?? throw new InvalidOperationException("游戏不存在");
 
                     // Availability checks (same Chinese errors as the accelerator) — validate before mutating.
+                    if (mode == "process" && !ProcessModeSupport.IsAvailable())
+                        throw new InvalidOperationException(ProcessModeSupport.UnavailableMessage);
                     if (mode == "process" && game.ProxyProcesses.Count == 0)
                         throw new InvalidOperationException("该游戏没有进程规则，无法使用进程模式");
                     if (mode == "tun" && game.ProxyIps.Count == 0)
@@ -1136,7 +1138,8 @@ internal sealed partial class RpcRouter
         var modes = SettingsSvc.Settings.GameCaptureMode;
         var downloads = SettingsSvc.Settings.GameDownloadViaProxy;
         var launches = SettingsSvc.Settings.GameLaunchTargets;
-        return Games.Games.Select(g => Mapping.ToDto(g, auto, choices, modes, downloads, launches)).ToArray();
+        var processAvailable = ProcessModeSupport.IsAvailable();
+        return Games.Games.Select(g => Mapping.ToDto(g, auto, choices, modes, downloads, launches, processAvailable)).ToArray();
     }
 
     /// <summary>Game name for a given id, or null when unknown (used for auto-accel event payloads).</summary>
@@ -1277,8 +1280,14 @@ internal sealed partial class RpcRouter
             localPort = AdvancedSettingsValidator.ValidateLocalPort(
                 JsonParams.OptionalInt(adv, "localSocksPort") ?? 0);
         if (JsonParams.HasProperty(adv, "defaultCaptureMode"))
+        {
             defaultCaptureMode = AdvancedSettingsValidator.ValidateCaptureMode(
                 JsonParams.OptionalString(adv, "defaultCaptureMode"));
+            // NetFilter components are not shipped: refuse a new process-mode default with the same
+            // message the UI shows (an already-stored value is handled by the accelerator).
+            if (defaultCaptureMode == "process" && !ProcessModeSupport.IsAvailable())
+                throw new InvalidOperationException(ProcessModeSupport.UnavailableMessage);
+        }
         if (JsonParams.HasProperty(adv, "autoSwitchEnabled"))
             autoSwitchEnabled = JsonParams.OptionalBool(adv, "autoSwitchEnabled") ?? false;
         if (JsonParams.HasProperty(adv, "autoSwitchLossPct"))

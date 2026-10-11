@@ -99,6 +99,16 @@ public class DiagnosticsServiceTests
         return env;
     }
 
+    /// <summary>GoodEnv without the deliberately-unshipped NetFilter files.</summary>
+    private static FakeEnv EnvWithoutNetfilterFiles()
+    {
+        var env = GoodEnv();
+        env.Files.Remove("Redirector.bin");
+        env.Files.Remove("nfapi.dll");
+        env.Files.Remove("nfdriver.sys");
+        return env;
+    }
+
     [Fact]
     public async Task MissingCoreFiles_ReportsErrorListingThem()
     {
@@ -127,6 +137,30 @@ public class DiagnosticsServiceTests
         Assert.Equal(DiagnosticStatus.Warning, Item(report, "admin").Status);
         Assert.Equal(DiagnosticStatus.Skipped, Item(report, "netfilter").Status);
         Assert.Equal(DiagnosticStatus.Skipped, Item(report, "wintun").Status);
+    }
+
+    [Fact]
+    public async Task MissingNetfilterFiles_NetfilterSkipped()
+    {
+        var env = EnvWithoutNetfilterFiles();
+        var svc = new DiagnosticsService(env);
+
+        var report = await svc.RunAsync(Ctx(), CancellationToken.None);
+
+        var netfilter = Item(report, "netfilter");
+        Assert.Equal(DiagnosticStatus.Skipped, netfilter.Status);
+        Assert.Contains("未包含 NetFilter 组件", netfilter.Detail);
+    }
+
+    [Fact]
+    public async Task MissingNetfilterFiles_NetfilterLoadSkipped_EvenWithCaptureError()
+    {
+        var env = EnvWithoutNetfilterFiles();
+        var svc = new DiagnosticsService(env);
+
+        var report = await svc.RunAsync(Ctx(lastProcessCaptureError: "driver blocked by policy"), CancellationToken.None);
+
+        Assert.Equal(DiagnosticStatus.Skipped, Item(report, "netfilterLoad").Status);
     }
 
     [Fact]

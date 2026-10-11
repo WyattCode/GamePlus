@@ -180,10 +180,8 @@ public sealed class RedirectorModeController : IModeController
 
     private static void EnsureNativeAvailable()
     {
-        var baseDir = AppContext.BaseDirectory;
-        foreach (var f in new[] { "Redirector.bin", "nfdriver.sys" })
-            if (!File.Exists(Path.Combine(baseDir, "bin", f)) && !File.Exists(Path.Combine(baseDir, f)))
-                throw new FileNotFoundException(
-                    $"进程模式需要 .\\bin 下的原生组件：缺少 {f}。");
+        var missing = ProcessModeSupport.MissingFiles(AppContext.BaseDirectory);
+        if (missing.Count > 0)
+            throw new FileNotFoundException($"{ProcessModeSupport.UnavailableMessage}（缺少 {string.Join("、", missing)}）");
     }
 }

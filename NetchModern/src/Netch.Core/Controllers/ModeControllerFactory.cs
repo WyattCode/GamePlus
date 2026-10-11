@@ -1,5 +1,6 @@
 using Netch.Core.Abstractions;
 using Netch.Core.Models.Modes;
+using Netch.Core.Services;
 
 namespace Netch.Core.Controllers;
 
@@ -19,5 +20,12 @@ public sealed class ModeControllerFactory : IModeControllerFactory
         ModeType.ProcessMode => new RedirectorModeController(),
         ModeType.TunMode => new TunModeController(_settings?.Settings.Dns.OtherDns),
         _ => throw new NotSupportedException($"Unknown mode type: {type}")
+    };
+
+    /// <inheritdoc />
+    public bool IsAvailable(ModeType type) => type switch
+    {
+        ModeType.ProcessMode => ProcessModeSupport.IsAvailable(),
+        _ => true
     };
 }

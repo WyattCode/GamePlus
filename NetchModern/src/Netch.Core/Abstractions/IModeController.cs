@@ -27,4 +27,11 @@ public interface IModeController
 public interface IModeControllerFactory
 {
     IModeController Create(Netch.Core.Models.Modes.ModeType type);
+
+    /// <summary>
+    ///     Whether the given mode can actually be started in this build. Defaults to true;
+    ///     controllers depending on components that are not shipped (e.g. NetFilter SDK files
+    ///     for process mode) return false so callers can fail gracefully.
+    /// </summary>
+    bool IsAvailable(ModeType type) => true;
 }

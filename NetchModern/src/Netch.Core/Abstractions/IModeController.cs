@@ -1,5 +1,6 @@
 using Netch.Core.Models.Modes;
 using Netch.Core.Models.Servers;
+using Netch.Core.Services;
 
 namespace Netch.Core.Abstractions;
 
@@ -22,6 +23,15 @@ public interface IModeController
 
     /// <summary>Cumulative bytes received through the tunnel.</summary>
     long GetDownloadBytes() => 0;
+}
+
+/// <summary>
+///     Implemented by mode controllers that need the full TUN routing (process / domain / IP rules).
+///     The accelerator sets <see cref="Routing" /> before calling <see cref="IModeController.StartAsync" />.
+/// </summary>
+public interface ITunRoutingTarget
+{
+    TunRouting? Routing { get; set; }
 }
 
 public interface IModeControllerFactory

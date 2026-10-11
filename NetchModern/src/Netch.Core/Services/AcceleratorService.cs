@@ -123,6 +123,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             var hasProcess = game.ProxyProcesses.Count > 0;
             var hasIp = game.ProxyIps.Count > 0;
             var hasDomain = game.ProxyDomains.Count > 0;
+            var hasTun = hasProcess || hasIp;
             // Process mode (netfilter2 / Redirector) needs NetFilter SDK files that are not shipped;
             // the factory reports whether the components are present so we can fail gracefully.
             var processAvailable = _modeControllerFactory.IsAvailable(ModeType.ProcessMode);
@@ -131,12 +132,10 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
                 throw new InvalidOperationException($"{ProcessModeSupport.UnavailableMessage}。请在加速模式中改用「自动」或「TUN」。");
             if (mode == "process" && !hasProcess)
                 throw new InvalidOperationException("该游戏没有进程规则，无法使用进程模式");
-            if (mode == "tun" && !hasIp)
-                throw new InvalidOperationException("该游戏没有 IP 规则，无法使用 TUN 模式");
+            if (mode == "tun" && !hasTun)
+                throw new InvalidOperationException("该游戏没有进程或 IP 规则，无法使用 TUN 模式");
             if (mode == "proxy" && !hasDomain)
                 throw new InvalidOperationException("该游戏没有域名规则，无法使用系统代理模式");
-            if (mode == "auto" && hasProcess && !processAvailable && !hasIp && !hasDomain)
-                throw new InvalidOperationException($"{ProcessModeSupport.UnavailableMessage}，而该游戏只有进程规则，无法加速。请在游戏设置里补充 IP 或域名规则。");
 
             // In auto mode process capture is only attempted when the NetFilter components are present;
             // otherwise it is skipped entirely (no driver load attempt, no LastProcessCaptureError).
@@ -189,16 +188,14 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             }
 
             // Games use raw sockets that ignore the Windows system proxy. To actually redirect their
-            // traffic we capture it at driver level: by process (netfilter Redirector) when process names
-            // are configured, else by destination IP (WinTUN + tun2socks). In those cases xray runs in
-            // "global" mode (proxy everything it receives) and the capture layer does the filtering.
-            // Preference order (see StartCaptureAsync): process capture first (most complete — covers every
-            // domain/IP the game touches), then IP/TUN capture (WinTUN is Microsoft-signed and loads on
-            // Win11, whereas the netfilter driver used by process capture is often blocked by
-            // driver-signature enforcement), and finally domain system-proxy routing when neither driver
-            // is available and the game lists domains.
+            // traffic we capture it at driver level. Preference order (see StartCaptureAsync):
+            // process capture first (netfilter Redirector — only attempted when the NetFilter components
+            // are shipped and present; most complete, covers every domain/IP the game touches), then
+            // sing-box TUN (a second sing-box.exe owning a WinTUN interface, routing per process, per
+            // sniffed domain and per IP to the local SOCKS5 endpoint of the node core), and finally
+            // domain system-proxy routing for domain-only games (only apps honouring the Windows proxy).
             var useCapture = mode is "auto" or "process" or "tun"
-                ? (mode == "auto" ? effectiveHasProcess || hasIp : true)
+                ? (mode == "auto" ? effectiveHasProcess || hasTun : true)
                 : false;
 
             // Steam download split: CDN download domains go DIRECT by default (personal VPS bandwidth is
@@ -267,7 +264,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             if (mode == "auto")
             {
                 if (useCapture)
-                    await StartCaptureAsync(game, node, _socks, effectiveHasProcess, hasIp, hasDomain, ct);
+                    await StartCaptureAsync(game, node, _socks, effectiveHasProcess, hasTun, hasIp, hasDomain, downloadViaProxy, ct);
                 else if (hasDomain)
                 {
                     _systemProxy.Enable("127.0.0.1", _controller.HttpPort);
@@ -283,7 +280,7 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             }
             else if (mode == "tun")
             {
-                await StartForcedTunAsync(game, node, _socks, ct);
+                await StartForcedTunAsync(game, node, _socks, downloadViaProxy, ct);
             }
             else // "proxy"
             {
@@ -336,6 +333,49 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
     }
 
     /// <summary>
+    ///     Builds the full TUN routing for the sing-box TUN instance: game process rules + extra apps,
+    ///     proxy/direct domains (honouring the download split) and the node's IPv4 addresses as
+    ///     exclusions (so the TUN never loops the tunnel traffic back into itself). Never throws except
+    ///     on caller cancellation; a node hostname that cannot be resolved simply yields no exclusions.
+    /// </summary>
+    private async Task<TunRouting> BuildTunRoutingAsync(Game game, Server node, bool downloadViaProxy, CancellationToken ct)
+    {
+        var extras = _extraApps?.Invoke() ?? Array.Empty<ExtraApp>();
+        var proxyDomains = ProxyDomainsFor(game, downloadViaProxy);
+        var directDomains = downloadViaProxy ? null : game.DownloadDomains;
+
+        var excludeAddresses = new List<string>();
+        if (IPAddress.TryParse(node.Hostname, out var literal))
+        {
+            if (literal.AddressFamily == AddressFamily.InterNetwork)
+                excludeAddresses.Add(literal.ToString());
+        }
+        else
+        {
+            try
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeout.CancelAfter(TimeSpan.FromSeconds(2));
+                var addresses = await Dns.GetHostAddressesAsync(node.Hostname, timeout.Token);
+                excludeAddresses.AddRange(addresses
+                    .Where(a => a.AddressFamily == AddressFamily.InterNetwork)
+                    .Select(a => a.ToString()));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception e)
+            {
+                _log.Log(LogLevel.Warning, $"无法解析节点地址，TUN 将依靠进程排除避免回环：{e.Message}");
+            }
+        }
+
+        return SplitRouting.BuildTunRouting(game.ProxyProcesses, extras, proxyDomains, game.ProxyIps,
+            directDomains, excludeAddresses);
+    }
+
+    /// <summary>
     ///     Forced process capture (manual mode). No fallback: any failure is surfaced with a clear
     ///     Chinese message so the user can switch to 自动 / TUN.
     /// </summary>
@@ -373,17 +413,20 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
 
     /// <summary>
     ///     Forced TUN capture (manual mode). No fallback: any failure is surfaced with a clear Chinese
-    ///     message so the user can switch to 自动 / 进程模式.
+    ///     message so the user can switch to 自动 / 系统代理.
     /// </summary>
-    private async Task StartForcedTunAsync(Game game, Server node, Socks5Server socks5, CancellationToken ct)
+    private async Task StartForcedTunAsync(Game game, Server node, Socks5Server socks5, bool downloadViaProxy, CancellationToken ct)
     {
         try
         {
             _modeController = _modeControllerFactory.Create(ModeType.TunMode);
+            var routing = await BuildTunRoutingAsync(game, node, downloadViaProxy, ct);
+            if (_modeController is ITunRoutingTarget target)
+                target.Routing = routing;
             await _modeController.StartAsync(socks5, BuildMode(ModeType.TunMode, game.ProxyIps), ct);
             Status.CaptureMode = "tun";
             _log.Log(LogLevel.Info,
-                $"加速模式：TUN 模式（手动指定）— 抓取 {game.ProxyIps.Count} 条 IP 规则 → {node.Hostname}");
+                $"加速模式：TUN 模式（手动指定）— 按 {routing.ProxyProcesses.Count} 个进程 / {routing.ProxyDomains.Count} 个域名 / {routing.ProxyIps.Count} 条 IP 规则 → {node.Hostname}");
         }
         catch (Exception e)
         {
@@ -393,17 +436,17 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
                 _modeController = null;
             }
             throw new InvalidOperationException(
-                $"TUN 模式启动失败：{e.Message}。可在加速模式中改用「自动」或「进程模式」。", e);
+                $"TUN 模式启动失败：{e.Message}。可在加速模式中改用「自动」或「系统代理」。", e);
         }
     }
 
     /// <summary>
     ///     Brings up traffic capture with graceful degradation:
-    ///     process capture (netfilter2, most complete) → IP/TUN capture (WinTUN, Microsoft-signed) →
-    ///     domain system-proxy routing (only apps honouring the Windows proxy). Throws only when no
-    ///     strategy is available.
+    ///     process capture (netfilter2, only when the components are present) → sing-box TUN
+    ///     (per process + sniffed domain + IP) → domain system-proxy routing (only apps honouring
+    ///     the Windows proxy). Throws only when no strategy is available.
     /// </summary>
-    private async Task StartCaptureAsync(Game game, Server node, Socks5Server socks5, bool hasProcess, bool hasIp, bool hasDomain, CancellationToken ct)
+    private async Task StartCaptureAsync(Game game, Server node, Socks5Server socks5, bool hasProcess, bool hasTun, bool hasIp, bool hasDomain, bool downloadViaProxy, CancellationToken ct)
     {
         Exception? processError = null;
 
@@ -440,14 +483,18 @@ public sealed partial class AcceleratorService : ObservableObject, IAcceleratorS
             }
         }
 
-        if (hasIp)
+        if (hasTun)
         {
             try
             {
                 _modeController = _modeControllerFactory.Create(ModeType.TunMode);
+                var routing = await BuildTunRoutingAsync(game, node, downloadViaProxy, ct);
+                if (_modeController is ITunRoutingTarget target)
+                    target.Routing = routing;
                 await _modeController.StartAsync(socks5, BuildMode(ModeType.TunMode, game.ProxyIps), ct);
                 Status.CaptureMode = "tun";
-                _log.Log(LogLevel.Info, $"Capturing {game.ProxyIps.Count} IP rule(s) via {_modeController.Name} → {node.Hostname}");
+                _log.Log(LogLevel.Info,
+                    $"Capturing via sing-box TUN: {routing.ProxyProcesses.Count} process(es), {routing.ProxyDomains.Count} domain(s), {routing.ProxyIps.Count} IP rule(s) → {node.Hostname}");
                 return;
             }
             catch (Exception e)

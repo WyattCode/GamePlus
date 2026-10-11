@@ -18,7 +18,8 @@ public sealed class ModeControllerFactory : IModeControllerFactory
     public IModeController Create(ModeType type) => type switch
     {
         ModeType.ProcessMode => new RedirectorModeController(),
-        ModeType.TunMode => new TunModeController(_settings?.Settings.Dns.OtherDns),
+        // TUN mode is now the process-guarded sing-box instance; the legacy tun2socks TunModeController stays in the codebase but is no longer created.
+        ModeType.TunMode => new SingBoxTunModeController(),
         _ => throw new NotSupportedException($"Unknown mode type: {type}")
     };
 

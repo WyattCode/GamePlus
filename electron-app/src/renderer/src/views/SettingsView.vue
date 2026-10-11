@@ -416,6 +416,11 @@ async function onLaunchNodeModeChange(e: Event): Promise<void> {
           <div class="muted small">{{ t('settings.about.desc') }}</div>
         </div>
       </div>
+      <div class="about-legal muted small">
+        <p>{{ t('settings.about.license') }}</p>
+        <p>{{ t('settings.about.notAffiliated') }}</p>
+        <p>{{ t('settings.about.geolite') }}</p>
+      </div>
     </div>
   </div>
 </template>
@@ -555,5 +560,12 @@ async function onLaunchNodeModeChange(e: Event): Promise<void> {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.about-legal {
+  padding: 0 0 12px;
+  line-height: 1.6;
+}
+.about-legal p {
+  margin: 4px 0;
 }
 </style>

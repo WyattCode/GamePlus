@@ -101,6 +101,9 @@ export const en: Partial<Record<MessageKey, string>> = {
   // Settings — about
   'settings.about.title': 'About',
   'settings.about.desc': 'Electron + Vue 3 · Game accelerator',
+  'settings.about.license': 'Game+ is free software under the GNU GPL v3.0. Third-party components, their licences and source links are listed in THIRD_PARTY_NOTICES.md and the licenses folder of the installation (resources).',
+  'settings.about.notAffiliated': 'Game+ is not affiliated with, endorsed by or associated with the bundled third-party projects (e.g. sing-box, Xray-core, Netch, WinTUN).',
+  'settings.about.geolite': 'This product includes GeoLite Data created by MaxMind, available from https://www.maxmind.com.',
 
   // Toasts / errors
   'toast.saved': 'Saved',

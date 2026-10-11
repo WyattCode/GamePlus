@@ -97,6 +97,9 @@ export const zhCN = {
   // Settings — about
   'settings.about.title': '关于',
   'settings.about.desc': 'Electron + Vue 3 · 游戏加速器',
+  'settings.about.license': 'Game+ 是基于 GNU GPL v3.0 的自由软件。第三方组件及其许可证、源码链接见安装目录 resources 下的 THIRD_PARTY_NOTICES.md 与 licenses 文件夹。',
+  'settings.about.notAffiliated': 'Game+ 与所捆绑的第三方项目（如 sing-box、Xray-core、Netch、WinTUN）无关联，亦未获其认可或背书。',
+  'settings.about.geolite': 'This product includes GeoLite Data created by MaxMind, available from https://www.maxmind.com.',
 
   // Toasts / errors
   'toast.saved': '已保存',

@@ -115,4 +115,108 @@ public static class SplitRouting
 
         return mode;
     }
+
+    /// <summary>
+    ///     Builds the routing input for the sing-box TUN instance: the game's own processes
+    ///     (basename, deduped case-insensitively ignoring a trailing ".exe"), the enabled extra
+    ///     apps (game rules win over bypass, bypass wins over an extra proxy app) and the
+    ///     domain/IP lists, all trimmed, blank-free and deduped case-insensitively in order.
+    /// </summary>
+    public static TunRouting BuildTunRouting(IEnumerable<string> gameProcesses, IEnumerable<ExtraApp> extraApps,
+        IEnumerable<string> proxyDomains, IEnumerable<string> proxyIps, IEnumerable<string>? directDomains,
+        IEnumerable<string>? excludeAddresses)
+    {
+        var proxyProcesses = new List<string>();
+        var seenProcesses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Game processes: trim, basename, skip blanks, dedupe ignoring a trailing ".exe"
+        // ("steam" and "steam.exe" are one entry; the first spelling is kept).
+        foreach (var process in gameProcesses)
+        {
+            if (string.IsNullOrWhiteSpace(process))
+                continue;
+            var name = ProcessBaseName(process);
+            if (name.Length == 0)
+                continue;
+            if (seenProcesses.Add(NormalizeProcessName(name)))
+                proxyProcesses.Add(name);
+        }
+
+        var bypassProcesses = new List<string>();
+        var seenBypass = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var extraProxy = new List<string>();
+
+        foreach (var app in extraApps)
+        {
+            if (app is null || !app.Enabled)
+                continue;
+            if (!IsValidProcessName(app.Process))
+                continue;
+
+            var name = ProcessBaseName(app.Process);
+            if (app.Mode == ExtraAppMode.Bypass)
+            {
+                if (seenBypass.Add(NormalizeProcessName(name)))
+                    bypassProcesses.Add(name);
+            }
+            else
+            {
+                extraProxy.Add(name);
+            }
+        }
+
+        // A bypass app that is one of the game's own processes is dropped (game rules win).
+        bypassProcesses.RemoveAll(name => seenProcesses.Contains(NormalizeProcessName(name)));
+
+        // Bypass wins over an extra "proxy" app; proxy apps are appended after the game
+        // processes and deduped against everything already routed.
+        var bypassSet = new HashSet<string>(bypassProcesses.Select(NormalizeProcessName), StringComparer.OrdinalIgnoreCase);
+        foreach (var name in extraProxy)
+        {
+            if (bypassSet.Contains(NormalizeProcessName(name)))
+                continue;
+            if (seenProcesses.Add(NormalizeProcessName(name)))
+                proxyProcesses.Add(name);
+        }
+
+        return new TunRouting(
+            proxyProcesses,
+            bypassProcesses,
+            DedupeList(proxyDomains),
+            DedupeList(proxyIps),
+            DedupeList(directDomains),
+            DedupeList(excludeAddresses));
+    }
+
+    /// <summary>The basename of <paramref name="path" /> (anything after the last '\' or '/'), trimmed.</summary>
+    private static string ProcessBaseName(string path)
+    {
+        var trimmed = path.Trim();
+        var lastSeparator = Math.Max(trimmed.LastIndexOf('\\'), trimmed.LastIndexOf('/'));
+        return lastSeparator >= 0 ? trimmed[(lastSeparator + 1)..] : trimmed;
+    }
+
+    /// <summary>The comparison key: the basename with one trailing ".exe" removed case-insensitively.</summary>
+    private static string NormalizeProcessName(string name) =>
+        name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name;
+
+    /// <summary>Trims, drops blanks and dedupes case-insensitively, keeping order; null → empty.</summary>
+    private static List<string> DedupeList(IEnumerable<string>? source)
+    {
+        var list = new List<string>();
+        if (source is null)
+            return list;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in source)
+        {
+            var trimmed = item?.Trim() ?? string.Empty;
+            if (trimmed.Length == 0)
+                continue;
+            if (seen.Add(trimmed))
+                list.Add(trimmed);
+        }
+
+        return list;
+    }
 }

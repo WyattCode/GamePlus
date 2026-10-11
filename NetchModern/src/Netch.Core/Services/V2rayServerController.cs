@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Netch.Core.Abstractions;
 using Netch.Core.Models.Servers;
+using Netch.Core.Models.Settings;
 
 namespace Netch.Core.Services;
 
@@ -35,6 +36,12 @@ public sealed class V2rayServerController : ProcessGuard, IServerController
     /// <summary>Game mode: IPs / CIDR ranges to route through the node; set before <see cref="StartAsync" />.</summary>
     public IReadOnlyCollection<string>? ProxyIps { get; set; }
 
+    /// <summary>Domains that must always go direct (e.g. game CDN downloads); set before <see cref="StartAsync" />.</summary>
+    public IReadOnlyCollection<string>? DirectDomains { get; set; }
+
+    /// <summary>LAN share for consoles: extra HTTP (+ optional SOCKS5) inbounds on a private LAN IPv4; null = disabled.</summary>
+    public LanShareOptions? LanShare { get; set; }
+
     public async Task<Socks5Server> StartAsync(Server server, CancellationToken ct = default)
     {
         SocksPort = ResolveSocksPort();
@@ -45,7 +52,7 @@ public sealed class V2rayServerController : ProcessGuard, IServerController
         Directory.CreateDirectory(dir);
         _configPath = Path.Combine(dir, "xray-config.json");
 
-        var config = V2rayConfigGenerator.Generate(server, SocksPort, HttpPort, ApiPort, ProxyDomains, ProxyIps);
+        var config = V2rayConfigGenerator.Generate(server, SocksPort, HttpPort, ApiPort, ProxyDomains, ProxyIps, DirectDomains, LanShare);
         await File.WriteAllTextAsync(_configPath, config, ct);
 
         StartProcess($"run -c \"{_configPath}\"");

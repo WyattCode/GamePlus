@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { watch } from 'vue'
-import type { AutoAccelEvent, TrayAction, TrayInfo } from '@shared/types'
+import type { AutoAccelEvent, AutoSwitchEvent, TrayAction, TrayInfo } from '@shared/types'
 import { backend } from '@/api/backend'
 import { useAccelStore } from '@/stores/accel'
 import { useDiagnosticsStore } from '@/stores/diagnostics'
@@ -51,6 +51,23 @@ export const useAutoStore = defineStore('auto', () => {
       }
       case 'skipped': {
         toast.info(e.message)
+        break
+      }
+    }
+  }
+
+  function onSwitchEvent(e: AutoSwitchEvent): void {
+    switch (e.kind) {
+      case 'switched': {
+        if (e.toNode) toast.info(`线路质量下降，已自动切换到 ${e.toNode}`)
+        break
+      }
+      case 'failed': {
+        toast.error(`自动切换线路失败：${e.message ?? '未知错误'}`)
+        break
+      }
+      case 'exhausted': {
+        toast.info('已达到自动切换上限或没有更多可用线路，本次加速不再自动切换')
         break
       }
     }
@@ -115,6 +132,7 @@ export const useAutoStore = defineStore('auto', () => {
 
     // App-lifetime listeners: start() runs once from App.vue outside any effect scope.
     backend.onAutoAccel(onEvent)
+    backend.onAutoSwitch(onSwitchEvent)
 
     window.gameplus?.tray?.onAction?.(onTrayAction)
 

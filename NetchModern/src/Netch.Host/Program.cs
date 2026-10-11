@@ -9,10 +9,20 @@ using Netch.Core;
 using Netch.Core.Abstractions;
 using Netch.Core.Services;
 using Netch.Core.Services.AutoStart;
+using Netch.Core.Services.Rules;
 using Netch.Host;
 
 // Headless Game+ backend. Electron spawns this, reads the "GAMEPLUS_READY {port,pid}" line from stdout,
 // then drives the engine over ws://127.0.0.1:<port>/ws?token=<token>.
+
+// Offline tooling: `gameplus-host.exe --export-rules <path> [--rules-version <int>]` dumps the bundled
+// game rule library to a rules file and exits. Handled before any other startup work so it needs no
+// services, no elevation and no WebSocket.
+if (args.Length > 0 && args[0] == "--export-rules")
+{
+    Environment.ExitCode = ExportRules(args);
+    return;
+}
 
 // Native capture libraries (Redirector.bin, nfapi.dll, tun2socks.bin, RouteHelper.bin) live in ".\bin";
 // add it to the DLL search path so their P/Invokes resolve — same as the WPF app did in App.OnStartup.
@@ -99,6 +109,16 @@ var router = new RpcRouter(services);
 var autoAccel = new AutoAccelHost(router, log: services.GetRequiredService<ILogService>());
 using var autoAccelCts = new CancellationTokenSource();
 _ = autoAccel.RunAsync(autoAccelCts.Token);
+
+// Automatic node switching: sample the acceleration quality every second and switch nodes when it is
+// bad for a sustained window (feature is off by default; see AdvancedSettings).
+var autoSwitch = new AutoSwitchHost(router, services.GetRequiredService<ILogService>());
+_ = autoSwitch.RunAsync(autoAccelCts.Token);
+
+// Scheduled subscription refresh: check 60 s after startup, then every 10 minutes. Fire-and-forget like
+// the other background work; cancelled on shutdown via the same token as auto-acceleration.
+var subscriptionScheduler = new SubscriptionScheduler(router, services.GetRequiredService<ILogService>());
+_ = subscriptionScheduler.RunAsync(autoAccelCts.Token);
 
 // Remote game rules: refresh in the background shortly after startup when a URL is configured. Failures
 // are logged and swallowed — the bundled/cached rules stay active.
@@ -213,12 +233,67 @@ using var acceptCts = new CancellationTokenSource();
 try
 {
     await server.AcceptLoopAsync(
-        ws => new ClientSession(ws, router, services, autoAccel).RunAsync(),
+        ws => new ClientSession(ws, router, services, autoAccel, autoSwitch).RunAsync(),
         acceptCts.Token);
 }
 catch (Exception e)
 {
     Console.Error.WriteLine("host fatal: " + e);
+}
+
+// Offline tooling entry point: dumps the bundled game rule library to a rules file. Returns the process
+// exit code (0 on success, 2 on usage/IO error).
+static int ExportRules(string[] args)
+{
+    string? exportPath = null;
+    var exportVersion = SampleGames.RulesVersion;
+    for (var i = 0; i < args.Length; i++)
+    {
+        if (args[i] == "--export-rules" && i + 1 < args.Length)
+        {
+            exportPath = args[i + 1];
+            i++;
+        }
+        else if (args[i] == "--rules-version" && i + 1 < args.Length)
+        {
+            if (!int.TryParse(args[i + 1], out exportVersion) || exportVersion <= 0)
+            {
+                Console.Error.WriteLine("host: --rules-version must be a positive integer");
+                return 2;
+            }
+            i++;
+        }
+        else
+        {
+            Console.Error.WriteLine("host: unknown argument for --export-rules: " + args[i]);
+            return 2;
+        }
+    }
+
+    if (string.IsNullOrWhiteSpace(exportPath))
+    {
+        Console.Error.WriteLine("usage: gameplus-host.exe --export-rules <path> [--rules-version <int>]");
+        return 2;
+    }
+
+    try
+    {
+        var games = SampleGames.Create().ToList();
+        var json = RulesExporter.Export(games, exportVersion, DateTimeOffset.UtcNow);
+        var fullPath = Path.GetFullPath(exportPath);
+        var dir = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+        File.WriteAllText(fullPath, json, new UTF8Encoding(false));
+        var count = games.Count(g => !g.IsCustom);
+        Console.WriteLine($"exported {count} games to {fullPath}");
+        return 0;
+    }
+    catch (Exception e)
+    {
+        Console.Error.WriteLine("host: export-rules failed: " + e.Message);
+        return 2;
+    }
 }
 
 [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]

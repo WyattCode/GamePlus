@@ -2,10 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
-import { backend } from '@/api/backend'
+import { backend, PROCESS_MODE_UNAVAILABLE } from '@/api/backend'
 import { errorMessage, useToastStore } from '@/stores/toast'
 import { validateDns, validateLocalPort, validateRegionPenalty } from '@/utils/advanced'
-import type { AdvancedSettings, EngineSettings } from '@shared/types'
+import type { AdvancedSettings, CaptureMode, EngineSettings } from '@shared/types'
 
 const router = useRouter()
 const toast = useToastStore()
@@ -18,6 +18,14 @@ const dns = ref('')
 const socksPort = ref(0)
 const measureEffect = ref(false)
 const regionPenalty = ref(60)
+const defaultCaptureMode = ref<CaptureMode>('auto')
+const processModeAvailable = ref(true)
+const autoSwitchEnabled = ref(false)
+const autoSwitchLossPct = ref(5)
+const autoSwitchLatencyMs = ref(200)
+const autoSwitchSustainSec = ref(15)
+const autoSwitchCooldownSec = ref(60)
+const autoSwitchMaxSwitches = ref(3)
 
 const loaded = ref(false)
 
@@ -38,6 +46,14 @@ function apply(s: EngineSettings): void {
   socksPort.value = s.advanced.localSocksPort
   measureEffect.value = s.advanced.measureEffect
   regionPenalty.value = s.advanced.regionPenaltyMs
+  defaultCaptureMode.value = s.advanced.defaultCaptureMode
+  processModeAvailable.value = s.advanced.processModeAvailable !== false
+  autoSwitchEnabled.value = s.advanced.autoSwitchEnabled
+  autoSwitchLossPct.value = s.advanced.autoSwitchLossPct
+  autoSwitchLatencyMs.value = s.advanced.autoSwitchLatencyMs
+  autoSwitchSustainSec.value = s.advanced.autoSwitchSustainSec
+  autoSwitchCooldownSec.value = s.advanced.autoSwitchCooldownSec
+  autoSwitchMaxSwitches.value = s.advanced.autoSwitchMaxSwitches
 }
 
 const dnsError = computed(() => (dns.value.trim() ? validateDns(dns.value) : null))
@@ -47,6 +63,22 @@ const dnsCanSave = computed(() => !dnsError.value && dnsDirty.value && !saving.v
 const portError = computed(() => validateLocalPort(socksPort.value))
 const portDirty = computed(
   () => !!settings.value && socksPort.value !== settings.value.advanced.localSocksPort
+)
+
+const lossError = computed(() =>
+  autoSwitchLossPct.value < 1 || autoSwitchLossPct.value > 50 ? '自动切换丢包阈值必须在 1–50% 之间' : null
+)
+const latencyError = computed(() =>
+  autoSwitchLatencyMs.value < 50 || autoSwitchLatencyMs.value > 2000 ? '自动切换延迟阈值必须在 50–2000 ms 之间' : null
+)
+const sustainError = computed(() =>
+  autoSwitchSustainSec.value < 5 || autoSwitchSustainSec.value > 120 ? '自动切换持续时间必须在 5–120 秒之间' : null
+)
+const cooldownError = computed(() =>
+  autoSwitchCooldownSec.value < 10 || autoSwitchCooldownSec.value > 600 ? '自动切换冷却时间必须在 10–600 秒之间' : null
+)
+const maxSwitchesError = computed(() =>
+  autoSwitchMaxSwitches.value < 1 || autoSwitchMaxSwitches.value > 10 ? '自动切换次数必须在 1–10 次之间' : null
 )
 
 // Sends only the changed advanced field so a stale/invalid sibling value can't block the save.
@@ -98,6 +130,53 @@ function onPenaltyInput(e: Event): void {
 function onPenaltyChange(): void {
   if (validateRegionPenalty(regionPenalty.value)) return
   void saveAdvanced({ regionPenaltyMs: regionPenalty.value })
+}
+
+function onCaptureModeChange(e: Event): void {
+  const v = (e.target as HTMLSelectElement).value as CaptureMode
+  defaultCaptureMode.value = v
+  void saveAdvanced({ defaultCaptureMode: v })
+}
+
+function toggleAutoSwitch(v: boolean): void {
+  autoSwitchEnabled.value = v
+  void saveAdvanced({ autoSwitchEnabled: v })
+}
+
+function readInt(e: Event): number {
+  const raw = (e.target as HTMLInputElement).value
+  const n = raw === '' ? 0 : Number(raw)
+  return Number.isFinite(n) ? Math.trunc(n) : 0
+}
+
+function onLossChange(e: Event): void {
+  autoSwitchLossPct.value = readInt(e)
+  if (lossError.value) return
+  void saveAdvanced({ autoSwitchLossPct: autoSwitchLossPct.value })
+}
+
+function onLatencyChange(e: Event): void {
+  autoSwitchLatencyMs.value = readInt(e)
+  if (latencyError.value) return
+  void saveAdvanced({ autoSwitchLatencyMs: autoSwitchLatencyMs.value })
+}
+
+function onSustainChange(e: Event): void {
+  autoSwitchSustainSec.value = readInt(e)
+  if (sustainError.value) return
+  void saveAdvanced({ autoSwitchSustainSec: autoSwitchSustainSec.value })
+}
+
+function onCooldownChange(e: Event): void {
+  autoSwitchCooldownSec.value = readInt(e)
+  if (cooldownError.value) return
+  void saveAdvanced({ autoSwitchCooldownSec: autoSwitchCooldownSec.value })
+}
+
+function onMaxSwitchesChange(e: Event): void {
+  autoSwitchMaxSwitches.value = readInt(e)
+  if (maxSwitchesError.value) return
+  void saveAdvanced({ autoSwitchMaxSwitches: autoSwitchMaxSwitches.value })
 }
 
 async function resetDefaults(): Promise<void> {
@@ -168,6 +247,38 @@ async function resetDefaults(): Promise<void> {
           <div v-if="portError" class="small danger">{{ portError }}</div>
         </div>
       </div>
+
+      <div class="setting">
+        <div class="field">
+          <div class="s-name">默认加速模式</div>
+          <div class="muted small">
+            自动：进程 → TUN → 系统代理 依次尝试；手动指定后失败不会自动降级。单个游戏可在加速页单独设置。
+          </div>
+          <select
+            class="input select"
+            :value="defaultCaptureMode"
+            :disabled="!loaded || saving"
+            @change="onCaptureModeChange"
+          >
+            <option value="auto">自动（推荐）</option>
+            <option
+              v-if="processModeAvailable || defaultCaptureMode === 'process'"
+              value="process"
+              :disabled="!processModeAvailable"
+            >
+              {{ processModeAvailable ? '进程模式' : '进程模式（暂不可用）' }}
+            </option>
+            <option value="tun">TUN 模式</option>
+            <option value="proxy">系统代理</option>
+          </select>
+          <div v-if="!processModeAvailable && defaultCaptureMode === 'process'" class="small danger">
+            {{ PROCESS_MODE_UNAVAILABLE }}，请改选其它模式，否则加速会失败。
+          </div>
+          <div v-else-if="!processModeAvailable" class="muted small">
+            {{ PROCESS_MODE_UNAVAILABLE }}，「自动」将依次尝试 TUN → 系统代理。
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="card group">
@@ -210,6 +321,123 @@ async function resetDefaults(): Promise<void> {
             />
             <span class="slider-val">{{ regionPenalty }} ms</span>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card group">
+      <div class="g-title">自动切换线路</div>
+
+      <div class="setting">
+        <div>
+          <div class="s-name">线路质量变差时自动切换</div>
+          <div class="muted small">
+            持续丢包或高延迟时自动换到下一条推荐线路。切换会中断当前连接，部分游戏可能需要重连。
+          </div>
+        </div>
+        <label class="switch" :class="{ disabled: !loaded || saving }">
+          <input
+            type="checkbox"
+            :checked="autoSwitchEnabled"
+            :disabled="!loaded || saving"
+            @change="toggleAutoSwitch(($event.target as HTMLInputElement).checked)"
+          />
+          <span class="track"><span class="thumb" /></span>
+        </label>
+      </div>
+
+      <div class="setting">
+        <div class="field">
+          <div class="s-name">丢包阈值（%）</div>
+          <div class="muted small">丢包率达到该值视为线路质量差。</div>
+          <input
+            class="input port"
+            type="number"
+            min="1"
+            max="50"
+            step="1"
+            :value="autoSwitchLossPct"
+            :disabled="!autoSwitchEnabled"
+            @change="onLossChange"
+            @keyup.enter="onLossChange"
+          />
+          <div v-if="autoSwitchEnabled && lossError" class="small danger">{{ lossError }}</div>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="field">
+          <div class="s-name">延迟阈值（ms）</div>
+          <div class="muted small">延迟达到该值（或测速超时）视为线路质量差。</div>
+          <input
+            class="input port"
+            type="number"
+            min="50"
+            max="2000"
+            step="1"
+            :value="autoSwitchLatencyMs"
+            :disabled="!autoSwitchEnabled"
+            @change="onLatencyChange"
+            @keyup.enter="onLatencyChange"
+          />
+          <div v-if="autoSwitchEnabled && latencyError" class="small danger">{{ latencyError }}</div>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="field">
+          <div class="s-name">持续时间（秒）</div>
+          <div class="muted small">质量差持续该时长才会触发切换；期间任一次正常采样会重新计时。</div>
+          <input
+            class="input port"
+            type="number"
+            min="5"
+            max="120"
+            step="1"
+            :value="autoSwitchSustainSec"
+            :disabled="!autoSwitchEnabled"
+            @change="onSustainChange"
+            @keyup.enter="onSustainChange"
+          />
+          <div v-if="autoSwitchEnabled && sustainError" class="small danger">{{ sustainError }}</div>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="field">
+          <div class="s-name">冷却时间（秒）</div>
+          <div class="muted small">每次切换后等待该时长才会再次评估线路质量。</div>
+          <input
+            class="input port"
+            type="number"
+            min="10"
+            max="600"
+            step="1"
+            :value="autoSwitchCooldownSec"
+            :disabled="!autoSwitchEnabled"
+            @change="onCooldownChange"
+            @keyup.enter="onCooldownChange"
+          />
+          <div v-if="autoSwitchEnabled && cooldownError" class="small danger">{{ cooldownError }}</div>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="field">
+          <div class="s-name">每次加速最多切换（次）</div>
+          <div class="muted small">达到上限后本次加速不再自动切换。</div>
+          <input
+            class="input port"
+            type="number"
+            min="1"
+            max="10"
+            step="1"
+            :value="autoSwitchMaxSwitches"
+            :disabled="!autoSwitchEnabled"
+            @change="onMaxSwitchesChange"
+            @keyup.enter="onMaxSwitchesChange"
+          />
+          <div v-if="autoSwitchEnabled && maxSwitchesError" class="small danger">{{ maxSwitchesError }}</div>
         </div>
       </div>
     </div>
@@ -303,6 +531,9 @@ async function resetDefaults(): Promise<void> {
 .input {
   margin-top: 8px;
   width: 100%;
+}
+.select {
+  cursor: pointer;
 }
 .port {
   max-width: 160px;

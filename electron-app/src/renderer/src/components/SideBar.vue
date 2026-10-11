@@ -1,19 +1,21 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
 import AppIcon from './AppIcon.vue'
+import { useI18n } from '@/i18n'
 
 const route = useRoute()
+const { t } = useI18n()
 
 const nav = [
-  { to: '/accelerate', icon: 'rocket', label: '加速' },
-  { to: '/games', icon: 'gamepad', label: '游戏库' },
-  { to: '/servers', icon: 'server', label: '线路' },
-  { to: '/subscriptions', icon: 'cloud', label: '订阅' }
-]
+  { to: '/accelerate', icon: 'rocket', label: 'nav.accelerate' },
+  { to: '/games', icon: 'gamepad', label: 'nav.games' },
+  { to: '/servers', icon: 'server', label: 'nav.servers' },
+  { to: '/subscriptions', icon: 'cloud', label: 'nav.subscriptions' }
+] as const
 const footNav = [
-  { to: '/logs', icon: 'list', label: '日志' },
-  { to: '/settings', icon: 'settings', label: '设置' }
-]
+  { to: '/logs', icon: 'list', label: 'nav.logs' },
+  { to: '/settings', icon: 'settings', label: 'nav.settings' }
+] as const
 
 // RouterLink's router-link-active only matches the exact route (or a nested child), so sibling
 // routes such as /settings/advanced would leave 设置 unhighlighted. Match by path prefix instead.
@@ -35,7 +37,7 @@ function isActive(to: string): boolean {
       >
         <span class="ind" />
         <AppIcon :name="item.icon" :size="20" />
-        <span class="label">{{ item.label }}</span>
+        <span class="label">{{ t(item.label) }}</span>
       </RouterLink>
     </nav>
 
@@ -52,7 +54,7 @@ function isActive(to: string): boolean {
       >
         <span class="ind" />
         <AppIcon :name="item.icon" :size="20" />
-        <span class="label">{{ item.label }}</span>
+        <span class="label">{{ t(item.label) }}</span>
       </RouterLink>
     </nav>
   </aside>

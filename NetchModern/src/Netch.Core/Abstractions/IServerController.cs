@@ -1,4 +1,5 @@
 using Netch.Core.Models.Servers;
+using Netch.Core.Models.Settings;
 
 namespace Netch.Core.Abstractions;
 
@@ -24,6 +25,19 @@ public interface IServerController
 
     /// <summary>Game mode: IPs / CIDR ranges to route through the node; set before <see cref="StartAsync" />.</summary>
     IReadOnlyCollection<string>? ProxyIps { get; set; }
+
+    /// <summary>
+    ///     Domains that must always go DIRECT (e.g. game CDN download hosts). The generated config places a
+    ///     direct rule before the proxy rules (plus sniffing so process/TUN global mode can match by domain);
+    ///     set before <see cref="StartAsync" />.
+    /// </summary>
+    IReadOnlyCollection<string>? DirectDomains { get; set; }
+
+    /// <summary>
+    ///     LAN share for consoles: extra HTTP (+ optional SOCKS5) inbounds on a private LAN IPv4 of this PC.
+    ///     Null = disabled (the default). Set before <see cref="StartAsync" />.
+    /// </summary>
+    LanShareOptions? LanShare { get; set; }
 
     Task<Socks5Server> StartAsync(Server server, CancellationToken ct = default);
 

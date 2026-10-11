@@ -27,4 +27,10 @@ public interface IAcceleratorService : INotifyPropertyChanged
 
     /// <summary>Current acceleration-effect report, or null when no effect monitor is wired up.</summary>
     EffectReport? EffectReport();
+
+    /// <summary>
+    ///     Message of the most recent process-capture (netfilter driver) failure, or null when the last
+    ///     attempt succeeded / none was made. Default null so minimal implementations stay valid.
+    /// </summary>
+    string? LastProcessCaptureError => null;
 }

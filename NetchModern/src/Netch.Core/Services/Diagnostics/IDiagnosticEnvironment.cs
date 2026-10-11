@@ -12,6 +12,9 @@ public enum DriverServiceState
     Unknown
 }
 
+/// <summary>A single Windows firewall rule relevant to diagnostics (enabled Block rules only).</summary>
+public sealed record FirewallRuleInfo(string Name, string? ApplicationPath, string Direction);
+
 /// <summary>
 ///     Seam over the machine-specific bits the diagnostics run needs (registry, admin check, sockets,
 ///     DNS, latency probes). Abstracted so the whole diagnostics run can be unit-tested on Linux CI
@@ -51,4 +54,13 @@ public interface IDiagnosticEnvironment
 
     /// <summary>Disables the system proxy (Enable=0), keeping server/override, and refreshes WinINET.</summary>
     void DisableSystemProxy();
+
+    /// <summary>Contents of <c>%SystemRoot%\System32\drivers\etc\hosts</c>; null on any error.</summary>
+    string? ReadHostsFile();
+
+    /// <summary>Enabled firewall rules with Action=Block; null when the rules cannot be read.</summary>
+    IReadOnlyList<FirewallRuleInfo>? ReadFirewallBlockRules();
+
+    /// <summary>Windows "Memory Integrity" (HVCI) state: true/false, null when it cannot be determined.</summary>
+    bool? IsMemoryIntegrityEnabled();
 }

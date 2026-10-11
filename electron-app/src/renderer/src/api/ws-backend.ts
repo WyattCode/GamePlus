@@ -1,14 +1,23 @@
 import type {
+  AccelSession,
   AccelStatus,
   AutoAccelEvent,
   AutoStartState,
+  AutoSwitchEvent,
+  BaselineInfo,
+  CaptureMode,
+  DiagnosticBundle,
   DiagnosticReport,
   EffectReport,
   EngineSettings,
   Game,
+  ImportResult,
+  LanAddress,
   LibraryScanResult,
   LogEntry,
   NodeRanking,
+  RuleExport,
+  RuleImportResult,
   RulesStatus,
   RulesUpdateResult,
   Server,
@@ -23,10 +32,12 @@ import type { Backend, SubMutation } from './backend'
 const DEFAULT_TIMEOUT_MS = 30_000
 const METHOD_TIMEOUTS: Record<string, number> = {
   'subs.update': 90_000,
+  'servers.import': 90_000,
   'servers.ping': 60_000,
   'nodes.rank': 60_000,
   'accel.start': 60_000,
   'diag.run': 30_000,
+  'diag.bundle': 60_000,
   'library.scan': 60_000,
   'rules.update': 30_000
 }
@@ -57,6 +68,7 @@ export class WebSocketBackend implements Backend {
   private readonly logCbs = new Set<(l: LogEntry) => void>()
   private readonly effectCbs = new Set<(r: EffectReport) => void>()
   private readonly autoAccelCbs = new Set<(e: AutoAccelEvent) => void>()
+  private readonly autoSwitchCbs = new Set<(e: AutoSwitchEvent) => void>()
   private lastStatus: AccelStatus | null = null
   private lastEffect: EffectReport | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -128,7 +140,8 @@ export class WebSocketBackend implements Backend {
         downloadBps: 0,
         uploadBps: 0,
         gameId: null,
-        nodeId: null
+        nodeId: null,
+        lanShareEndpoint: null
       }
       this.lastStatus = idle
       this.statusCbs.forEach((cb) => cb(idle))
@@ -167,6 +180,9 @@ export class WebSocketBackend implements Backend {
       } else if (msg.event === 'auto.accel') {
         const e = msg.data as AutoAccelEvent
         this.autoAccelCbs.forEach((cb) => cb(e))
+      } else if (msg.event === 'autoSwitch') {
+        const e = msg.data as AutoSwitchEvent
+        this.autoSwitchCbs.forEach((cb) => cb(e))
       }
       return
     }
@@ -254,11 +270,22 @@ export class WebSocketBackend implements Backend {
     return this.call('effect.remeasure', { gameId })
   }
 
+  getBaseline(gameId: string): Promise<BaselineInfo> {
+    return this.call('effect.baseline', { gameId })
+  }
+
   onAutoAccel(cb: (e: AutoAccelEvent) => void): () => void {
     this.autoAccelCbs.add(cb)
     // Make sure we're connected so events start flowing even before the first RPC.
     this.ensure().catch(() => this.onDisconnected())
     return () => this.autoAccelCbs.delete(cb)
+  }
+
+  onAutoSwitch(cb: (e: AutoSwitchEvent) => void): () => void {
+    this.autoSwitchCbs.add(cb)
+    // Make sure we're connected so events start flowing even before the first RPC.
+    this.ensure().catch(() => this.onDisconnected())
+    return () => this.autoSwitchCbs.delete(cb)
   }
 
   addServerFromLink(link: string): Promise<Server[]> {
@@ -276,6 +303,15 @@ export class WebSocketBackend implements Backend {
   updateSubscription(id: string): Promise<SubMutation> {
     return this.call('subs.update', { id })
   }
+  importNodes(text: string): Promise<ImportResult> {
+    return this.call('servers.import', { text })
+  }
+  exportGameRule(id: string): Promise<RuleExport> {
+    return this.call('games.exportRule', { id })
+  }
+  importGameRule(text: string, onConflict?: 'ask' | 'replace' | 'copy'): Promise<RuleImportResult> {
+    return this.call('games.importRule', { text, onConflict: onConflict ?? 'ask' })
+  }
   toggleFavorite(id: string): Promise<Game[]> {
     return this.call('games.toggleFavorite', { id })
   }
@@ -284,6 +320,19 @@ export class WebSocketBackend implements Backend {
   }
   setGameServer(id: string, server: 'cn' | 'intl'): Promise<Game[]> {
     return this.call('games.setServer', { id, server })
+  }
+  setGameMode(id: string, mode: CaptureMode | 'default'): Promise<Game[]> {
+    return this.call('games.setMode', { id, mode })
+  }
+  setGameDownloadProxy(id: string, enabled: boolean): Promise<Game[]> {
+    return this.call('games.setDownloadProxy', { id, enabled })
+  }
+  setGameLaunch(id: string, target: string): Promise<Game[]> {
+    return this.call('games.setLaunch', { id, target })
+  }
+  async suggestLaunch(id: string): Promise<string[]> {
+    const res = await this.call<{ targets: string[] }>('games.suggestLaunch', { id })
+    return res.targets
   }
   addGame(data: Partial<Game>): Promise<Game[]> {
     return this.call('games.add', data)
@@ -326,6 +375,10 @@ export class WebSocketBackend implements Backend {
     return this.call('diag.fix', { action })
   }
 
+  exportDiagnosticBundle(client: unknown): Promise<DiagnosticBundle> {
+    return this.call('diag.bundle', { client: client ?? null })
+  }
+
   scanLibrary(): Promise<LibraryScanResult> {
     return this.call('library.scan')
   }
@@ -348,5 +401,18 @@ export class WebSocketBackend implements Backend {
 
   setAutoStart(enabled: boolean): Promise<AutoStartState> {
     return this.call('autostart.set', { enabled })
+  }
+
+  listHistory(gameId?: string, limit?: number): Promise<AccelSession[]> {
+    return this.call('history.list', { gameId: gameId ?? null, limit: limit ?? null })
+  }
+
+  async clearHistory(gameId?: string): Promise<void> {
+    await this.call('history.clear', { gameId: gameId ?? null })
+  }
+
+  async getLanAddresses(): Promise<LanAddress[]> {
+    const res = await this.call<{ addresses: LanAddress[] }>('lan.addresses')
+    return res.addresses
   }
 }

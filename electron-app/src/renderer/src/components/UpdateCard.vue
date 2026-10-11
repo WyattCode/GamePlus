@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useUpdateStore } from '@/stores/update'
+import { DEFAULT_RELEASE_CHANNEL } from '@shared/release-channel'
 import type { UpdateSource } from '@shared/types'
 
 const update = useUpdateStore()
@@ -29,6 +30,14 @@ const autoCheck = ref(true)
 const token = ref('')
 const hasToken = computed(() => !!update.config?.hasToken)
 const saving = ref(false)
+
+const manifestDefaultApplied = computed(
+  () => manifestUrl.value.trim() === DEFAULT_RELEASE_CHANNEL.manifestUrl
+)
+
+function useDefaultManifestSource(): void {
+  manifestUrl.value = DEFAULT_RELEASE_CHANNEL.manifestUrl
+}
 
 // Keep the local form in sync with the store (initial load + external changes).
 let synced = false
@@ -266,7 +275,16 @@ async function install(): Promise<void> {
             <div class="muted small">返回 {version, url, sha256, notes} 的 JSON，必须为 https</div>
             <input v-model="manifestUrl" class="input" placeholder="https://…/latest.json" />
           </div>
-          <button class="btn diag-btn" :disabled="saving" @click="saveManifest">保存</button>
+          <div class="rules-actions">
+            <button
+              class="btn diag-btn"
+              :disabled="manifestDefaultApplied"
+              @click="useDefaultManifestSource"
+            >
+              使用默认发布源
+            </button>
+            <button class="btn diag-btn" :disabled="saving" @click="saveManifest">保存</button>
+          </div>
         </div>
 
         <template v-if="source === 'github'">

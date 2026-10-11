@@ -5,6 +5,7 @@ using Netch.Core.Models.Servers;
 using Netch.Core.Models.Settings;
 using Netch.Core.Services;
 using Netch.Core.Services.Diagnostics;
+using Netch.Core.Services.History;
 using Netch.Core.Services.Library;
 
 namespace Netch.Host;
@@ -13,25 +14,39 @@ namespace Netch.Host;
 internal record ServerDto(string Id, string Kind, string Type, string Remark, string Hostname,
     int Port, string Group, int Delay);
 
+internal record GameCompatDto(string? RecommendedMode, string Note, bool Verified);
+
 internal record GameDto(string Id, string Name, string Icon, string Accent, string RegionText,
     int RuleCount, string[] Categories, bool Favorite, bool Custom,
     string EnglishName, string[] Aliases, string Category, string[] Regions, string[] Platforms,
     string[] ProxyDomains, string[] ProxyIps, string[] ProxyProcesses, bool AutoAccelerate,
-    bool HasServerChoice, string? ServerChoice);
+    bool HasServerChoice, string? ServerChoice, string? CaptureMode, string[] AvailableModes,
+    string[] DownloadDomains, bool DownloadViaProxy, string? LaunchTarget, GameCompatDto? Compat);
 
 internal record SubscriptionDto(string Id, string Remark, string Link, int ServerCount, string? LastUpdated);
 
 internal record AccelStatusDto(string State, int Latency, double Loss, int Jitter, int DurationSec,
-    long DownloadBps, long UploadBps, string? GameId, string? NodeId, string? CaptureMode);
+    long DownloadBps, long UploadBps, string? GameId, string? NodeId, string? CaptureMode,
+    string? LanShareEndpoint);
 
 internal record LogDto(string Ts, string Level, string Message);
 
 internal record SettingsDto(string Theme, string Language, bool MinimizeToTray, string RulesUrl,
-    bool AutoAccelerate, ExtraAppDto[] ExtraApps, AdvancedSettingsDto Advanced);
+    bool AutoAccelerate, int SubscriptionAutoUpdateHours, ExtraAppDto[] ExtraApps, AdvancedSettingsDto Advanced,
+    LanShareDto LanShare);
 
 internal record ExtraAppDto(string Name, string Process, string Mode, bool Enabled);
 
-internal record AdvancedSettingsDto(string TunDns, bool MeasureEffect, int RegionPenaltyMs, int LocalSocksPort);
+internal record AdvancedSettingsDto(string TunDns, bool MeasureEffect, int RegionPenaltyMs, int LocalSocksPort,
+    string DefaultCaptureMode, bool AutoSwitchEnabled, int AutoSwitchLossPct, int AutoSwitchLatencyMs,
+    int AutoSwitchSustainSec, int AutoSwitchCooldownSec, int AutoSwitchMaxSwitches,
+    // Read-only capability flag for the UI: whether process mode (netfilter2 / Redirector) is usable
+    // in this install. Not a user setting — the UI must not send it back.
+    bool ProcessModeAvailable);
+
+/// <summary>LAN-share settings as seen by the UI. The password is NEVER returned — only <c>HasPassword</c>.</summary>
+internal record LanShareDto(bool Enabled, string BindAddress, int HttpPort, int SocksPort,
+    string[] AllowedClients, string Username, bool HasPassword);
 
 internal record EffectSnapshotDto(int Latency, double Loss, int Jitter, int Samples);
 
@@ -40,6 +55,9 @@ internal record EffectPointDto(long Ts, int Accel);
 internal record EffectReportDto(bool HasTarget, string? Target, EffectSnapshotDto? Baseline,
     EffectSnapshotDto? Current, int? LatencyPct, string Summary, EffectPointDto[] Series, bool Measuring,
     string? BaselineMeasuredAt, bool BaselineFromCache);
+
+/// <summary>Response of effect.baseline: the stored direct baseline for one game, or nulls when never measured.</summary>
+internal record BaselineInfoDto(EffectSnapshotDto? Baseline, string? MeasuredAt);
 
 internal record RankedNodeDto(string Id, string Remark, string Type, int Delay, string? Region,
     string? RegionName, bool RegionMatch, int Score, string Note);
@@ -63,6 +81,13 @@ internal record RulesStatusDto(int Version, string Source, int GameCount, string
 
 internal record RulesUpdateDto(string Status, string Message, int Version, GameDto[] Games);
 
+internal record AccelSessionDto(string Id, string GameId, string GameName, string? NodeName,
+    string? Mode, string? ServerChoice, string StartedAt, string? EndedAt, int DurationSec,
+    int? BaselineMs, int? AcceleratedMs, int? LatencyPct, string? Summary);
+
+/// <summary>Result of servers.import: how many nodes were added / skipped / rejected, plus the new list.</summary>
+internal record ImportResultDto(int Added, int Duplicates, int Invalid, string Format, ServerDto[] Servers);
+
 internal static class Mapping
 {
     public static string KindOf(Server s) => s switch
@@ -83,15 +108,25 @@ internal static class Mapping
     public static ServerDto ToDto(Server s, string id) =>
         new(id, KindOf(s), ChipOf(s), s.Remark, s.Hostname, s.Port, s.Group, s.Delay);
 
-    public static GameDto ToDto(Game g) => ToDto(g, null, null);
+    public static GameDto ToDto(Game g) => ToDto(g, null, null, null);
 
     /// <summary>
     ///     Builds the game DTO. <paramref name="autoAccelerateIds" /> is the set of game ids with the
     ///     per-game auto-acceleration toggle enabled (null → false for every game).
     ///     <paramref name="serverChoices" /> maps game ids to their 国服/国际服 choice (null → default).
+    ///     <paramref name="captureModes" /> maps game ids to their per-game capture-mode override
+    ///     (null → no override). <paramref name="downloadViaProxy" /> maps game ids to their
+    ///     「游戏下载走代理」 toggle (null → false for every game). <paramref name="launchTargets" />
+    ///     maps game ids to their 「加速并启动」 target (null → no target).
+    ///     <paramref name="processModeAvailable" /> gates the "process" entry in <c>AvailableModes</c>
+    ///     (process mode needs NetFilter files that may deliberately not be shipped).
     /// </summary>
     public static GameDto ToDto(Game g, IReadOnlyCollection<string>? autoAccelerateIds,
-        IReadOnlyDictionary<string, string>? serverChoices)
+        IReadOnlyDictionary<string, string>? serverChoices,
+        IReadOnlyDictionary<string, string>? captureModes,
+        IReadOnlyDictionary<string, bool>? downloadViaProxy = null,
+        IReadOnlyDictionary<string, string>? launchTargets = null,
+        bool processModeAvailable = true)
     {
         var hasChoice = GameRegionPreference.HasServerChoice(g);
         string? choice = null;
@@ -101,13 +136,34 @@ internal static class Mapping
             choice = string.Equals(raw, "cn", StringComparison.OrdinalIgnoreCase) ? "cn" : "intl";
         }
 
+        string? captureMode = null;
+        if (captureModes is not null && captureModes.TryGetValue(g.Id, out var cm) && !string.IsNullOrWhiteSpace(cm))
+            captureMode = cm;
+
+        var downloadProxy = downloadViaProxy is not null && downloadViaProxy.TryGetValue(g.Id, out var dvp) && dvp;
+
+        string? launchTarget = null;
+        if (launchTargets is not null && launchTargets.TryGetValue(g.Id, out var lt) && !string.IsNullOrWhiteSpace(lt))
+            launchTarget = lt;
+
+        var available = new List<string>();
+        if (g.ProxyProcesses.Count > 0 && processModeAvailable) available.Add("process");
+        // TUN (sing-box) routes by process, sniffed domain and IP, so process rules make it usable too.
+        if (g.ProxyIps.Count > 0 || g.ProxyProcesses.Count > 0) available.Add("tun");
+        if (g.ProxyDomains.Count > 0) available.Add("proxy");
+
+        var compat = g.Compat is null
+            ? null
+            : new GameCompatDto(g.Compat.RecommendedMode, g.Compat.Note, g.Compat.Verified);
+
         return new GameDto(g.Id, g.Name, g.Icon, g.Accent, g.RegionText, g.RuleCount,
             BuildCategories(g), g.IsFavorite, g.IsCustom,
             g.EnglishName, g.Aliases.ToArray(), g.Category.ToString(), g.Regions.ToArray(),
             g.Platforms.ToArray(), g.ProxyDomains.ToArray(), g.ProxyIps.ToArray(),
             g.ProxyProcesses.ToArray(),
             autoAccelerateIds is not null && autoAccelerateIds.Contains(g.Id),
-            hasChoice, choice);
+            hasChoice, choice, captureMode, available.ToArray(),
+            g.DownloadDomains.ToArray(), downloadProxy, launchTarget, compat);
     }
 
     /// <summary>
@@ -132,6 +188,7 @@ internal static class Mapping
             game.ProxyDomains = new List<string>(existing.ProxyDomains);
             game.ProxyIps = new List<string>(existing.ProxyIps);
             game.ProxyProcesses = new List<string>(existing.ProxyProcesses);
+            game.DownloadDomains = new List<string>(existing.DownloadDomains);
             game.IsCustom = existing.IsCustom;
             game.IsFavorite = existing.IsFavorite;
         }
@@ -169,6 +226,8 @@ internal static class Mapping
         if (JsonParams.HasProperty(p, "proxyDomains")) game.ProxyDomains = JsonParams.StringList(p, "proxyDomains");
         if (JsonParams.HasProperty(p, "proxyIps")) game.ProxyIps = JsonParams.StringList(p, "proxyIps");
         if (JsonParams.HasProperty(p, "proxyProcesses")) game.ProxyProcesses = JsonParams.StringList(p, "proxyProcesses");
+        if (JsonParams.HasProperty(p, "downloadDomains")) game.DownloadDomains = JsonParams.StringList(p, "downloadDomains");
+        // compat is intentionally ignored: custom games never carry compatibility notes.
         return game;
     }
 
@@ -215,7 +274,8 @@ internal static class Mapping
             st.UploadRate,
             a.CurrentGame?.Id,
             nodeId,
-            st.CaptureMode);
+            st.CaptureMode,
+            st.LanShareEndpoint);
     }
 
     public static LogDto ToDto(LogEntry e) =>
@@ -223,14 +283,23 @@ internal static class Mapping
 
     public static SettingsDto ToDto(Netch.Core.Models.Settings.AppSettings s) =>
         new(s.Theme.ToString().ToLowerInvariant(), s.Language, s.MinimizeToTray, s.RulesUrl,
-            s.AutoAccelerate, s.ExtraApps.Select(ToDto).ToArray(), ToAdvancedDto(s));
+            s.AutoAccelerate, s.SubscriptionAutoUpdateHours, s.ExtraApps.Select(ToDto).ToArray(), ToAdvancedDto(s),
+            ToLanShareDto(s.LanShare));
 
     /// <summary>
     ///     Builds the advanced-settings DTO. <c>TunDns</c> lives on <see cref="AppSettings.Dns" />, not on
     ///     <see cref="AdvancedSettings" />, so the whole settings object is needed here.
     /// </summary>
     public static AdvancedSettingsDto ToAdvancedDto(Netch.Core.Models.Settings.AppSettings s) =>
-        new(s.Dns.OtherDns, s.Advanced.MeasureEffect, s.Advanced.RegionPenaltyMs, s.Advanced.LocalSocksPort);
+        new(s.Dns.OtherDns, s.Advanced.MeasureEffect, s.Advanced.RegionPenaltyMs, s.Advanced.LocalSocksPort,
+            s.Advanced.DefaultCaptureMode, s.Advanced.AutoSwitchEnabled, s.Advanced.AutoSwitchLossPct,
+            s.Advanced.AutoSwitchLatencyMs, s.Advanced.AutoSwitchSustainSec, s.Advanced.AutoSwitchCooldownSec,
+            s.Advanced.AutoSwitchMaxSwitches, ProcessModeSupport.IsAvailable());
+
+    /// <summary>Builds the LAN-share DTO. The password is never sent to the UI — only <c>HasPassword</c>.</summary>
+    public static LanShareDto ToLanShareDto(LanShareSettings l) =>
+        new(l.Enabled, l.BindAddress, l.HttpPort, l.SocksPort, l.AllowedClients.ToArray(), l.Username,
+            !string.IsNullOrEmpty(l.Password));
 
     public static ExtraAppDto ToDto(ExtraApp a) =>
         new(a.Name, a.Process, a.Mode == ExtraAppMode.Bypass ? "bypass" : "proxy", a.Enabled);
@@ -285,6 +354,11 @@ internal static class Mapping
 
     public static LibraryScanDto ToDto(ScanResult r) =>
         new(r.Games.Select(ToDto).ToArray(), r.Errors.ToArray(), r.ScannedAtUtc.ToString("o"));
+
+    public static AccelSessionDto ToDto(AccelSession s) =>
+        new(s.Id, s.GameId, s.GameName, s.NodeName, s.Mode, s.ServerChoice,
+            s.StartedAt.ToString("o"), s.EndedAt?.ToString("o"), s.DurationSec,
+            s.BaselineMs, s.AcceleratedMs, s.LatencyPct, s.Summary);
 
     private static string StatusName(DiagnosticStatus s) => s switch
     {

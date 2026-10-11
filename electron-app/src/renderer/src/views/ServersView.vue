@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
+import NodeImportDialog from '@/components/NodeImportDialog.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useToastStore, errorMessage } from '@/stores/toast'
 import { delayColor, fmtDelay } from '@/utils/format'
@@ -9,6 +10,7 @@ const library = useLibraryStore()
 const toast = useToastStore()
 const search = ref('')
 const showAdd = ref(false)
+const showImport = ref(false)
 const addLink = ref('')
 const busy = ref(false)
 const notice = ref('')
@@ -23,21 +25,6 @@ const filtered = computed(() =>
 function flash(msg: string): void {
   notice.value = msg
   setTimeout(() => (notice.value = ''), 3000)
-}
-
-async function importFromClipboard(): Promise<void> {
-  if (busy.value) return
-  busy.value = true
-  try {
-    const text = await navigator.clipboard.readText()
-    if (!text.trim()) return flash('剪贴板为空')
-    const added = await library.addServerFromLink(text.trim())
-    flash(added > 0 ? `已导入 ${added} 条线路` : '未识别到线路')
-  } catch (e) {
-    flash('导入失败：' + errorMessage(e))
-  } finally {
-    busy.value = false
-  }
 }
 
 async function addFromInput(): Promise<void> {
@@ -101,8 +88,8 @@ const typeColor: Record<string, string> = {
         <button class="btn" :disabled="library.pinging" @click="library.pingAll()">
           <AppIcon name="pulse" :size="18" /> {{ library.pinging ? '测速中…' : '测速' }}
         </button>
-        <button class="btn" :disabled="busy" @click="importFromClipboard">
-          <AppIcon name="copy" :size="18" /> 从剪贴板导入
+        <button class="btn" :disabled="busy" @click="showImport = true">
+          <AppIcon name="download" :size="18" /> 导入节点
         </button>
         <button class="btn" :disabled="busy || !library.servers.length" @click="exportToClipboard">
           <AppIcon name="upload" :size="18" /> 导出
@@ -152,6 +139,8 @@ const typeColor: Record<string, string> = {
         </button>
       </div>
     </div>
+
+    <NodeImportDialog :open="showImport" @close="showImport = false" />
   </div>
 </template>
 

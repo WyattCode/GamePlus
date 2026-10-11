@@ -57,6 +57,17 @@ const api = {
       return () => ipcRenderer.removeListener('tray:action', listener)
     }
   },
+  mini: {
+    // Returns an unsubscribe function so callers can detach the listener.
+    onInfo: (cb: (info: TrayInfo) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, info: TrayInfo): void => cb(info)
+      ipcRenderer.on('mini:info', listener)
+      return () => ipcRenderer.removeListener('mini:info', listener)
+    },
+    action: (a: TrayAction): Promise<void> => ipcRenderer.invoke('mini:action', a),
+    openMain: (): Promise<void> => ipcRenderer.invoke('mini:open-main'),
+    hide: (): Promise<void> => ipcRenderer.invoke('mini:hide')
+  },
   update: {
     getState: (): Promise<UpdateState | null> => ipcRenderer.invoke('update:get-state'),
     check: (): Promise<UpdateState | null> => ipcRenderer.invoke('update:check'),
@@ -84,6 +95,31 @@ const api = {
     clear: (): Promise<void> => ipcRenderer.invoke('telemetry:clear'),
     listCrashes: (): Promise<CrashFileInfo[]> => ipcRenderer.invoke('telemetry:list-crashes'),
     openCrashFolder: (): Promise<void> => ipcRenderer.invoke('telemetry:open-crash-folder')
+  },
+  diag: {
+    collectClient: (): Promise<unknown> => ipcRenderer.invoke('diag:collect-client'),
+    saveBundle: (fileName: string, base64: string): Promise<string | null> =>
+      ipcRenderer.invoke('diag:save-bundle', fileName, base64)
+  },
+  launch: {
+    // Executes a validated launch target (steam/epic URL or local .exe path).
+    launchGame: (target: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('launch:game', target),
+    // Creates the "<name> - Game+ 加速.lnk" desktop shortcut for --launch <gameId>.
+    createShortcut: (
+      gameId: string,
+      gameName: string
+    ): Promise<{ ok: boolean; path?: string; error?: string }> =>
+      ipcRenderer.invoke('launch:create-shortcut', gameId, gameName),
+    // Opens a file dialog restricted to .exe files; null when cancelled.
+    pickExe: (): Promise<string | null> => ipcRenderer.invoke('launch:pick-exe'),
+    // Main asks the renderer to accelerate + launch the given game (from --launch).
+    // Returns an unsubscribe function so callers can detach the listener.
+    onLaunchRequest: (cb: (gameId: string) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, gameId: string): void => cb(gameId)
+      ipcRenderer.on('launch:request', listener)
+      return () => ipcRenderer.removeListener('launch:request', listener)
+    }
   }
 }
 

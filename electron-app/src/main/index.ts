@@ -1,6 +1,8 @@
-import { app, shell, BrowserWindow, ipcMain, nativeTheme, Tray, Menu, nativeImage, Notification } from 'electron'
-import { readFileSync } from 'fs'
-import { join } from 'path'
+import { app, shell, BrowserWindow, ipcMain, nativeTheme, Tray, Menu, nativeImage, Notification, screen, dialog } from 'electron'
+import { spawn } from 'child_process'
+import { readFileSync, writeFileSync, existsSync } from 'fs'
+import { release as osRelease } from 'os'
+import { join, dirname } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { startSidecar, stopSidecar } from './sidecar'
 import { getPrefs, setPrefs } from './prefs'
@@ -11,14 +13,30 @@ import {
   installCrashHandlers,
   registerTelemetryIpc,
   startTelemetry,
-  stopTelemetry
+  stopTelemetry,
+  getRecentEvents
 } from './telemetry'
-import type { TrayInfo, UpdateConfig } from '../shared/types'
+import {
+  INVALID_TARGET_MESSAGE,
+  isValidGameId,
+  parseLaunchArg,
+  sanitizeShortcutName,
+  validateLaunchTarget
+} from './launch'
+import type { TrayAction, TrayInfo, UpdateConfig } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
+let miniWindow: BrowserWindow | null = null
+let miniHiddenAt = 0
 let tray: Tray | null = null
 let isQuitting = false
 let updater: Updater | null = null
+// Last status snapshot received from the renderer via `tray:update`; replayed to the mini window on load.
+let lastTrayInfo: TrayInfo | null = null
+// Game id from `--launch <gameId>` (startup or second instance), queued until the renderer can receive it.
+let pendingLaunchId: string | null = null
+// Parsed once at startup: `Game+.exe --launch <gameId>` (null when absent/invalid).
+const cliLaunchId = parseLaunchArg(process.argv)
 
 // Crash handlers must be installed before app.whenReady() so early failures are captured.
 installCrashHandlers()
@@ -41,6 +59,27 @@ function showMainWindow(): void {
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
+}
+
+/**
+ * Sends 'launch:request' to the main renderer. If the window doesn't exist yet
+ * or hasn't finished loading, the id is queued and flushed on did-finish-load.
+ */
+function sendLaunchRequest(gameId: string): void {
+  const win = mainWindow
+  if (!win || win.isDestroyed() || win.webContents.isLoading()) {
+    pendingLaunchId = gameId
+    return
+  }
+  win.webContents.send('launch:request', gameId)
+}
+
+/**
+ * True when an IPC call comes from the main window. The mini window shares the same preload, so
+ * privileged handlers (launching programs, creating shortcuts, writing files) must check the sender.
+ */
+function isFromMainWindow(event: Electron.IpcMainInvokeEvent): boolean {
+  return !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents
 }
 
 /** Sends a tray quick action to the renderer (which owns the accel/diagnostics stores). */
@@ -93,6 +132,7 @@ function updateTray(info: TrayInfo | null): void {
         }
       },
       { type: 'separator' },
+      { label: '迷你窗口', click: () => showMiniWindow() },
       { label: '显示 Game+', click: showMainWindow },
       {
         label: '退出',
@@ -105,12 +145,139 @@ function updateTray(info: TrayInfo | null): void {
   )
 }
 
+/** Forwards the latest status snapshot to the mini window (if it exists). */
+function pushMiniInfo(info: TrayInfo | null): void {
+  if (!info) return
+  if (miniWindow && !miniWindow.isDestroyed()) {
+    miniWindow.webContents.send('mini:info', info)
+  }
+}
+
+/** Positions the mini window just above (or below) the tray icon, clamped to the display work area. */
+function positionMiniWindow(): void {
+  if (!miniWindow || !tray) return
+  const trayBounds = tray.getBounds()
+  const winBounds = miniWindow.getBounds()
+  const display = screen.getDisplayNearestPoint({
+    x: Math.round(trayBounds.x + trayBounds.width / 2),
+    y: Math.round(trayBounds.y + trayBounds.height / 2)
+  })
+  const work = display.workArea
+  const gap = 8
+
+  let x = Math.round(trayBounds.x + trayBounds.width / 2 - winBounds.width / 2)
+  // Windows taskbar is usually at the bottom: place the window above the icon when there is room.
+  const spaceAbove = trayBounds.y - work.y
+  let y =
+    spaceAbove >= winBounds.height + gap
+      ? trayBounds.y - winBounds.height - gap
+      : trayBounds.y + trayBounds.height + gap
+
+  x = Math.min(Math.max(x, work.x), work.x + work.width - winBounds.width)
+  y = Math.min(Math.max(y, work.y), work.y + work.height - winBounds.height)
+  miniWindow.setPosition(x, y)
+}
+
+/** Shows (creating if needed) the mini window near the tray icon. */
+function showMiniWindow(): void {
+  if (!miniWindow || miniWindow.isDestroyed()) {
+    createMiniWindow()
+    return
+  }
+  positionMiniWindow()
+  miniWindow.show()
+  miniWindow.focus()
+}
+
+/** Toggles the mini window: hide when visible, otherwise show near the tray icon. */
+function toggleMiniWindow(): void {
+  // Clicking the tray icon blurs (and so hides) a visible mini window first; don't re-open it.
+  if (Date.now() - miniHiddenAt < 300) return
+  if (miniWindow && !miniWindow.isDestroyed() && miniWindow.isVisible()) {
+    miniWindow.hide()
+    return
+  }
+  showMiniWindow()
+}
+
+function createMiniWindow(): void {
+  if (miniWindow && !miniWindow.isDestroyed()) return
+  const win = new BrowserWindow({
+    width: 300,
+    height: 190,
+    frame: false,
+    resizable: false,
+    show: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    transparent: false,
+    backgroundColor: '#f5f6f8',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: true,
+      contextIsolation: true
+    }
+  })
+  miniWindow = win
+
+  win.on('blur', () => {
+    miniHiddenAt = Date.now()
+    if (!win.isDestroyed()) win.hide()
+  })
+  // First open: show once the page is ready (later opens go through showMiniWindow()).
+  win.once('ready-to-show', () => {
+    positionMiniWindow()
+    win.show()
+    win.focus()
+  })
+  win.on('closed', () => {
+    if (miniWindow === win) miniWindow = null
+  })
+
+  win.webContents.setWindowOpenHandler((details) => {
+    openExternalIfAllowed(details.url)
+    return { action: 'deny' }
+  })
+
+  // Block in-app navigation away from our own renderer; open allowed http(s) links externally instead.
+  win.webContents.on('will-navigate', (e, url) => {
+    const current = win.webContents.getURL()
+    if (url === current) return
+    try {
+      const target = new URL(url)
+      const base = new URL(current)
+      if (target.origin === base.origin && target.protocol !== 'file:') return
+      if (target.protocol === 'file:' && base.protocol === 'file:') return
+    } catch {
+      // fall through to deny
+    }
+    e.preventDefault()
+    openExternalIfAllowed(url)
+  })
+
+  // Replay the last known status once the mini renderer is ready to receive it.
+  win.webContents.on('did-finish-load', () => {
+    if (lastTrayInfo) win.webContents.send('mini:info', lastTrayInfo)
+  })
+
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/mini.html`)
+  } else {
+    win.loadFile(join(__dirname, '../renderer/mini.html'))
+  }
+}
+
 function createTray(): void {
   if (tray) return
   tray = new Tray(nativeImage.createFromDataURL(trayIcon32))
   updateTray(null)
-  tray.on('click', showMainWindow)
-  tray.on('double-click', showMainWindow)
+  // Single left click toggles the mini window; double-click opens the main window.
+  tray.on('click', () => toggleMiniWindow())
+  tray.on('double-click', () => {
+    if (miniWindow && !miniWindow.isDestroyed()) miniWindow.hide()
+    showMainWindow()
+  })
 }
 
 /** Open an http(s) URL externally; ignore anything else (file:, javascript:, custom schemes). */
@@ -146,7 +313,8 @@ function createWindow(): void {
   mainWindow = win
 
   // When launched at login with "start hidden" enabled, keep the window in the tray only.
-  const startHidden = process.argv.includes('--hidden') && getPrefs().startHidden
+  // A --launch start must always show the window (the user explicitly launched a game).
+  const startHidden = process.argv.includes('--hidden') && getPrefs().startHidden && !cliLaunchId
   win.on('ready-to-show', () => {
     if (!startHidden) win.show()
   })
@@ -182,6 +350,14 @@ function createWindow(): void {
     }
     e.preventDefault()
     openExternalIfAllowed(url)
+  })
+
+  // Flush a queued --launch request once the renderer is able to receive it.
+  win.webContents.on('did-finish-load', () => {
+    if (pendingLaunchId && mainWindow === win) {
+      win.webContents.send('launch:request', pendingLaunchId)
+      pendingLaunchId = null
+    }
   })
 
   // Reflect the OS theme so the renderer can honour "system". Remove the listener when the window closes
@@ -221,6 +397,73 @@ function registerWindowControls(): void {
   ipcMain.handle('prefs:get', () => getPrefs())
   ipcMain.handle('prefs:set', (_e, patch) => setPrefs(patch ?? {}))
 
+  // --- 「加速并启动」: execute a validated launch target ---
+  ipcMain.handle('launch:game', async (event, target: unknown) => {
+    if (!isFromMainWindow(event)) return { ok: false, error: INVALID_TARGET_MESSAGE }
+    if (typeof target !== 'string' || target.length === 0) {
+      return { ok: false, error: INVALID_TARGET_MESSAGE }
+    }
+    // Validate again in main — the renderer value is never trusted.
+    const v = validateLaunchTarget(target, (p) => existsSync(p))
+    if (!v.ok) return { ok: false, error: v.error }
+    try {
+      if (v.kind === 'exe') {
+        // Launch the exe directly: no extra arguments, no shell (no cmd.exe, no shell:true).
+        const child = spawn(target, [], {
+          cwd: dirname(target),
+          detached: true,
+          stdio: 'ignore',
+          shell: false,
+          windowsHide: false
+        })
+        child.on('error', (err) => console.error('launch failed:', err))
+        child.unref()
+      } else {
+        await shell.openExternal(target)
+      }
+      return { ok: true }
+    } catch (err) {
+      console.error('launch failed:', err)
+      return { ok: false, error: '启动失败，请稍后重试' }
+    }
+  })
+
+  // --- 「加速并启动」: create the desktop shortcut pointing back at Game+ ---
+  ipcMain.handle('launch:create-shortcut', (event, gameId: unknown, gameName: unknown) => {
+    if (!isFromMainWindow(event)) return { ok: false, error: '无效的游戏 ID' }
+    if (typeof gameId !== 'string' || !isValidGameId(gameId)) {
+      return { ok: false, error: '无效的游戏 ID' }
+    }
+    const name = sanitizeShortcutName(typeof gameName === 'string' ? gameName : '', gameId)
+    const path = join(app.getPath('desktop'), `${name} - Game+ 加速.lnk`)
+    try {
+      const ok = shell.writeShortcutLink(path, 'create', {
+        target: process.execPath,
+        args: `--launch ${gameId}`,
+        icon: process.execPath,
+        iconIndex: 0,
+        description: `用 Game+ 加速并启动 ${name}`
+      })
+      return ok ? { ok: true, path } : { ok: false, error: '创建快捷方式失败' }
+    } catch (err) {
+      console.error('create shortcut failed:', err)
+      return { ok: false, error: '创建快捷方式失败' }
+    }
+  })
+
+  // --- 「加速并启动」: file picker for the .exe launch target ---
+  ipcMain.handle('launch:pick-exe', async (event) => {
+    if (!isFromMainWindow(event)) return null
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+    const result = await dialog.showOpenDialog(win as BrowserWindow, {
+      title: '选择游戏启动程序',
+      filters: [{ name: '可执行文件', extensions: ['exe'] }],
+      properties: ['openFile']
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  })
+
   // --- Desktop notifications (only when the window isn't visible/focused) ---
   ipcMain.handle('app:notify', (_e, title: unknown, body: unknown) => {
     if (typeof title !== 'string' || typeof body !== 'string') return
@@ -240,7 +483,26 @@ function registerWindowControls(): void {
     if (state !== 'idle' && state !== 'connecting' && state !== 'accelerating' && state !== 'stopping') return
     const gameName = typeof i.gameName === 'string' && i.gameName.length <= 100 ? i.gameName : null
     const latency = typeof i.latency === 'number' && Number.isFinite(i.latency) ? i.latency : 0
-    updateTray({ state, gameName, latency })
+    const snapshot: TrayInfo = { state, gameName, latency }
+    lastTrayInfo = snapshot
+    updateTray(snapshot)
+    pushMiniInfo(snapshot)
+  })
+
+  // --- Mini window IPC (only accepted from the mini window's own webContents) ---
+  ipcMain.handle('mini:action', (event, action: unknown) => {
+    if (event.sender !== miniWindow?.webContents) return
+    if (action !== 'toggle' && action !== 'diagnose') return
+    sendTrayAction(action as TrayAction)
+  })
+  ipcMain.handle('mini:open-main', (event) => {
+    if (event.sender !== miniWindow?.webContents) return
+    miniWindow?.hide()
+    showMainWindow()
+  })
+  ipcMain.handle('mini:hide', (event) => {
+    if (event.sender !== miniWindow?.webContents) return
+    miniWindow?.hide()
   })
 
   // --- Client auto-update ---
@@ -273,6 +535,38 @@ function registerWindowControls(): void {
     }
   })
 
+  // --- One-click diagnostic bundle ---
+  ipcMain.handle('diag:collect-client', () => ({
+    appVersion: app.getVersion(),
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+    platform: process.platform,
+    osRelease: osRelease(),
+    arch: process.arch,
+    locale: app.getLocale(),
+    recentEvents: getRecentEvents(200)
+  }))
+
+  ipcMain.handle('diag:save-bundle', async (event, fileName: unknown, base64: unknown) => {
+    if (!isFromMainWindow(event)) throw new Error('无效的请求来源')
+    if (typeof fileName !== 'string' || !/^GamePlus-diagnostics-\d{8}-\d{6}\.zip$/.test(fileName)) {
+      throw new Error('无效的文件名')
+    }
+    if (typeof base64 !== 'string' || base64.length > 40 * 1024 * 1024) {
+      throw new Error('无效的诊断包数据')
+    }
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+    const result = await dialog.showSaveDialog(win as BrowserWindow, {
+      defaultPath: join(app.getPath('documents'), fileName),
+      filters: [{ name: 'ZIP', extensions: ['zip'] }]
+    })
+    if (result.canceled || !result.filePath) return null
+    const buffer = Buffer.from(base64, 'base64')
+    writeFileSync(result.filePath, buffer)
+    return result.filePath
+  })
+
   // --- Telemetry ---
   registerTelemetryIpc()
 }
@@ -286,8 +580,11 @@ if (!gotSingleInstanceLock) {
   // Nothing has started yet (no sidecar, no window, no tray), so exit synchronously.
   app.exit(0)
 } else {
-  app.on('second-instance', () => {
+  // A second `Game+.exe --launch <gameId>` hands the id to the running instance's renderer.
+  app.on('second-instance', (_e, argv) => {
     showMainWindow()
+    const launchId = parseLaunchArg(argv)
+    if (launchId) sendLaunchRequest(launchId)
   })
 
   app.whenReady().then(() => {
@@ -306,6 +603,10 @@ if (!gotSingleInstanceLock) {
     }
     createWindow()
     createTray()
+
+    // `Game+.exe --launch <gameId>`: the window is forced visible (see createWindow); queue the
+    // request until the renderer has finished loading, then hand it the game id.
+    if (cliLaunchId) sendLaunchRequest(cliLaunchId)
 
     // Client auto-update: disabled unless the user configured a source. Never auto-downloads.
     updater = new Updater()
@@ -340,6 +641,10 @@ if (!gotSingleInstanceLock) {
     e.preventDefault()
     if (quitStarted) return
     quitStarted = true
+    if (miniWindow && !miniWindow.isDestroyed()) {
+      miniWindow.destroy()
+      miniWindow = null
+    }
     stopSidecar().finally(() => app.exit(0))
   })
 

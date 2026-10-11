@@ -24,6 +24,21 @@ export interface Server {
   delay: number
 }
 
+/** A concrete capture method (no "auto"): process capture, TUN IP capture or system proxy. */
+export type CaptureModeKind = 'process' | 'tun' | 'proxy'
+
+/** User-selectable acceleration mode: "auto" plus the three concrete capture methods. */
+export type CaptureMode = 'auto' | CaptureModeKind
+
+/** Per-game compatibility note (anti-cheat / recommended mode hints) from the backend. */
+export interface GameCompat {
+  /** Mode the backend recommends for this game; null = no recommendation. */
+  recommendedMode: CaptureMode | null
+  note: string
+  /** True when the note has been verified against the actual game. */
+  verified: boolean
+}
+
 export interface Game {
   id: string
   name: string
@@ -46,12 +61,24 @@ export interface Game {
   proxyDomains?: string[]
   proxyIps?: string[]
   proxyProcesses?: string[]
+  /** CDN download domains; forced DIRECT unless downloadViaProxy is true. */
+  downloadDomains?: string[]
+  /** True when the game's download (CDN) traffic also goes through the node. */
+  downloadViaProxy?: boolean
   /** True when this game is in the auto-acceleration list. */
   autoAccelerate?: boolean
   /** True when the game has both 国服 and 国际服, so the user can pick a server. */
   hasServerChoice?: boolean
   /** Per-game server choice; only meaningful when hasServerChoice is true. */
   serverChoice?: 'cn' | 'intl' | null
+  /** Per-game capture-mode override; null/undefined = follow the global default. */
+  captureMode?: CaptureMode | null
+  /** Capture methods available for this game's rules (subset of process/tun/proxy). */
+  availableModes?: CaptureModeKind[]
+  /** Per-game launch target (steam://rungameid, epic:// or a local .exe path); null/undefined = not set. */
+  launchTarget?: string | null
+  /** Per-game compatibility note; null/undefined = none. */
+  compat?: GameCompat | null
 }
 
 export type AccelState =
@@ -61,7 +88,7 @@ export type AccelState =
   | 'stopping'
 
 /** Which capture method is actually active. Null while idle. */
-export type CaptureMode = 'process' | 'tun' | 'proxy'
+export type ActiveCaptureMode = CaptureModeKind
 
 export interface AccelStatus {
   state: AccelState
@@ -75,7 +102,9 @@ export interface AccelStatus {
   gameId: string | null
   nodeId: string | null
   /** Active capture method, or null when idle. */
-  captureMode: CaptureMode | null
+  captureMode: ActiveCaptureMode | null
+  /** "bindAddress:httpPort" while LAN sharing is enabled and accelerating; null otherwise. */
+  lanShareEndpoint?: string | null
 }
 
 export interface Subscription {
@@ -116,6 +145,63 @@ export interface AdvancedSettings {
   regionPenaltyMs: number
   /** Fixed local SOCKS5 port; 0 = pick a free port automatically. */
   localSocksPort: number
+  /** Global default acceleration mode; per-game overrides take precedence. */
+  defaultCaptureMode: CaptureMode
+  /**
+   * Read-only capability reported by the backend: false when the NetFilter components (process mode)
+   * are not shipped. Ignored by settings.set. Missing = assume available (older backends).
+   */
+  processModeAvailable?: boolean
+  /** Master switch for automatic node switching on sustained bad quality. */
+  autoSwitchEnabled: boolean
+  /** Loss percentage threshold (1–50); loss >= this counts as a bad sample. */
+  autoSwitchLossPct: number
+  /** Latency threshold in ms (50–2000); latency >= this (or < 0 = timeout) counts as bad. */
+  autoSwitchLatencyMs: number
+  /** Sustain window in seconds (5–120); bad samples must span this long to trigger. */
+  autoSwitchSustainSec: number
+  /** Cooldown after a switch in seconds (10–600) before evaluating again. */
+  autoSwitchCooldownSec: number
+  /** Maximum switches per acceleration session (1–10). */
+  autoSwitchMaxSwitches: number
+}
+
+/** LAN sharing ("HTTP proxy share" for consoles) settings; default OFF. */
+export interface LanShareSettings {
+  /** Master switch; requires explicit user confirmation in the UI to turn on. */
+  enabled: boolean
+  /** Private LAN IPv4 of this PC the proxy inbounds bind to (never 0.0.0.0). */
+  bindAddress: string
+  /** HTTP proxy port for consoles (1024–65535). */
+  httpPort: number
+  /** Optional SOCKS5 port for PCs/phones; 0 = off. */
+  socksPort: number
+  /** Non-empty allowlist of private IPv4 / CIDR entries (max 32). */
+  allowedClients: string[]
+  /** Optional auth username (HTTP basic / SOCKS). */
+  username: string
+  /** True when a password is stored (never sent back to the renderer). */
+  hasPassword: boolean
+}
+
+/** Patch for settings.set's `lanShare` field; omitted fields keep their current value. */
+export interface LanShareUpdate {
+  enabled?: boolean
+  bindAddress?: string
+  httpPort?: number
+  socksPort?: number
+  allowedClients?: string[]
+  username?: string
+  /** Sets a new password when non-empty. */
+  password?: string
+  /** Clears the stored password. */
+  clearPassword?: boolean
+}
+
+/** One private IPv4 address of this PC, from the `lan.addresses` RPC. */
+export interface LanAddress {
+  address: string
+  interfaceName: string
 }
 
 /** Engine-side settings persisted by the C# backend (subset of the full AppSettings). */
@@ -127,18 +213,34 @@ export interface EngineSettings {
   rulesUrl: string
   /** Global master switch for auto-acceleration on game launch. */
   autoAccelerate: boolean
+  /** Automatic subscription refresh interval in hours; 0 = disabled (allowed: 0, 6, 12, 24, 48). */
+  subscriptionAutoUpdateHours: number
   /** Extra applications for per-app split routing (process mode only). */
   extraApps: ExtraApp[]
   /** Advanced engine options. */
   advanced: AdvancedSettings
+  /** LAN sharing (console HTTP proxy share) settings. */
+  lanShare: LanShareSettings
 }
 
 /**
- * Patch accepted by settings.set: any top-level field, plus a partial `advanced` object so callers
- * can update a single advanced field without resending (and re-validating) the whole block.
+ * Patch accepted by settings.set: any top-level field, plus partial `advanced` / `lanShare` objects
+ * so callers can update a single field without resending (and re-validating) the whole block.
  */
-export type SettingsPatch = Partial<Omit<EngineSettings, 'advanced'>> & {
+export type SettingsPatch = Partial<Omit<EngineSettings, 'advanced' | 'lanShare'>> & {
   advanced?: Partial<AdvancedSettings>
+  lanShare?: LanShareUpdate
+}
+
+/** Result of importing nodes (share links, subscription blob, Clash YAML or a subscription URL). */
+export interface ImportResult {
+  added: number
+  duplicates: number
+  invalid: number
+  /** Detected payload format: "subscription" | "clash" | "links" | "base64". */
+  format: string
+  /** Full server list after the import. */
+  servers: Server[]
 }
 
 /** Connection state of the C# backend sidecar. */
@@ -150,7 +252,7 @@ export interface UpdateInfo {
   status: UpdateCheckStatus
   /** Running version, e.g. "3.0.0". */
   current: string
-  /** Latest version parsed from the update source, when available. */
+  /** Latest version parsed from the update source. */
   latest: string | null
   /** Raw tag from the update source, when available. */
   tag: string | null
@@ -194,6 +296,13 @@ export interface EffectReport {
   baselineMeasuredAt?: string | null
   /** True when the baseline was reused from a previous measurement instead of measured now. */
   baselineFromCache?: boolean
+}
+
+/** Stored direct-connection baseline for one game (effect.baseline RPC); both fields null when never measured. */
+export interface BaselineInfo {
+  baseline: EffectSnapshot | null
+  /** ISO timestamp of when the baseline was measured; null when unknown. */
+  measuredAt: string | null
 }
 
 /** One ranked candidate node from the smart-routing ranker. */
@@ -248,6 +357,13 @@ export interface DiagnosticReport {
   ranAt: string
   /** Plain-Chinese explanation of the last error, when one was supplied. */
   errorExplanation: string | null
+}
+
+/** A one-click diagnostic bundle produced by the backend and saved by the client. */
+export interface DiagnosticBundle {
+  fileName: string
+  base64: string
+  size: number
 }
 
 /** Where the client auto-updater fetches releases from. */
@@ -319,7 +435,7 @@ export interface TelemetryConfig {
 
 /** One whitelisted telemetry event (as stored locally / uploaded). */
 export type TelemetryEvent =
-  | { type: 'accel_start'; ok: boolean; mode?: 'process' | 'tun' | 'proxy'; reason?: string; durationMs?: number }
+  | { type: 'accel_start'; ok: boolean; mode?: CaptureModeKind; reason?: string; durationMs?: number }
   | { type: 'accel_stop'; durationSec?: number }
   | { type: 'auto_accel'; kind: 'started' | 'stopped' | 'failed' | 'skipped' }
   | { type: 'diagnostics'; failed: number; warned: number }
@@ -335,6 +451,12 @@ export interface CrashFileInfo {
   mtime: number
 }
 
+/**
+ * 「加速并启动时的节点」: 'keep' keeps the user's manual node choice (smart node when there is none),
+ * 'smart' always uses smart node selection.
+ */
+export type LaunchNodeMode = 'keep' | 'smart'
+
 /** UI preferences persisted by the Electron main process (userData/prefs.json). */
 export interface UiPrefs {
   /** True once the user has completed (or skipped) the first-run onboarding. */
@@ -347,6 +469,8 @@ export interface UiPrefs {
   update: UpdateConfig
   /** Telemetry configuration. */
   telemetry: TelemetryConfig
+  /** Node used by 「加速并启动」 (button and --launch/desktop shortcut): keep the manual choice or always smart. */
+  launchNodeMode: LaunchNodeMode
 }
 
 /** One game found by scanning the local machine's launchers/registries. */
@@ -413,10 +537,23 @@ export interface AutoAccelEvent {
   message: string
 }
 
+/** Push event emitted when the auto node switcher reacts to sustained bad line quality. */
+export interface AutoSwitchEvent {
+  kind: 'switched' | 'failed' | 'exhausted'
+  gameId: string
+  /** Node display names/remarks; null when unknown. */
+  fromNode: string | null
+  toNode: string | null
+  /** Chinese description of the trigger, e.g. "丢包 8% ≥ 5%，持续 15 秒". */
+  reason: string
+  /** Extra failure detail for kind === 'failed'; null otherwise. */
+  message: string | null
+}
+
 /** State of the "launch at login" scheduled task, reported by the C# host. */
 export interface AutoStartState {
   enabled: boolean
-  /** False when the app is not running from an installed layout. */
+  /** False when the app is not running from an installed location. */
   supported: boolean
   /** Short user-facing reason when unsupported (or null). */
   reason: string | null
@@ -431,3 +568,49 @@ export interface TrayInfo {
 
 /** Quick action triggered from the tray context menu. */
 export type TrayAction = 'toggle' | 'diagnose'
+
+/** One completed acceleration session (per-game history). */
+export interface AccelSession {
+  id: string
+  gameId: string
+  gameName: string
+  /** Node display name (Remark); never a host/port. */
+  nodeName: string | null
+  /** Capture mode used, e.g. "process" / "tun" / "proxy". */
+  mode: string | null
+  /** Per-game server choice ("cn" | "intl"); null for games without a 国服/国际服 choice. */
+  serverChoice: string | null
+  /** ISO timestamp of when acceleration started. */
+  startedAt: string
+  /** ISO timestamp of when acceleration ended; null while still running. */
+  endedAt: string | null
+  durationSec: number
+  /** Direct-connection baseline latency in ms; null when not measured. */
+  baselineMs: number | null
+  /** Accelerated latency in ms; null when not measured. */
+  acceleratedMs: number | null
+  /** Latency improvement percentage; null when not enough data. */
+  latencyPct: number | null
+  /** One-line Chinese summary of the effect measurement. */
+  summary: string | null
+}
+
+/** Result of games.exportRule: pretty-printed rule JSON, a share string and a suggested file name. */
+export interface RuleExport {
+  json: string
+  share: string
+  fileName: string
+}
+
+/** Conflict reported by games.importRule when the incoming rule matches an existing game. */
+export interface RuleConflict {
+  kind: 'builtin' | 'custom'
+  existingId: string
+  existingName: string
+  incomingName: string
+}
+
+/** Result of games.importRule: either imported (with the refreshed game list) or a conflict. */
+export type RuleImportResult =
+  | { status: 'imported'; importedId: string; games: Game[] }
+  | { status: 'conflict'; conflict: RuleConflict }

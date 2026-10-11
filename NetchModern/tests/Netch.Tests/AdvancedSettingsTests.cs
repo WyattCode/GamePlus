@@ -97,6 +97,147 @@ public class AdvancedSettingsTests
         Assert.Throws<InvalidOperationException>(() => AdvancedSettingsValidator.ValidateLocalPort(value));
     }
 
+    // --- capture mode ---
+
+    [Theory]
+    [InlineData("auto", "auto")]
+    [InlineData("process", "process")]
+    [InlineData("tun", "tun")]
+    [InlineData("proxy", "proxy")]
+    [InlineData("AUTO", "auto")]
+    [InlineData("Process", "process")]
+    [InlineData("  TUN  ", "tun")]
+    [InlineData("PROXY", "proxy")]
+    public void ValidateCaptureMode_AcceptsValidValues(string input, string expected)
+    {
+        Assert.Equal(expected, AdvancedSettingsValidator.ValidateCaptureMode(input));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("direct")]
+    [InlineData("system")]
+    [InlineData("tun2socks")]
+    [InlineData("process,tun")]
+    public void ValidateCaptureMode_RejectsInvalid(string value)
+    {
+        Assert.Throws<InvalidOperationException>(() => AdvancedSettingsValidator.ValidateCaptureMode(value));
+    }
+
+    // --- auto switch ---
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    [InlineData(50)]
+    public void ValidateAutoSwitchLossPct_AcceptsInRange(int value)
+    {
+        Assert.Equal(value, AdvancedSettingsValidator.ValidateAutoSwitchLossPct(value));
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    [InlineData(51)]
+    [InlineData(100)]
+    public void ValidateAutoSwitchLossPct_RejectsOutOfRange(int value)
+    {
+        Assert.Throws<InvalidOperationException>(() => AdvancedSettingsValidator.ValidateAutoSwitchLossPct(value));
+    }
+
+    [Fact]
+    public void ValidateAutoSwitchLossPct_ThrowsWithChineseMessage()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => AdvancedSettingsValidator.ValidateAutoSwitchLossPct(0));
+        Assert.Equal("自动切换丢包阈值必须在 1–50% 之间", ex.Message);
+    }
+
+    [Theory]
+    [InlineData(50)]
+    [InlineData(200)]
+    [InlineData(2000)]
+    public void ValidateAutoSwitchLatencyMs_AcceptsInRange(int value)
+    {
+        Assert.Equal(value, AdvancedSettingsValidator.ValidateAutoSwitchLatencyMs(value));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(49)]
+    [InlineData(2001)]
+    public void ValidateAutoSwitchLatencyMs_RejectsOutOfRange(int value)
+    {
+        Assert.Throws<InvalidOperationException>(() => AdvancedSettingsValidator.ValidateAutoSwitchLatencyMs(value));
+    }
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(15)]
+    [InlineData(120)]
+    public void ValidateAutoSwitchSustainSec_AcceptsInRange(int value)
+    {
+        Assert.Equal(value, AdvancedSettingsValidator.ValidateAutoSwitchSustainSec(value));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4)]
+    [InlineData(121)]
+    public void ValidateAutoSwitchSustainSec_RejectsOutOfRange(int value)
+    {
+        Assert.Throws<InvalidOperationException>(() => AdvancedSettingsValidator.ValidateAutoSwitchSustainSec(value));
+    }
+
+    [Theory]
+    [InlineData(10)]
+    [InlineData(60)]
+    [InlineData(600)]
+    public void ValidateAutoSwitchCooldownSec_AcceptsInRange(int value)
+    {
+        Assert.Equal(value, AdvancedSettingsValidator.ValidateAutoSwitchCooldownSec(value));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(9)]
+    [InlineData(601)]
+    public void ValidateAutoSwitchCooldownSec_RejectsOutOfRange(int value)
+    {
+        Assert.Throws<InvalidOperationException>(() => AdvancedSettingsValidator.ValidateAutoSwitchCooldownSec(value));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    [InlineData(10)]
+    public void ValidateAutoSwitchMaxSwitches_AcceptsInRange(int value)
+    {
+        Assert.Equal(value, AdvancedSettingsValidator.ValidateAutoSwitchMaxSwitches(value));
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    [InlineData(11)]
+    public void ValidateAutoSwitchMaxSwitches_RejectsOutOfRange(int value)
+    {
+        Assert.Throws<InvalidOperationException>(() => AdvancedSettingsValidator.ValidateAutoSwitchMaxSwitches(value));
+    }
+
+    [Fact]
+    public void AutoSwitchSettings_HaveExpectedDefaults()
+    {
+        var settings = new AdvancedSettings();
+
+        Assert.False(settings.AutoSwitchEnabled);
+        Assert.Equal(5, settings.AutoSwitchLossPct);
+        Assert.Equal(200, settings.AutoSwitchLatencyMs);
+        Assert.Equal(15, settings.AutoSwitchSustainSec);
+        Assert.Equal(60, settings.AutoSwitchCooldownSec);
+        Assert.Equal(3, settings.AutoSwitchMaxSwitches);
+    }
+
     // --- NodeRanker penalty parameter ---
 
     private static ShadowsocksServer Node(string remark, int delay, string host = "h.example.net")

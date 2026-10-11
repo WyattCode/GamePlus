@@ -1,3 +1,4 @@
+using Netch.Core.Models.Games;
 using Netch.Core.Services.Rules;
 using Xunit;
 
@@ -179,6 +180,48 @@ public class GameRulesFileTests
     }
 
     [Fact]
+    public void DownloadDomains_MissingIsEmpty()
+    {
+        var file = GameRulesFile.Parse(Valid, out var error);
+        Assert.Null(error);
+        Assert.NotNull(file);
+        Assert.Empty(file!.Games[0].DownloadDomains);
+    }
+
+    [Fact]
+    public void DownloadDomains_RoundTrips()
+    {
+        var json = Valid.Replace(
+            "\"ProxyDomains\": [\"riotgames.com\"],",
+            "\"ProxyDomains\": [\"riotgames.com\"],\n          \"DownloadDomains\": [\"steamcontent.com\", \"steampipe.akamaized.net\"],");
+        var file = GameRulesFile.Parse(json, out var error);
+
+        Assert.Null(error);
+        Assert.NotNull(file);
+        Assert.Equal(new[] { "steamcontent.com", "steampipe.akamaized.net" }, file!.Games[0].DownloadDomains);
+    }
+
+    [Fact]
+    public void RejectsDownloadDomainWithWhitespace()
+    {
+        var json = Valid.Replace(
+            "\"ProxyDomains\": [\"riotgames.com\"],",
+            "\"ProxyDomains\": [\"riotgames.com\"],\n          \"DownloadDomains\": [\"steam content.com\"],");
+        Assert.Null(GameRulesFile.Parse(json, out var error));
+        Assert.Contains("域名", error);
+    }
+
+    [Fact]
+    public void RejectsEmptyDownloadDomain()
+    {
+        var json = Valid.Replace(
+            "\"ProxyDomains\": [\"riotgames.com\"],",
+            "\"ProxyDomains\": [\"riotgames.com\"],\n          \"DownloadDomains\": [\"\"],");
+        Assert.Null(GameRulesFile.Parse(json, out var error));
+        Assert.Contains("DownloadDomains", error);
+    }
+
+    [Fact]
     public void RejectsTooManyGames()
     {
         var games = string.Join(",", Enumerable.Range(0, 2001)
@@ -186,5 +229,131 @@ public class GameRulesFileTests
         var json = $"{{ \"schema\": 1, \"version\": 2, \"games\": [{games}] }}";
         Assert.Null(GameRulesFile.Parse(json, out var error));
         Assert.Contains("过多", error);
+    }
+
+    [Fact]
+    public void Compat_AbsentIsNull()
+    {
+        var file = GameRulesFile.Parse(Valid, out var error);
+
+        Assert.Null(error);
+        Assert.NotNull(file);
+        Assert.Null(file!.Games[0].Compat);
+    }
+
+    [Fact]
+    public void Compat_RoundTrips()
+    {
+        var json = Valid.Replace(
+            "\"ProxyDomains\": [\"riotgames.com\"],",
+            """
+            "ProxyDomains": ["riotgames.com"],
+              "compat": { "recommendedMode": "tun", "note": "Riot Vanguard 为内核级反作弊。", "verified": true },
+            """);
+        var file = GameRulesFile.Parse(json, out var error);
+
+        Assert.Null(error);
+        Assert.NotNull(file);
+        var compat = file!.Games[0].Compat;
+        Assert.NotNull(compat);
+        Assert.Equal("tun", compat!.RecommendedMode);
+        Assert.Equal("Riot Vanguard 为内核级反作弊。", compat.Note);
+        Assert.True(compat.Verified);
+    }
+
+    [Fact]
+    public void Compat_VerifiedDefaultsToFalse()
+    {
+        var json = Valid.Replace(
+            "\"ProxyDomains\": [\"riotgames.com\"],",
+            "\"ProxyDomains\": [\"riotgames.com\"],\n          \"compat\": { \"note\": \"未验证的说明\" },");
+        var file = GameRulesFile.Parse(json, out var error);
+
+        Assert.Null(error);
+        Assert.NotNull(file);
+        var compat = file!.Games[0].Compat;
+        Assert.NotNull(compat);
+        Assert.Null(compat!.RecommendedMode);
+        Assert.Equal("未验证的说明", compat.Note);
+        Assert.False(compat.Verified);
+    }
+
+    [Fact]
+    public void Compat_AcceptsAllModes()
+    {
+        foreach (var mode in new[] { "auto", "process", "tun", "proxy" })
+        {
+            var json = Valid.Replace(
+                "\"ProxyDomains\": [\"riotgames.com\"],",
+                $"\"ProxyDomains\": [\"riotgames.com\"],\n          \"compat\": {{ \"recommendedMode\": \"{mode}\", \"note\": \"n\" }},");
+            var file = GameRulesFile.Parse(json, out var error);
+
+            Assert.Null(error);
+            Assert.NotNull(file);
+            Assert.Equal(mode, file!.Games[0].Compat!.RecommendedMode);
+        }
+    }
+
+    [Fact]
+    public void Compat_AcceptsNullRecommendedMode()
+    {
+        var json = Valid.Replace(
+            "\"ProxyDomains\": [\"riotgames.com\"],",
+            "\"ProxyDomains\": [\"riotgames.com\"],\n          \"compat\": { \"recommendedMode\": null, \"note\": \"n\" },");
+        var file = GameRulesFile.Parse(json, out var error);
+
+        Assert.Null(error);
+        Assert.NotNull(file);
+        Assert.Null(file!.Games[0].Compat!.RecommendedMode);
+    }
+
+    [Fact]
+    public void RejectsCompatWithInvalidMode()
+    {
+        var json = Valid.Replace(
+            "\"ProxyDomains\": [\"riotgames.com\"],",
+            "\"ProxyDomains\": [\"riotgames.com\"],\n          \"compat\": { \"recommendedMode\": \"magic\", \"note\": \"n\" },");
+        Assert.Null(GameRulesFile.Parse(json, out var error));
+        Assert.Contains("recommendedMode", error);
+    }
+
+    [Fact]
+    public void RejectsCompatWithEmptyNote()
+    {
+        var json = Valid.Replace(
+            "\"ProxyDomains\": [\"riotgames.com\"],",
+            "\"ProxyDomains\": [\"riotgames.com\"],\n          \"compat\": { \"note\": \"\" },");
+        Assert.Null(GameRulesFile.Parse(json, out var error));
+        Assert.Contains("note", error);
+    }
+
+    [Fact]
+    public void RejectsCompatWithTooLongNote()
+    {
+        var json = Valid.Replace(
+            "\"ProxyDomains\": [\"riotgames.com\"],",
+            "\"ProxyDomains\": [\"riotgames.com\"],\n          \"compat\": { \"note\": \"" + new string('a', 201) + "\" },");
+        Assert.Null(GameRulesFile.Parse(json, out var error));
+        Assert.Contains("note", error);
+    }
+
+    [Fact]
+    public void RejectsCompatWithoutNote()
+    {
+        var json = Valid.Replace(
+            "\"ProxyDomains\": [\"riotgames.com\"],",
+            "\"ProxyDomains\": [\"riotgames.com\"],\n          \"compat\": { \"recommendedMode\": \"auto\" },");
+        Assert.Null(GameRulesFile.Parse(json, out var error));
+        Assert.Contains("note", error);
+    }
+
+    [Fact]
+    public void RejectsCompatThatIsNotAnObject()
+    {
+        var json = Valid.Replace(
+            "\"ProxyDomains\": [\"riotgames.com\"],",
+            "\"ProxyDomains\": [\"riotgames.com\"],\n          \"compat\": \"auto\",");
+        Assert.Null(GameRulesFile.Parse(json, out var error));
+        Assert.Contains("compat", error);
     }
 }

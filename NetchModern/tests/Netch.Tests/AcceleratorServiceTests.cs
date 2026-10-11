@@ -17,6 +17,8 @@ public class AcceleratorServiceTests
         public int PreferredSocksPort { get; set; }
         public IReadOnlyCollection<string>? ProxyDomains { get; set; }
         public IReadOnlyCollection<string>? ProxyIps { get; set; }
+        public IReadOnlyCollection<string>? DirectDomains { get; set; }
+        public LanShareOptions? LanShare { get; set; }
         public int StartCalls { get; private set; }
         public int StopCalls { get; private set; }
         public Task<Socks5Server> StartAsync(Server server, CancellationToken ct = default)
@@ -44,7 +46,7 @@ public class AcceleratorServiceTests
     }
 
     /// <summary>Mode controller whose StartAsync can be made to fail (simulates a missing driver / no admin).</summary>
-    private sealed class FakeModeController : IModeController
+    private sealed class FakeModeController : IModeController, ITunRoutingTarget
     {
         private readonly bool _fail;
         public FakeModeController(ModeType type, bool fail)
@@ -58,6 +60,8 @@ public class AcceleratorServiceTests
         public ModeFeature Features => ModeFeature.None;
         public int StartCalls { get; private set; }
         public int StopCalls { get; private set; }
+
+        public TunRouting? Routing { get; set; }
 
         public Task StartAsync(Socks5Server socks5, Mode mode, CancellationToken ct = default)
         {
@@ -78,16 +82,24 @@ public class AcceleratorServiceTests
     {
         private readonly bool _failProcess;
         private readonly bool _failTun;
-        public FakeModeControllerFactory(bool failProcess = false, bool failTun = false)
+        private readonly bool _processAvailable;
+        public FakeModeControllerFactory(bool failProcess = false, bool failTun = false, bool processAvailable = true)
         {
             _failProcess = failProcess;
             _failTun = failTun;
+            _processAvailable = processAvailable;
         }
 
         public FakeModeController? Last { get; private set; }
 
+        /// <summary>Every mode controller type that was created, in creation order.</summary>
+        public List<ModeType> Created { get; } = new();
+
+        public bool IsAvailable(ModeType type) => type != ModeType.ProcessMode || _processAvailable;
+
         public IModeController Create(ModeType type)
         {
+            Created.Add(type);
             var fail = type == ModeType.ProcessMode ? _failProcess : _failTun;
             Last = new FakeModeController(type, fail);
             return Last;
@@ -137,11 +149,18 @@ public class AcceleratorServiceTests
     private static ShadowsocksServer MakeServer() =>
         new() { Hostname = "example.com", Port = 8388, Remark = "test" };
 
+    /// <summary>A server whose Hostname is an IP literal (no DNS needed on CI).</summary>
+    private static ShadowsocksServer MakeIpServer() =>
+        new() { Hostname = "203.0.113.7", Port = 8388, Remark = "test" };
+
     private static AcceleratorService MakeAccelerator(FakeServerController controller, FakeSystemProxy proxy,
-        IModeControllerFactory? modeFactory = null)
+        IModeControllerFactory? modeFactory = null, Func<Game, string>? captureModeFor = null,
+        Func<Game, bool>? downloadViaProxyFor = null, Func<LanShareOptionsResult>? lanShare = null,
+        Func<IReadOnlyList<ExtraApp>>? extraApps = null)
     {
         var log = new LogService();
-        return new AcceleratorService(log, _ => controller, proxy, modeFactory ?? new FakeModeControllerFactory());
+        return new AcceleratorService(log, _ => controller, proxy, modeFactory ?? new FakeModeControllerFactory(),
+            null, extraApps, null, null, captureModeFor, downloadViaProxyFor, lanShare);
     }
 
     private static AcceleratorService MakeAcceleratorWithEffect(FakeServerController controller, FakeSystemProxy proxy,
@@ -229,7 +248,7 @@ public class AcceleratorServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ProcessCaptureFails_WithDomains_FallsBackToSystemProxy()
+    public async Task StartAsync_ProcessCaptureFails_WithDomains_UsesTun()
     {
         var controller = new FakeServerController();
         var proxy = new FakeSystemProxy();
@@ -242,18 +261,18 @@ public class AcceleratorServiceTests
             ProxyProcesses = new List<string> { "game.exe" },
             ProxyDomains = new List<string> { "game.example.com" }
         };
-        var server = MakeServer();
 
-        await accel.StartAsync(game, server);
+        await accel.StartAsync(game, MakeIpServer());
 
+        // Process capture failed → sing-box TUN takes over (per process + sniffed domain routing).
         Assert.Equal(AccelerationState.Accelerating, accel.State);
-        Assert.True(proxy.IsEnabled);
-        Assert.Equal("127.0.0.1", proxy.Host);
-        Assert.Equal(controller.HttpPort, proxy.Port);
-        // Controller restarted with domain rules (global start + restart = 2 calls).
-        Assert.Equal(2, controller.StartCalls);
-        Assert.Equal(new[] { "game.example.com" }, controller.ProxyDomains);
-        Assert.Equal("proxy", accel.Status.CaptureMode);
+        Assert.Equal("tun", accel.Status.CaptureMode);
+        Assert.False(proxy.IsEnabled);
+        Assert.Equal(1, controller.StartCalls);
+        var routing = modeFactory.Last!.Routing;
+        Assert.NotNull(routing);
+        Assert.Contains(routing!.ProxyDomains, d => d.Contains("game.example.com"));
+        await accel.StopAsync();
     }
 
     [Fact]
@@ -281,11 +300,37 @@ public class AcceleratorServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ProcessCaptureFails_NoIpsNoDomains_ThrowsAndCleansUp()
+    public async Task StartAsync_ProcessCaptureFails_ProcessOnlyGame_FallsBackToTun()
     {
         var controller = new FakeServerController();
         var proxy = new FakeSystemProxy();
         var modeFactory = new FakeModeControllerFactory(failProcess: true);
+        var accel = MakeAccelerator(controller, proxy, modeFactory);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" }
+        };
+
+        await accel.StartAsync(game, MakeIpServer());
+
+        // A process-only game now accelerates via the sing-box TUN (per-process routing).
+        Assert.Equal(AccelerationState.Accelerating, accel.State);
+        Assert.Equal("tun", accel.Status.CaptureMode);
+        Assert.False(proxy.IsEnabled);
+        var routing = modeFactory.Last!.Routing;
+        Assert.NotNull(routing);
+        Assert.Contains(routing!.ProxyProcesses, p => p.Contains("game"));
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_ProcessAndTunCaptureFail_NoDomains_ThrowsAndCleansUp()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(failProcess: true, failTun: true);
         var accel = MakeAccelerator(controller, proxy, modeFactory);
         var game = new Game
         {
@@ -324,6 +369,455 @@ public class AcceleratorServiceTests
         Assert.Equal("process", accel.Status.CaptureMode);
         Assert.False(proxy.IsEnabled);
         Assert.Equal(ModeType.ProcessMode, modeFactory.Last!.Type);
+    }
+
+    [Fact]
+    public async Task StartAsync_ForcedProcess_UsesOnlyProcessMode_NoFallback()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(failProcess: true);
+        var accel = MakeAccelerator(controller, proxy, modeFactory, _ => "process");
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" },
+            ProxyIps = new List<string> { "1.2.3.4" },
+            ProxyDomains = new List<string> { "game.example.com" }
+        };
+        var server = MakeServer();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => accel.StartAsync(game, server));
+
+        Assert.Contains("进程模式", ex.Message);
+        Assert.Equal(AccelerationState.Idle, accel.State);
+        Assert.False(proxy.IsEnabled);
+        // No fallback to TUN or system proxy.
+        Assert.Equal("", accel.Status.CaptureMode ?? "");
+    }
+
+    [Fact]
+    public async Task StartAsync_ForcedProcess_WhenNetFilterMissing_ThrowsBeforeSideEffects()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(processAvailable: false);
+        var accel = MakeAccelerator(controller, proxy, modeFactory, _ => "process");
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" },
+            ProxyIps = new List<string> { "1.2.3.4" }
+        };
+        var server = MakeServer();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => accel.StartAsync(game, server));
+
+        Assert.Contains("进程模式暂不可用：未包含 NetFilter 组件", ex.Message);
+        // No side effects: the node controller never started, the proxy stayed off, and no mode
+        // controller was ever created.
+        Assert.Equal(0, controller.StartCalls);
+        Assert.False(proxy.IsEnabled);
+        Assert.Empty(modeFactory.Created);
+        Assert.Equal(AccelerationState.Idle, accel.State);
+    }
+
+    [Fact]
+    public async Task StartAsync_Auto_WhenNetFilterMissing_WithIps_UsesTunAndSkipsProcessCapture()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(processAvailable: false);
+        var accel = MakeAccelerator(controller, proxy, modeFactory);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" },
+            ProxyIps = new List<string> { "1.2.3.4" }
+        };
+        var server = MakeServer();
+
+        await accel.StartAsync(game, server);
+
+        Assert.Equal(AccelerationState.Accelerating, accel.State);
+        Assert.Equal("tun", accel.Status.CaptureMode);
+        // Process capture was skipped entirely: no driver load attempt, no LastProcessCaptureError.
+        Assert.DoesNotContain(ModeType.ProcessMode, modeFactory.Created);
+        Assert.Null(accel.LastProcessCaptureError);
+        Assert.False(proxy.IsEnabled);
+    }
+
+    [Fact]
+    public async Task StartAsync_Auto_WhenNetFilterMissing_ProcessOnlyGame_UsesTun()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(processAvailable: false);
+        var accel = MakeAccelerator(controller, proxy, modeFactory);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" }
+        };
+
+        await accel.StartAsync(game, MakeIpServer());
+
+        // Process-only games now go through the sing-box TUN when process capture is unavailable.
+        Assert.Equal(AccelerationState.Accelerating, accel.State);
+        Assert.Equal("tun", accel.Status.CaptureMode);
+        Assert.DoesNotContain(ModeType.ProcessMode, modeFactory.Created);
+        Assert.False(proxy.IsEnabled);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_Auto_DomainOnlyGame_UsesSystemProxy()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(processAvailable: false);
+        var accel = MakeAccelerator(controller, proxy, modeFactory);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyDomains = new List<string> { "game.example.com" }
+        };
+        var server = MakeServer();
+
+        await accel.StartAsync(game, server);
+
+        Assert.Equal(AccelerationState.Accelerating, accel.State);
+        Assert.Equal("proxy", accel.Status.CaptureMode);
+        Assert.True(proxy.IsEnabled);
+        Assert.Equal("127.0.0.1", proxy.Host);
+        Assert.Equal(controller.HttpPort, proxy.Port);
+        // No capture driver was ever created.
+        Assert.Empty(modeFactory.Created);
+    }
+
+    [Fact]
+    public async Task StartAsync_ForcedTun_NoProcessOrIpRules_ThrowsAvailabilityError_NeverStartsController()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory();
+        var accel = MakeAccelerator(controller, proxy, modeFactory, _ => "tun");
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyDomains = new List<string> { "game.example.com" }
+        };
+        var server = MakeServer();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => accel.StartAsync(game, server));
+
+        Assert.Contains("没有进程或 IP 规则", ex.Message);
+        Assert.Equal(0, controller.StartCalls);
+        Assert.Equal(AccelerationState.Idle, accel.State);
+    }
+
+    [Fact]
+    public async Task StartAsync_Auto_ProcessAndDomainGame_ProcessUnavailable_UsesTunWithRouting()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(processAvailable: false);
+        var accel = MakeAccelerator(controller, proxy, modeFactory);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" },
+            ProxyDomains = new List<string> { "game.example.com" }
+        };
+
+        await accel.StartAsync(game, MakeIpServer());
+
+        Assert.Equal(AccelerationState.Accelerating, accel.State);
+        Assert.Equal("tun", accel.Status.CaptureMode);
+        var routing = modeFactory.Last!.Routing;
+        Assert.NotNull(routing);
+        Assert.Contains(routing!.ProxyProcesses, p => p.Contains("game"));
+        Assert.Contains("game.example.com", routing.ProxyDomains);
+        // The system proxy must NOT be enabled for capture modes.
+        Assert.False(proxy.IsEnabled);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_Tun_IpLiteralNode_ExcludesNodeAddress()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory();
+        var accel = MakeAccelerator(controller, proxy, modeFactory);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyIps = new List<string> { "1.2.3.4" }
+        };
+
+        await accel.StartAsync(game, MakeIpServer());
+
+        var routing = modeFactory.Last!.Routing;
+        Assert.NotNull(routing);
+        Assert.Equal(new[] { "203.0.113.7" }, routing!.ExcludeAddresses);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_ForcedTun_DownloadSplitOff_RoutesDownloadsDirect()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory();
+        var accel = MakeAccelerator(controller, proxy, modeFactory,
+            captureModeFor: _ => "tun", downloadViaProxyFor: _ => false);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyDomains = new List<string> { "store.steampowered.com" },
+            DownloadDomains = new List<string> { "steamcontent.com", "steampipe.akamaized.net" },
+            ProxyIps = new List<string> { "1.2.3.4" }
+        };
+
+        await accel.StartAsync(game, MakeIpServer());
+
+        var routing = modeFactory.Last!.Routing;
+        Assert.NotNull(routing);
+        Assert.Equal(new[] { "steamcontent.com", "steampipe.akamaized.net" }, routing!.DirectDomains);
+        Assert.DoesNotContain("steamcontent.com", routing.ProxyDomains);
+        Assert.DoesNotContain("steampipe.akamaized.net", routing.ProxyDomains);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_ForcedTun_DownloadViaProxy_DirectDomainsEmptyAndProxyDomainsMerged()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory();
+        var accel = MakeAccelerator(controller, proxy, modeFactory,
+            captureModeFor: _ => "tun", downloadViaProxyFor: _ => true);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyDomains = new List<string> { "store.steampowered.com" },
+            DownloadDomains = new List<string> { "steamcontent.com" },
+            ProxyIps = new List<string> { "1.2.3.4" }
+        };
+
+        await accel.StartAsync(game, MakeIpServer());
+
+        var routing = modeFactory.Last!.Routing;
+        Assert.NotNull(routing);
+        Assert.Empty(routing!.DirectDomains);
+        Assert.Contains("steamcontent.com", routing.ProxyDomains);
+        Assert.Contains("store.steampowered.com", routing.ProxyDomains);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_ForcedTun_ExtraApps_AppearInRouting()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory();
+        var accel = MakeAccelerator(controller, proxy, modeFactory,
+            captureModeFor: _ => "tun",
+            extraApps: () => new List<ExtraApp>
+            {
+                new() { Process = "proxyhelper.exe", Enabled = true, Mode = ExtraAppMode.Proxy },
+                new() { Process = "bypasstool.exe", Enabled = true, Mode = ExtraAppMode.Bypass }
+            });
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" },
+            ProxyIps = new List<string> { "1.2.3.4" }
+        };
+
+        await accel.StartAsync(game, MakeIpServer());
+
+        var routing = modeFactory.Last!.Routing;
+        Assert.NotNull(routing);
+        Assert.Contains(routing!.ProxyProcesses, p => p.Contains("proxyhelper"));
+        Assert.Contains(routing.BypassProcesses, p => p.Contains("bypasstool"));
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_ForcedProxy_EnablesSystemProxyWithProxyCaptureMode()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory();
+        var accel = MakeAccelerator(controller, proxy, modeFactory, _ => "proxy");
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyDomains = new List<string> { "game.example.com" }
+        };
+        var server = MakeServer();
+
+        await accel.StartAsync(game, server);
+
+        Assert.Equal(AccelerationState.Accelerating, accel.State);
+        Assert.Equal("proxy", accel.Status.CaptureMode);
+        Assert.True(proxy.IsEnabled);
+        Assert.Equal("127.0.0.1", proxy.Host);
+        Assert.Equal(controller.HttpPort, proxy.Port);
+        Assert.Equal(new[] { "game.example.com" }, controller.ProxyDomains);
+    }
+
+    [Fact]
+    public async Task StartAsync_WithDownloadDomains_DefaultRoutesDownloadsDirect()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var accel = MakeAccelerator(controller, proxy);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyDomains = new List<string> { "store.steampowered.com" },
+            DownloadDomains = new List<string> { "steamcontent.com", "steampipe.akamaized.net" }
+        };
+        var server = MakeServer();
+
+        await accel.StartAsync(game, server);
+
+        // Default: CDN download domains are forced DIRECT (also in domain-only mode).
+        Assert.Equal(new[] { "steamcontent.com", "steampipe.akamaized.net" }, controller.DirectDomains);
+        Assert.Equal(new[] { "store.steampowered.com" }, controller.ProxyDomains);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_DownloadViaProxy_DirectDomainsNullAndProxyDomainsMerged()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var accel = MakeAccelerator(controller, proxy, captureModeFor: _ => "proxy",
+            downloadViaProxyFor: _ => true);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyDomains = new List<string> { "store.steampowered.com" },
+            DownloadDomains = new List<string> { "steamcontent.com" }
+        };
+        var server = MakeServer();
+
+        await accel.StartAsync(game, server);
+
+        // Toggle on: no DIRECT rule, and the download domains join the proxied set.
+        Assert.Null(controller.DirectDomains);
+        Assert.NotNull(controller.ProxyDomains);
+        Assert.Contains("steamcontent.com", controller.ProxyDomains!);
+        Assert.Contains("store.steampowered.com", controller.ProxyDomains!);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_FallbackToDomainProxy_KeepsDownloadSplitDecision()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(failProcess: true, failTun: true);
+        var accel = MakeAccelerator(controller, proxy, modeFactory);
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" },
+            ProxyDomains = new List<string> { "store.steampowered.com" },
+            DownloadDomains = new List<string> { "steamcontent.com" }
+        };
+        var server = MakeServer();
+
+        await accel.StartAsync(game, server);
+
+        // The StartDomainProxyAsync restart must keep the same DirectDomains/ProxyDomains decision.
+        Assert.Equal(2, controller.StartCalls);
+        Assert.Equal(new[] { "steamcontent.com" }, controller.DirectDomains);
+        Assert.Equal(new[] { "store.steampowered.com" }, controller.ProxyDomains);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_WithLanShare_SetsControllerLanShareAndStatusEndpoint()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var options = new LanShareOptions("192.168.1.10", 7899, 0, new[] { "192.168.1.0/24" }, null, null);
+        var accel = MakeAccelerator(controller, proxy,
+            lanShare: () => new LanShareOptionsResult(options, null));
+        var game = MakeGame("game.example.com");
+
+        await accel.StartAsync(game, MakeServer());
+
+        Assert.Same(options, controller.LanShare);
+        Assert.Equal("192.168.1.10:7899", accel.Status.LanShareEndpoint);
+        Assert.Equal(AccelerationState.Accelerating, accel.State);
+        await accel.StopAsync();
+        Assert.Null(accel.Status.LanShareEndpoint);
+    }
+
+    [Fact]
+    public async Task StartAsync_LanShareProblem_ContinuesWithoutLanShare()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var accel = MakeAccelerator(controller, proxy,
+            lanShare: () => new LanShareOptionsResult(null, "共享地址不再是本机的局域网地址"));
+        var game = MakeGame("game.example.com");
+
+        await accel.StartAsync(game, MakeServer());
+
+        // The problem only disables the LAN inbounds — acceleration itself still succeeds.
+        Assert.Null(controller.LanShare);
+        Assert.Null(accel.Status.LanShareEndpoint);
+        Assert.Equal(AccelerationState.Accelerating, accel.State);
+        Assert.True(proxy.IsEnabled);
+        await accel.StopAsync();
+    }
+
+    [Fact]
+    public async Task StartAsync_LanShare_PreservedAcrossFallbackRestart()
+    {
+        var controller = new FakeServerController();
+        var proxy = new FakeSystemProxy();
+        var modeFactory = new FakeModeControllerFactory(failProcess: true, failTun: true);
+        var options = new LanShareOptions("192.168.1.10", 7899, 0, new[] { "192.168.1.0/24" }, null, null);
+        var accel = MakeAccelerator(controller, proxy, modeFactory,
+            lanShare: () => new LanShareOptionsResult(options, null));
+        var game = new Game
+        {
+            Id = "g",
+            Name = "G",
+            ProxyProcesses = new List<string> { "game.exe" },
+            ProxyDomains = new List<string> { "game.example.com" }
+        };
+
+        await accel.StartAsync(game, MakeServer());
+
+        // The StartDomainProxyAsync restart must re-apply the LAN-share inbounds.
+        Assert.Equal(2, controller.StartCalls);
+        Assert.Same(options, controller.LanShare);
+        Assert.Equal("192.168.1.10:7899", accel.Status.LanShareEndpoint);
+        await accel.StopAsync();
     }
 
     [Fact]

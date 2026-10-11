@@ -50,6 +50,11 @@ public sealed class EffectProbeTests
             "127.0.0.1", socksServer.Port, "localhost", tlsServer.Port, cts.Token);
 
         Assert.True(result > 0, $"Expected positive latency, got {result}");
+
+        // Prove the probe really went through the SOCKS server with a domain target (ATYP 0x03),
+        // and not via some other path that happens to reach the TLS server.
+        Assert.Equal(0x03, socksServer.LastConnectAtyp);
+        Assert.Equal("localhost", socksServer.LastConnectHost);
     }
 
     [Fact]
@@ -208,6 +213,12 @@ public sealed class EffectProbeTests
 
         public int Port { get; }
 
+        /// <summary>ATYP byte of the last CONNECT request received (written before replying).</summary>
+        public volatile byte LastConnectAtyp;
+
+        /// <summary>Target host string of the last CONNECT request received (written before replying).</summary>
+        public volatile string? LastConnectHost;
+
         public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
 
         private async Task AcceptLoopAsync(CancellationToken ct)
@@ -295,12 +306,34 @@ public sealed class EffectProbeTests
                     await ReadExactAsync(stream, portBuf, ct);
                     var targetPort = (portBuf[0] << 8) | portBuf[1];
 
+                    // Record the request before replying so tests can assert on it even if the
+                    // upstream dial or TLS handshake subsequently fails.
+                    LastConnectAtyp = req[3];
+                    LastConnectHost = targetHost;
+
                     // Reply success immediately (like xray) with BND.ADDR 0.0.0.0:0.
                     await stream.WriteAsync(
                         new byte[] { 0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0 }, ct);
 
+                    // Dial the upstream deterministically over IPv4 loopback. On Windows, "localhost"
+                    // resolves to ::1 first, and a refused TCP connect to ::1 is not immediate: the
+                    // stack retries the SYN for ~2 s before failing over to 127.0.0.1. The loopback
+                    // TLS server only listens on IPv4, so under a loaded CI runner that ~2 s delay
+                    // plus the TLS handshake can exceed the probe's 3 s budget and make it return -4.
+                    // Resolving ourselves and connecting to the IPv4 address directly avoids that.
+                    IPAddress upstreamAddress;
+                    if (IPAddress.TryParse(targetHost, out var parsed))
+                    {
+                        upstreamAddress = parsed;
+                    }
+                    else
+                    {
+                        var addresses = await Dns.GetHostAddressesAsync(targetHost, ct);
+                        upstreamAddress = addresses.First(a => a.AddressFamily == AddressFamily.InterNetwork);
+                    }
+
                     using var upstream = new TcpClient();
-                    await upstream.ConnectAsync(targetHost, targetPort, ct);
+                    await upstream.ConnectAsync(upstreamAddress, targetPort, ct);
                     var upstreamStream = upstream.GetStream();
 
                     var t1 = PumpAsync(stream, upstreamStream, ct);

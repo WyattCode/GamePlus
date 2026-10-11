@@ -1,9 +1,13 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type {
+  CaptureMode,
   DetectedGame,
   Game,
+  ImportResult,
   LibraryScanResult,
+  RuleExport,
+  RuleImportResult,
   RulesStatus,
   RulesUpdateResult,
   Server,
@@ -83,6 +87,48 @@ export const useLibraryStore = defineStore('library', () => {
     }
   }
 
+  /**
+   * Persists the per-game capture-mode override ("default" clears it). Keeps the accel store's
+   * selected-game snapshot in sync so the mode picker reflects the new value immediately.
+   */
+  async function setGameMode(id: string, mode: CaptureMode | 'default'): Promise<void> {
+    games.value = await backend.setGameMode(id, mode)
+
+    const accel = useAccelStore()
+    if (accel.selectedGame?.id === id) {
+      const updated = games.value.find((g) => g.id === id)
+      if (updated) accel.selectedGame = updated
+    }
+  }
+
+  /**
+   * Persists whether the game's download (CDN) traffic also goes through the node. Keeps the accel
+   * store's selected-game snapshot in sync so the toggle reflects the new value immediately.
+   */
+  async function setGameDownloadProxy(id: string, enabled: boolean): Promise<void> {
+    games.value = await backend.setGameDownloadProxy(id, enabled)
+
+    const accel = useAccelStore()
+    if (accel.selectedGame?.id === id) {
+      const updated = games.value.find((g) => g.id === id)
+      if (updated) accel.selectedGame = updated
+    }
+  }
+
+  /**
+   * Persists the per-game launch target (empty string clears it). Keeps the accel store's
+   * selected-game snapshot in sync so the launch dialog reflects the new value immediately.
+   */
+  async function setGameLaunch(id: string, target: string): Promise<void> {
+    games.value = await backend.setGameLaunch(id, target)
+
+    const accel = useAccelStore()
+    if (accel.selectedGame?.id === id) {
+      const updated = games.value.find((g) => g.id === id)
+      if (updated) accel.selectedGame = updated
+    }
+  }
+
   async function addGame(data: Partial<Game>): Promise<void> {
     games.value = await backend.addGame(data)
   }
@@ -145,6 +191,34 @@ export const useLibraryStore = defineStore('library', () => {
     return failed
   }
 
+  /**
+   * Imports nodes from pasted text (share links, subscription blob, Clash YAML or a subscription URL).
+   * Refreshes the server list and, when the backend created a subscription, reloads subscriptions too.
+   */
+  async function importNodes(text: string): Promise<ImportResult> {
+    const result = await backend.importNodes(text)
+    servers.value = result.servers
+    if (result.format === 'subscription') {
+      subscriptions.value = await backend.listSubscriptions()
+    }
+    return result
+  }
+
+  /** Exports one game's rules (JSON + share string) without touching local state. */
+  async function exportGameRule(id: string): Promise<RuleExport> {
+    return backend.exportGameRule(id)
+  }
+
+  /** Imports a single-game rule; refreshes the game list when something was imported. */
+  async function importGameRule(
+    text: string,
+    onConflict?: 'ask' | 'replace' | 'copy'
+  ): Promise<RuleImportResult> {
+    const result = await backend.importGameRule(text, onConflict)
+    if (result.status === 'imported') games.value = result.games
+    return result
+  }
+
   /** Scans the local machine for installed games. Result is kept in `scanResult`. */
   async function scan(): Promise<LibraryScanResult> {
     scanning.value = true
@@ -190,6 +264,9 @@ export const useLibraryStore = defineStore('library', () => {
     toggleFavorite,
     setGameAuto,
     setGameServer,
+    setGameMode,
+    setGameDownloadProxy,
+    setGameLaunch,
     addGame,
     updateGame,
     removeGame,
@@ -200,6 +277,9 @@ export const useLibraryStore = defineStore('library', () => {
     removeSubscription,
     updateSubscription,
     updateAllSubscriptions,
+    importNodes,
+    exportGameRule,
+    importGameRule,
     scan,
     addDetected,
     refreshRulesStatus,

@@ -1,10 +1,48 @@
 # Game+
 
 Game+ is a **Windows game accelerator**: it routes a game's (or any app's) traffic through a proxy
-server you configure, using the bundled **Xray** / **sing-box** cores, with process-level, TUN or
-system-proxy capture.
+server you configure, using the bundled **Xray** / **sing-box** cores, with TUN or system-proxy capture.
+
+> **Process mode is not included in the installer.** It needs the proprietary NetFilter SDK
+> (`nfapi.dll` / `nfdriver.sys`), which Game+ is not licensed to redistribute. It stays out of the
+> installer until a NetFilter SDK redistribution licence is obtained (see `docs/OWNER_TODO.md`).
+> Game+ is not affiliated with or endorsed by the bundled third-party projects; see
+> [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ![Game+ dashboard](NetchModern/docs/screenshot.png)
+
+## How acceleration works (TUN, per process)
+
+TUN mode is implemented by a second **sing-box** instance (v1.14.3) that owns a WinTUN interface named
+`GamePlus` (172.19.0.1/30, gvisor stack, `auto_route`). It routes **by process** (the game's process
+rules plus any extra apps from 分应用分流; names match with or without `.exe`, case-insensitive, by
+executable path), **by sniffed domain** (TLS/HTTP/QUIC on ports 80/443 only) and **by IP/CIDR**.
+Matched traffic — TCP and UDP — is forwarded to the local SOCKS5 inbound of the node core
+(Xray / sing-box); everything else goes direct. Administrator rights are required.
+
+- No NetFilter is needed; process mode stays unavailable/hidden. 自动 picks: process mode (only if
+  NetFilter files are present) → TUN (the game has process or IP rules) → system proxy (domain-only
+  games). Library-scan games (process rules only) are acceleratable via TUN.
+- DNS: the TUN's `dns_mode` is `disabled`. Windows resolves DNS in the DNS Client service (svchost),
+  so lookups cannot be attributed to a game process; hijacking or fakeip would push every app's DNS
+  through sing-box and leave fake IPs in the Windows DNS cache after stopping. Game DNS lookups
+  therefore behave exactly as without acceleration (system resolver, not proxied). Proxied
+  connections use the IP the system resolved; domain rules still match via SNI/Host sniffing.
+- Loop prevention: `xray.exe`, `sing-box.exe` and `gameplus-host.exe` are always direct, and the node
+  server's IPv4 is excluded from the TUN routes; `auto_detect_interface` is on.
+- Steam download split: download (CDN) domains are forced direct before the process rules, unless
+  「游戏下载走代理」 is on. LAN share is unchanged (consoles talk to the core's LAN inbound; the
+  core's own traffic is excluded from the TUN).
+- Not captured: IPv6 (the TUN has no IPv6 address, so IPv6 traffic goes direct) and ICMP/ping.
+- The legacy tun2socks path (`tun2socks.bin`, `RouteHelper.bin`, `wintun.dll` from Netch 1.9.7) is
+  no longer used by TUN mode, but is still downloaded and packaged.
+- Known risks that only a real Windows test can confirm: process lookup for UDP-heavy games;
+  child/launcher processes missing from the rules (anti-cheat, crash reporter, launcher → game
+  handoff); games that resolve via poisoned or geo DNS; anti-cheat reacting to a TUN adapter; the
+  adapter and routes disappearing after Stop and after a crash/kill; coexistence with other VPN/TUN
+  software; the performance overhead of routing ALL traffic through the gvisor stack (non-game
+  traffic goes direct but is still processed in user space). See
+  [`docs/WINDOWS_TEST_CHECKLIST.md`](docs/WINDOWS_TEST_CHECKLIST.md).
 
 ## Repository layout
 
@@ -16,7 +54,8 @@ system-proxy capture.
 │   ├── native/       #   native binaries (git-ignored; see native/README.md)
 │   └── build.ps1     #   publishes + stages the backend for electron-builder
 ├── LICENSE           # GPL-3.0-only
-└── THIRD_PARTY_NOTICES.md
+├── THIRD_PARTY_NOTICES.md
+└── licenses/         # verbatim third-party licence texts (shipped in the installer)
 ```
 
 The Electron main process spawns `gameplus-host.exe` as a sidecar and talks to it over a loopback
@@ -71,22 +110,24 @@ licences and download URLs.
 ## 更新与规则源 / Update & rules sources
 
 自动更新和游戏规则库默认都是**空的**，对应功能处于关闭状态；两者都在 **设置 → 软件更新** 和
-**设置 → 游戏规则库** 中配置，URL 完全由用户决定。
+**设置 → 游戏规则库** 中配置，URL 完全由用户决定。公开发布通道（更新清单与规则库的托管方式、
+发布流程、信任模型）见 [`docs/RELEASE_CHANNEL.md`](docs/RELEASE_CHANNEL.md)；在设置中点击
+「使用默认发布源」按钮可以一键填入默认地址（只填入输入框，仍需点击保存）。
 
 - **自动更新 / Auto update**：支持两种来源 —— 更新清单 JSON，或 GitHub Releases。清单格式为
   `{ "version", "url", "sha256", "notes" }`，其中 `sha256` 为必填（用于校验下载的安装包）。
 - **游戏规则库 / Game rules**：规则库 URL 指向一份规则文件，格式见
   [`NetchModern/docs/game-rules.md`](NetchModern/docs/game-rules.md)。
 
-本项目计划后续把更新清单和规则库托管在公开的 release 仓库或对象存储（OSS）上；在此之前请自行
-填写可访问的地址。
-
 Auto update and the game rules library are **empty by default** (the features are disabled). Both are
 configured in **Settings → Software update** and **Settings → Game rules**; the URLs are entirely
-user-supplied. Auto update accepts either a manifest JSON or GitHub Releases; the manifest format is
+user-supplied. The public release channel (how the manifest and rules are hosted, the release
+procedure and the trust model) is documented in
+[`docs/RELEASE_CHANNEL.md`](docs/RELEASE_CHANNEL.md); the 「使用默认发布源」 button in Settings fills
+in the default URLs (it only fills the input — the save button still has to be clicked). Auto update
+accepts either a manifest JSON or GitHub Releases; the manifest format is
 `{ "version", "url", "sha256", "notes" }` with `sha256` required. The rules file format is documented
-in [`NetchModern/docs/game-rules.md`](NetchModern/docs/game-rules.md). The project plans to host the
-manifest and rules on a public release repo or OSS later.
+in [`NetchModern/docs/game-rules.md`](NetchModern/docs/game-rules.md).
 
 ## 安装位置与开机启动 / Install location & launch at login
 
@@ -125,13 +166,13 @@ certutil -hashfile "Game+-x.y.z-x64.exe" SHA256
 Get-FileHash "Game+-x.y.z-x64.exe" -Algorithm SHA256
 ```
 
-加速功能会安装 netfilter / WinTUN 驱动，部分杀毒软件可能误报，请自行判断是否信任。
+加速功能会使用 WinTUN 驱动，部分杀毒软件可能误报，请自行判断是否信任。（安装包不含 NetFilter 驱动 / 进程模式。）
 
 The installer is **not code-signed**. On first run Windows SmartScreen shows
 "Windows 已保护你的电脑" — click 「更多信息」 → 「仍要运行」. Optionally verify the SHA-256 of the
 downloaded installer (`certutil -hashfile "Game+-x.y.z-x64.exe" SHA256` or PowerShell
-`Get-FileHash`) against the published value. Antivirus software may flag the netfilter / WinTUN
-drivers bundled for acceleration.
+`Get-FileHash`) against the published value. Antivirus software may flag the WinTUN
+driver bundled for acceleration (the NetFilter driver / process mode is not bundled).
 
 ## 隐私 / Privacy
 

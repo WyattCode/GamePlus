@@ -25,6 +25,7 @@ const DEFAULTS: UiPrefs = {
   onboardingDone: false,
   startHidden: false,
   migratedLoginItem: false,
+  launchNodeMode: 'keep',
   update: { ...DEFAULT_UPDATE },
   telemetry: { ...DEFAULT_TELEMETRY }
 }
@@ -76,6 +77,7 @@ const VALIDATORS: { [K in keyof UiPrefs]: Validator } = {
   onboardingDone: (v) => typeof v === 'boolean',
   startHidden: (v) => typeof v === 'boolean',
   migratedLoginItem: (v) => typeof v === 'boolean',
+  launchNodeMode: (v) => v === 'keep' || v === 'smart',
   update: isUpdateConfig,
   telemetry: isTelemetryConfig
 }

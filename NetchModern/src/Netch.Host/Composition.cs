@@ -1,13 +1,18 @@
+using System.Net;
 using System.Net.Http;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Security.Principal;
 using Microsoft.Extensions.DependencyInjection;
 using Netch.Core;
 using Netch.Core.Abstractions;
 using Netch.Core.Controllers;
 using Netch.Core.Models.Servers;
+using Netch.Core.Models.Settings;
 using Netch.Core.Services;
 using Netch.Core.Services.AutoStart;
 using Netch.Core.Services.Diagnostics;
+using Netch.Core.Services.History;
 using Netch.Core.Services.Library;
 using Netch.Core.Services.Rules;
 
@@ -77,7 +82,52 @@ internal static class Composition
             sp.GetRequiredService<EffectMonitor>(),
             () => sp.GetRequiredService<ISettingsService>().Settings.ExtraApps.ToList(),
             () => sp.GetRequiredService<ISettingsService>().Settings.Advanced,
-            sp.GetRequiredService<IBaselineStore>()));
+            sp.GetRequiredService<IBaselineStore>(),
+            game =>
+            {
+                var settings = sp.GetRequiredService<ISettingsService>().Settings;
+                return settings.GameCaptureMode.TryGetValue(game.Id, out var m)
+                    ? m
+                    : settings.Advanced.DefaultCaptureMode;
+            },
+            game => sp.GetRequiredService<ISettingsService>().Settings.GameDownloadViaProxy.TryGetValue(game.Id, out var v) && v,
+            // LAN share for consoles: build a validated snapshot at each acceleration start. Never
+            // throws — any failure becomes a problem message and acceleration continues without it.
+            () =>
+            {
+                try
+                {
+                    var s = sp.GetRequiredService<ISettingsService>().Settings.LanShare;
+                    var snapshot = new LanShareSettings
+                    {
+                        Enabled = s.Enabled,
+                        BindAddress = s.BindAddress,
+                        HttpPort = s.HttpPort,
+                        SocksPort = s.SocksPort,
+                        AllowedClients = s.AllowedClients.ToList(),
+                        Username = s.Username,
+                        Password = s.Password
+                    };
+                    var options = LanShareValidator.BuildOptions(snapshot, LocalIPv4Addresses(), out var problem);
+                    return new LanShareOptionsResult(options, problem);
+                }
+                catch (Exception e)
+                {
+                    return new LanShareOptionsResult(null, e.Message);
+                }
+            }));
+
+        // Per-game acceleration history. The store owns its own lock; the recorder subscribes to the
+        // accelerator's StateChanged and appends one session per completed acceleration. GameServerChoice
+        // is a ConcurrentDictionary, so the recorder can read it lock-free from the accelerator thread.
+        services.AddSingleton<IAccelHistoryStore>(_ =>
+            new JsonAccelHistoryStore(Path.Combine(AppPaths.DataDirectory, "accel-history.json")));
+        services.AddSingleton(sp => new AccelHistoryRecorder(
+            sp.GetRequiredService<IAcceleratorService>(),
+            sp.GetRequiredService<IAccelHistoryStore>(),
+            () => DateTime.Now,
+            gameId => sp.GetRequiredService<ISettingsService>().Settings.GameServerChoice.GetValueOrDefault(gameId),
+            sp.GetRequiredService<ILogService>()));
 
         // One-click diagnostics: environment checks + plain-Chinese explanations.
         services.AddSingleton<IDiagnosticEnvironment>(_ =>
@@ -117,7 +167,34 @@ internal static class Composition
             CurrentUserName,
             Path.GetTempPath()));
 
-        return services.BuildServiceProvider();
+        var provider = services.BuildServiceProvider();
+
+        // Instantiate the recorder eagerly so it subscribes to StateChanged before the first
+        // acceleration starts (otherwise the first session would be missed).
+        provider.GetRequiredService<AccelHistoryRecorder>();
+
+        return provider;
+    }
+
+    /// <summary>
+    ///     Private IPv4 unicast addresses of Up, non-loopback network interfaces — the candidates the
+    ///     LAN-share bind address must be one of.
+    /// </summary>
+    private static IReadOnlyCollection<IPAddress> LocalIPv4Addresses()
+    {
+        var addresses = new List<IPAddress>();
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (ni.OperationalStatus != OperationalStatus.Up
+                || ni.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+                continue;
+
+            foreach (var unicast in ni.GetIPProperties().UnicastAddresses)
+                if (unicast.Address.AddressFamily == AddressFamily.InterNetwork)
+                    addresses.Add(unicast.Address);
+        }
+
+        return addresses;
     }
 
     /// <summary>

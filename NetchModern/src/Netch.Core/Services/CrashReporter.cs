@@ -23,6 +23,9 @@ public sealed class CrashReporter
         _keep = keep < 1 ? 1 : keep;
     }
 
+    /// <summary>Directory the crash reports are written to.</summary>
+    public string Directory => _directory;
+
     /// <summary>
     ///     Writes a crash report file and prunes old ones. Returns the file path, or <c>null</c> when the
     ///     report could not be written (never throws).
@@ -31,7 +34,7 @@ public sealed class CrashReporter
     {
         try
         {
-            Directory.CreateDirectory(_directory);
+            System.IO.Directory.CreateDirectory(_directory);
 
             var now = _clock();
             var name = $"crash-host-{now:yyyyMMdd-HHmmss-fff}.txt";
@@ -93,7 +96,7 @@ public sealed class CrashReporter
     {
         try
         {
-            var files = Directory.GetFiles(_directory, "crash-host-*.txt");
+            var files = System.IO.Directory.GetFiles(_directory, "crash-host-*.txt");
             if (files.Length <= _keep)
                 return;
 

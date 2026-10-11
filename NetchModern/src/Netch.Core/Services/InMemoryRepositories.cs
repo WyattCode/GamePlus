@@ -4,6 +4,8 @@ using System.Net.Sockets;
 using Netch.Core.Abstractions;
 using Netch.Core.Models;
 using Netch.Core.Models.Servers;
+using Netch.Core.Services.Import;
+using Netch.Core.Utils;
 
 namespace Netch.Core.Services;
 
@@ -146,12 +148,20 @@ public sealed class SubscriptionRepository : ISubscriptionRepository
                 }
 
                 var body = await response.Content.ReadAsStringAsync(ct);
-                var parsed = ShareLinkParser.ParseText(body);
-                if (parsed.Count > 0)
-                    return (parsed, null);
 
-                // 200 but nothing we can parse (e.g. a Clash YAML variant) — try the next UA.
-                lastError = new InvalidOperationException("Subscription returned no recognisable nodes.");
+                // NodeImporter handles Clash YAML, share links and Base64 subscription blobs alike.
+                var result = NodeImporter.Parse(body);
+                if (result.Valid.Count > 0)
+                {
+                    // Dedupe within the fetched set (remark ignored) so a subscription that lists the
+                    // same node twice doesn't produce duplicate entries.
+                    var (deduped, _) = NodeImporter.Dedupe(Array.Empty<Server>(), result.Valid);
+                    return (deduped, null);
+                }
+
+                // 200 but nothing we can parse — try the next UA.
+                lastError = new InvalidOperationException(
+                    $"Subscription {SecretRedactor.RedactUrl(link)} returned no recognisable nodes.");
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {

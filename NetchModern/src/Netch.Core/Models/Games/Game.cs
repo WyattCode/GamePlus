@@ -53,6 +53,15 @@ public partial class Game : ObservableObject
     /// <summary>Process names for this game (used by driver/TUN modes for per-process capture).</summary>
     public List<string> ProxyProcesses { get; set; } = new();
 
+    /// <summary>
+    ///     CDN download domains (e.g. Steam content servers). Routed DIRECT by default to save node
+    ///     bandwidth; only proxied when the per-game 「游戏下载走代理」 toggle is on.
+    /// </summary>
+    public List<string> DownloadDomains { get; set; } = new();
+
+    /// <summary>Optional per-game compatibility notes (Game+). Null when the game has none.</summary>
+    public GameCompat? Compat { get; set; }
+
     /// <summary>Total routing rules (domains + IPs) — what actually gets accelerated.</summary>
     [JsonIgnore]
     public int RuleCount => ProxyDomains.Count + ProxyIps.Count;

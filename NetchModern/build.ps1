@@ -76,12 +76,12 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
 # Copy ALL native components into bin\ as LOOSE files. The publish drops the .exe/.dll cores (xray.exe,
 # wintun.dll, nfapi.dll) from the output, so copy them explicitly here - the host resolves them by path
 # (bin\xray.exe etc.), which requires them on disk, not embedded. Exclude README.md so the tracked
-# native/README.md is not shipped into bin\.
+# native/README.md and the pinned native/native-manifest.json are not shipped into bin\.
 $bin = Join-Path $stage 'bin'
 New-Item -ItemType Directory -Force $bin | Out-Null
 $nativeSrc = Join-Path $root 'native'
 if (Test-Path $nativeSrc) {
-    Copy-Item (Join-Path $nativeSrc '*') $bin -Recurse -Force -Exclude 'README.md'
+    Copy-Item (Join-Path $nativeSrc '*') $bin -Recurse -Force -Exclude 'README.md', 'native-manifest.json'
     Write-Host "==> Copied native components into bin\" -ForegroundColor Cyan
 } else {
     Write-Host "==> native\ not found - nothing copied (see native/README.md)" -ForegroundColor Yellow

@@ -1,15 +1,22 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import AccelHistoryCard from '@/components/AccelHistoryCard.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import EffectChart from '@/components/EffectChart.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
+import LaunchTargetDialog from '@/components/LaunchTargetDialog.vue'
 import { gameColor } from '@/utils/gameIcon'
+import { PROCESS_MODE_UNAVAILABLE, backend } from '@/api/backend'
+import { adviseBeforeAccel, adviseDuringAccel, type EffectAdvice } from '@/utils/effectAdvice'
+import { createShortcut } from '@/utils/launchApi'
 import { useAccelStore } from '@/stores/accel'
 import { useDiagnosticsStore } from '@/stores/diagnostics'
 import { useLibraryStore } from '@/stores/library'
 import { errorMessage, useToastStore } from '@/stores/toast'
+import { launchDialogGameId, useAccelerateAndLaunch } from '@/composables/useAccelerateAndLaunch'
 import { fmtDelay, fmtDuration, fmtLatency, fmtRate } from '@/utils/format'
+import type { BaselineInfo, CaptureMode, CaptureModeKind } from '@shared/types'
 
 const accel = useAccelStore()
 const diagnostics = useDiagnosticsStore()
@@ -126,6 +133,49 @@ async function remeasure(): Promise<void> {
   }
 }
 
+// --- direct baseline hint (网络良好，可不加速) ---
+
+// Stored direct baseline for the selected game, fetched while idle; null while loading/unknown.
+const baselineInfo = ref<BaselineInfo | null>(null)
+// Game id for which the user dismissed the hint; switching games shows it again.
+const baselineDismissedFor = ref<string | null>(null)
+// Guards against out-of-order getBaseline responses when switching games quickly.
+let baselineSeq = 0
+
+watch(
+  [() => accel.selectedGame?.id, running],
+  async ([gameId, isRunning]) => {
+    baselineInfo.value = null
+    if (!gameId || isRunning) return
+    const seq = ++baselineSeq
+    try {
+      const info = await backend.getBaseline(gameId)
+      if (seq === baselineSeq) baselineInfo.value = info
+    } catch {
+      // Advisory only: silently ignore fetch failures.
+    }
+  },
+  { immediate: true }
+)
+
+const beforeAdvice = computed<EffectAdvice | null>(() => {
+  if (running.value || !baselineInfo.value) return null
+  if (baselineDismissedFor.value === accel.selectedGame?.id) return null
+  return adviseBeforeAccel(baselineInfo.value.baseline)
+})
+
+function dismissBaselineHint(): void {
+  baselineDismissedFor.value = accel.selectedGame?.id ?? null
+}
+
+// Live "加速效果不明显" hint while accelerating, from the effect report's before/after snapshots.
+const duringAdvice = computed<EffectAdvice | null>(() => {
+  if (accel.status.state !== 'accelerating') return null
+  const e = effect.value
+  if (!e) return null
+  return adviseDuringAccel(e.baseline, e.current)
+})
+
 // --- smart routing (P2) ---
 
 const recommended = computed(() => {
@@ -227,6 +277,39 @@ async function toggleAuto(enabled: boolean): Promise<void> {
   }
 }
 
+// --- 加速并启动 / launch target / desktop shortcut ---
+
+const { accelerateAndLaunch } = useAccelerateAndLaunch()
+const launchBusy = ref(false)
+
+async function onAccelAndLaunch(): Promise<void> {
+  if (launchBusy.value) return
+  launchBusy.value = true
+  try {
+    await accelerateAndLaunch()
+  } finally {
+    launchBusy.value = false
+  }
+}
+
+async function onCreateShortcut(): Promise<void> {
+  const g = selectedGame.value
+  if (!g) return
+  const res = await createShortcut(g.id, g.name)
+  if (res.ok) toast.info('已在桌面创建快捷方式')
+  else toast.error(res.error ?? '创建快捷方式失败')
+}
+
+function openLaunchDialog(): void {
+  if (!selectedGame.value) return
+  launchDialogGameId.value = selectedGame.value.id
+}
+
+const dialogGame = computed(() => {
+  const id = launchDialogGameId.value
+  if (!id) return null
+  return library.games.find((g) => g.id === id) ?? null
+})
 // --- per-game server choice (Q1) ---
 
 const hasServerChoice = computed(() => selectedGame.value?.hasServerChoice === true)
@@ -244,6 +327,147 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
     error.value = errorMessage(e)
   }
 }
+
+// --- per-game download split (Steam CDN direct) ---
+
+const hasDownloadDomains = computed(() => (selectedGame.value?.downloadDomains?.length ?? 0) > 0)
+const downloadViaProxy = computed(() => selectedGame.value?.downloadViaProxy === true)
+
+async function toggleDownloadProxy(enabled: boolean): Promise<void> {
+  const g = selectedGame.value
+  if (!g || running.value) return
+  try {
+    await library.setGameDownloadProxy(g.id, enabled)
+  } catch (e) {
+    toast.error(errorMessage(e))
+  }
+}
+
+// --- capture mode (per game) ---
+
+const MODE_LABELS: Record<CaptureMode, string> = {
+  auto: '自动（推荐）',
+  process: '进程模式',
+  tun: 'TUN 模式',
+  proxy: '系统代理'
+}
+
+const MODE_UNAVAILABLE_HINT: Record<CaptureModeKind, string> = {
+  process: '该游戏没有进程规则',
+  tun: '该游戏没有进程或 IP 规则',
+  proxy: '该游戏没有域名规则'
+}
+
+// Whether process capture is usable (false when NetFilter components are not shipped).
+const processModeAvailable = ref(true)
+
+// Global default capture mode, read from settings (best-effort; falls back to "auto").
+const globalDefaultMode = ref<CaptureMode>('auto')
+
+onMounted(async () => {
+  try {
+    const s = await backend.getSettings()
+    const m = s.advanced.defaultCaptureMode
+    if (m === 'auto' || m === 'process' || m === 'tun' || m === 'proxy') {
+      globalDefaultMode.value = m
+    }
+    processModeAvailable.value = s.advanced.processModeAvailable !== false
+  } catch {
+    // backend not reachable (e.g. browser preview)
+  }
+})
+
+const captureMode = computed<CaptureMode | null>(() => selectedGame.value?.captureMode ?? null)
+const availableModes = computed<CaptureModeKind[]>(
+  () => (selectedGame.value?.availableModes as CaptureModeKind[] | undefined) ?? []
+)
+
+// Per-game compatibility note from the backend (anti-cheat / recommended mode hints); null when none.
+const gameCompat = computed(() => selectedGame.value?.compat ?? null)
+
+const modeOptions = computed<
+  { value: CaptureMode | 'default'; label: string; disabled: boolean; title: string; recommended: boolean }[]
+>(() => {
+  const avail = availableModes.value
+  const rec = gameCompat.value?.recommendedMode ?? null
+  const opts: { value: CaptureMode | 'default'; label: string; disabled: boolean; title: string; recommended: boolean }[] = [
+    {
+      value: 'default',
+      label: `跟随默认 · ${MODE_LABELS[globalDefaultMode.value]}`,
+      disabled: false,
+      title: '',
+      recommended: false
+    }
+  ]
+  const kinds: CaptureMode[] = ['auto', 'process', 'tun', 'proxy']
+  for (const k of kinds) {
+    // NetFilter not shipped: hide the process button entirely, unless the game's own override is
+    // 'process' — keep it visible (disabled) so the active state stays readable.
+    if (k === 'process' && !processModeAvailable.value) {
+      if (captureMode.value !== 'process') continue
+      opts.push({
+        value: k,
+        label: MODE_LABELS[k],
+        disabled: true,
+        title: PROCESS_MODE_UNAVAILABLE,
+        recommended: false
+      })
+      continue
+    }
+    const isKind = k !== 'auto'
+    const disabled = isKind && !avail.includes(k as CaptureModeKind)
+    opts.push({
+      value: k,
+      label: MODE_LABELS[k],
+      disabled,
+      title: disabled ? MODE_UNAVAILABLE_HINT[k as CaptureModeKind] : '',
+      // 'auto' is already labelled 自动（推荐）, so only badge an explicit non-auto recommendation.
+      recommended: rec !== null && rec !== 'auto' && k === rec
+    })
+  }
+  return opts
+})
+
+const currentModeValue = computed<CaptureMode | 'default'>(() => captureMode.value ?? 'default')
+
+// Warning line under the 加速模式 row when process capture cannot work; null when fine.
+const processModeNotice = computed<string | null>(() => {
+  if (processModeAvailable.value) return null
+  if (!selectedGame.value) return null
+  const override = captureMode.value
+  const effectiveProcess =
+    override === 'process' ||
+    (override == null && globalDefaultMode.value === 'process')
+  if (effectiveProcess) {
+    return `${PROCESS_MODE_UNAVAILABLE}，当前设置为进程模式，加速会失败。请改用「自动」或「TUN 模式」（同样按进程加速）。`
+  }
+  // Process-only games are fine: 自动 / TUN route them by process through sing-box TUN.
+  return null
+})
+
+async function setCaptureMode(mode: CaptureMode | 'default'): Promise<void> {
+  const g = selectedGame.value
+  if (!g || running.value || busy.value || mode === currentModeValue.value) return
+  error.value = null
+  try {
+    await library.setGameMode(g.id, mode)
+  } catch (e) {
+    toast.error(errorMessage(e))
+  }
+}
+
+// --- acceleration history (per-game) ---
+
+// Bumped whenever a session finishes (accelerating/stopping → idle) so the history card reloads.
+const historyRefreshKey = ref(0)
+watch(
+  () => accel.status.state,
+  (state, prev) => {
+    if (state === 'idle' && (prev === 'accelerating' || prev === 'stopping')) {
+      historyRefreshKey.value++
+    }
+  }
+)
 </script>
 
 <template>
@@ -315,6 +539,63 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
             </button>
           </div>
           <span class="muted small server-hint">按所选服务器挑选线路</span>
+        </div>
+
+        <!-- Per-game capture mode -->
+        <div class="server-row">
+          <div class="server-label">加速模式</div>
+          <div class="seg" :class="{ disabled: running }" :title="running ? '停止加速后可切换' : ''">
+            <button
+              v-for="opt in modeOptions"
+              :key="opt.value"
+              type="button"
+              class="seg-btn"
+              :class="{ active: currentModeValue === opt.value }"
+              :disabled="running || busy || opt.disabled"
+              :title="opt.title"
+              @click="setCaptureMode(opt.value)"
+            >
+              {{ opt.label }}
+              <span v-if="opt.recommended" class="mode-rec">推荐</span>
+            </button>
+          </div>
+          <span class="muted small server-hint">手动指定后失败不会自动降级</span>
+        </div>
+
+        <!-- Process mode unavailable (NetFilter not shipped) -->
+        <div v-if="processModeNotice" class="capture-hint warn">
+          <AppIcon name="warning" :size="14" />
+          {{ processModeNotice }}
+        </div>
+
+        <!-- Per-game compatibility note (anti-cheat / recommended mode hints) -->
+        <div v-if="gameCompat" class="compat-note">
+          <div class="compat-head">
+            <AppIcon name="info" :size="13" />
+            <span class="compat-label">兼容性提示</span>
+            <span class="compat-tag" :class="{ unverified: !gameCompat.verified }">
+              {{ gameCompat.verified ? '已验证' : '未验证' }}
+            </span>
+          </div>
+          <div class="compat-text">{{ gameCompat.note }}</div>
+        </div>
+
+        <!-- Per-game download split: CDN downloads go DIRECT unless the toggle is on -->
+        <div v-if="hasDownloadDomains" class="server-row">
+          <div class="server-label">游戏下载</div>
+          <label class="switch" :class="{ disabled: running }" title="下载也走代理">
+            <input
+              type="checkbox"
+              :checked="downloadViaProxy"
+              :disabled="running"
+              @change="toggleDownloadProxy(($event.target as HTMLInputElement).checked)"
+            />
+            <span class="track"><span class="thumb" /></span>
+          </label>
+          <span class="dl-name">下载也走代理</span>
+          <span class="muted small server-hint dl-hint">
+            默认：商店/社区/登录走代理，游戏下载（CDN）直连，避免消耗节点流量；开启后下载也经过节点（需重新加速生效）。
+          </span>
         </div>
 
         <div class="row">
@@ -422,14 +703,49 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
           </label>
         </div>
 
-        <button class="action" :class="{ stop: running }" :disabled="busy" @click="toggle">
-          <AppIcon name="bolt" :size="22" />
-          {{ buttonText }}
-        </button>
+        <!-- Direct baseline hint: 网络良好，可不加速 (advisory only, dismissible per game) -->
+        <div v-if="beforeAdvice" class="advice-banner">
+          <AppIcon name="check" :size="14" />
+          <div class="advice-text">
+            <div class="advice-title">{{ beforeAdvice.title }}</div>
+            <div class="advice-detail">{{ beforeAdvice.detail }}</div>
+          </div>
+          <button class="advice-close" title="关闭" @click="dismissBaselineHint">
+            <AppIcon name="close" :size="12" />
+          </button>
+        </div>
+
+        <div class="action-row">
+          <button class="action" :class="{ stop: running }" :disabled="busy" @click="toggle">
+            <AppIcon name="bolt" :size="22" />
+            {{ buttonText }}
+          </button>
+          <button
+            class="action secondary"
+            :disabled="busy || launchBusy"
+            title="加速并启动游戏"
+            @click="onAccelAndLaunch"
+          >
+            <AppIcon name="bolt" :size="18" />
+            加速并启动
+          </button>
+        </div>
+
+        <div class="launch-row">
+          <button type="button" class="link-btn" @click="openLaunchDialog">启动方式</button>
+          <span class="launch-sep">·</span>
+          <button type="button" class="link-btn" @click="onCreateShortcut">创建桌面快捷方式</button>
+        </div>
 
         <div v-if="captureHint" class="capture-hint" :class="{ warn: captureHint.warn }">
           <AppIcon name="info" :size="14" />
           {{ captureHint.text }}
+        </div>
+
+        <!-- LAN share chip: shown while the console proxy share is active -->
+        <div v-if="accel.status.lanShareEndpoint" class="capture-hint lan-chip">
+          <AppIcon name="globe" :size="14" />
+          局域网共享中 · {{ accel.status.lanShareEndpoint }}
         </div>
       </div>
 
@@ -457,6 +773,13 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
           基于应用内对游戏域名的 TLS 握手延迟测得，仅供参考，不等同于游戏内显示的延迟。
         </div>
         <div v-if="effectCompare" class="effect-compare muted small">{{ effectCompare }}</div>
+        <div v-if="duringAdvice" class="effect-advice">
+          <AppIcon name="warning" :size="14" />
+          <div class="advice-text">
+            <div class="advice-title">{{ duringAdvice.title }}</div>
+            <div class="advice-detail">{{ duringAdvice.detail }}</div>
+          </div>
+        </div>
         <div v-if="effect.baselineFromCache && baselineMeasuredText" class="muted small effect-baseline">
           直连基线测于 {{ baselineMeasuredText }}
         </div>
@@ -469,6 +792,13 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
           </button>
         </div>
       </div>
+
+      <!-- Per-game acceleration history -->
+      <AccelHistoryCard
+        :game-id="accel.selectedGame.id"
+        :game-name="accel.selectedGame.name"
+        :refresh-key="historyRefreshKey"
+      />
 
       <!-- Traffic -->
       <div class="traffic">
@@ -487,6 +817,13 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
           </div>
         </div>
       </div>
+
+      <!-- Launch-target dialog (opened by 启动方式 / 加速并启动 without a target) -->
+      <LaunchTargetDialog
+        :open="launchDialogGameId !== null"
+        :game="dialogGame"
+        @close="launchDialogGameId = null"
+      />
     </template>
   </div>
 </template>
@@ -670,6 +1007,45 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
 .action.stop {
   background: var(--danger);
 }
+.action-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 18px;
+}
+.action-row .action {
+  margin-top: 0;
+  flex: 1;
+}
+.action.secondary {
+  flex: none;
+  width: auto;
+  padding: 0 24px;
+  background: transparent;
+  border: 1px solid var(--brand);
+  color: var(--brand);
+}
+.action.secondary:hover {
+  background: var(--brand-soft);
+}
+.launch-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.link-btn {
+  font-size: 12px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.link-btn:hover {
+  color: var(--brand);
+}
+.launch-sep {
+  font-size: 12px;
+  color: var(--text-3);
+}
 
 .capture-hint {
   display: flex;
@@ -681,6 +1057,61 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
 }
 .capture-hint.warn {
   color: var(--warn);
+}
+.lan-chip {
+  color: var(--brand);
+  font-weight: 600;
+}
+
+/* advisory hints (网络良好，可不加速 / 加速效果不明显) */
+.advice-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  background: rgba(23, 178, 106, 0.12);
+  font-size: 12px;
+  color: var(--ok);
+}
+.advice-banner .advice-close {
+  color: var(--ok);
+}
+.effect-advice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  background: rgba(255, 193, 7, 0.12);
+  font-size: 12px;
+  color: var(--warn);
+}
+.advice-text {
+  flex: 1;
+  min-width: 0;
+}
+.advice-title {
+  font-weight: 600;
+}
+.advice-detail {
+  margin-top: 2px;
+  color: var(--text-2);
+  word-break: break-word;
+}
+.advice-close {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.advice-close:hover {
+  opacity: 1;
 }
 
 /* per-game server choice */
@@ -695,6 +1126,7 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
 .server-label {
   font-weight: 600;
   font-size: 14px;
+  white-space: nowrap;
 }
 .server-hint {
   margin-left: auto;
@@ -709,6 +1141,7 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
   opacity: 0.6;
 }
 .seg-btn {
+  white-space: nowrap;
   padding: 4px 14px;
   border-radius: calc(var(--radius-sm) - 2px);
   font-size: 13px;
@@ -725,6 +1158,67 @@ async function setServer(server: 'cn' | 'intl'): Promise<void> {
 }
 .seg-btn:disabled {
   cursor: not-allowed;
+}
+
+/* per-game compatibility note */
+.compat-note {
+  margin: -6px 0 14px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.compat-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+}
+.compat-label {
+  font-weight: 600;
+  font-size: 12px;
+}
+.compat-tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  background: var(--brand-soft);
+  color: var(--brand-600);
+}
+.compat-tag.unverified {
+  background: rgba(255, 193, 7, 0.15);
+  color: var(--warn);
+}
+.compat-text {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  word-break: break-word;
+}
+.mode-rec {
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--brand-soft);
+  color: var(--brand-600);
+}
+.seg-btn.active .mode-rec {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+/* per-game download split */
+.dl-name {
+  font-size: 13px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.dl-hint {
+  flex: 1;
+  margin-left: 12px;
+  text-align: right;
 }
 
 /* smart routing */

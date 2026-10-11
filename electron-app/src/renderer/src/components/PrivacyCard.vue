@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useToastStore, errorMessage } from '@/stores/toast'
+import { exportDiagnosticBundle } from '@/utils/diagBundle'
 import type { CrashFileInfo, TelemetryConfig, TelemetryEvent } from '@shared/types'
 
 const toast = useToastStore()
@@ -10,6 +11,7 @@ const supported = computed(() => !!window.gameplus?.telemetry)
 const config = ref<TelemetryConfig>({ enabled: false, endpoint: '', installId: null })
 const loaded = ref(false)
 const saving = ref(false)
+const exporting = ref(false)
 
 const eventsOpen = ref(false)
 const events = ref<TelemetryEvent[]>([])
@@ -97,6 +99,20 @@ async function openCrashFolder(): Promise<void> {
   }
 }
 
+async function exportBundle(): Promise<void> {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const path = await exportDiagnosticBundle()
+    if (path) toast.info(`诊断包已保存：${path}`)
+    else toast.info('已取消')
+  } catch (e) {
+    toast.error('导出失败：' + errorMessage(e))
+  } finally {
+    exporting.value = false
+  }
+}
+
 function formatEvent(e: TelemetryEvent): string {
   try {
     return JSON.stringify(e)
@@ -162,6 +178,18 @@ function formatEvent(e: TelemetryEvent): string {
           </div>
         </div>
         <button class="btn diag-btn" @click="openCrashFolder">打开文件夹</button>
+      </div>
+
+      <div class="setting">
+        <div class="privacy-info">
+          <div class="s-name">导出诊断包</div>
+          <div class="muted small">
+            包含日志、诊断结果与脱敏后的配置（已移除密码、密钥与订阅链接），分享前请自行检查
+          </div>
+        </div>
+        <button class="btn diag-btn" :disabled="exporting" @click="exportBundle">
+          {{ exporting ? '导出中…' : '导出诊断包' }}
+        </button>
       </div>
     </template>
   </div>

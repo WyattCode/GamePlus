@@ -84,6 +84,29 @@ public class SubscriptionTests
     }
 
     [Fact]
+    public void Apply_ServerCount_CountsOnlyThisSubscriptionsServers()
+    {
+        var repo = NewRepo(out var servers);
+        var existing = NewSub("existing", "https://existing.example.com/sub");
+        repo.Add(existing);
+
+        // Pool already holds servers from another subscription...
+        repo.Apply(existing, new[] { MakeServer("old1"), MakeServer("old2") });
+
+        // ...plus one plain manually-added server with no group.
+        servers.Servers.Add(MakeServer("manual"));
+
+        var previousTotal = servers.Servers.Count;
+
+        var fresh = NewSub("fresh", "https://fresh.example.com/sub");
+        repo.Add(fresh);
+        repo.Apply(fresh, new[] { MakeServer("n1"), MakeServer("n2"), MakeServer("n3") });
+
+        Assert.Equal(3, fresh.ServerCount);
+        Assert.Equal(previousTotal + 3, servers.Servers.Count);
+    }
+
+    [Fact]
     public async Task LegacyMigrationRetagsServers()
     {
         var dir = Path.Combine(Path.GetTempPath(), "gameplus-subtest-" + Guid.NewGuid().ToString("N"));

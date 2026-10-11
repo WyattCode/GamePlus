@@ -26,7 +26,7 @@ using Netch.Core.Utils;
 namespace Netch.Host;
 
 /// <summary>Maps JSON-RPC method names to Netch.Core operations. Stateless except for the shared id registries.</summary>
-internal sealed class RpcRouter
+internal sealed partial class RpcRouter
 {
     private readonly IServiceProvider _sp;
     private readonly DateTime _startedAt = DateTime.UtcNow;
@@ -501,7 +501,7 @@ internal sealed class RpcRouter
                         catch
                         {
                             // Roll back the in-memory swap so the list stays consistent with the store.
-                            Games.Games[index] = updated;
+                            Games.Games[index] = existing;
                             throw;
                         }
                     }
@@ -949,72 +949,6 @@ internal sealed class RpcRouter
     }
 
     /// <summary>
-    ///     Implements servers.import: a single http(s) URL becomes a subscription (created like subs.add,
-    ///     then refreshed); anything else is parsed by NodeImporter and deduped against the current pool.
-    /// </summary>
-    private async Task<object> ImportNodesAsync(string text, CancellationToken ct)
-    {
-        var trimmed = (text ?? "").Trim();
-        if (trimmed.Length == 0)
-            throw new InvalidOperationException("无法识别的节点内容");
-
-        // A single http(s) URL → treat as a subscription: create it exactly like subs.add, then refresh.
-        if (IsSingleHttpUrl(trimmed))
-        {
-            var sub = await WithStateValueAsync(async () =>
-            {
-                var s = new Netch.Core.Models.Subscription
-                {
-                    Remark = Netch.Core.Models.Subscription.DefaultRemarkFor(trimmed),
-                    Link = trimmed
-                };
-                s.EnsureId();
-                Subs.Add(s);
-                await Persistence.SaveAsync();
-                return s;
-            }, ct);
-
-            await RefreshSubscriptionAsync(sub.Id, ct);
-
-            return await WithStateValue(() =>
-            {
-                // Report only the servers this subscription added, not the whole pool. Look the
-                // subscription up again by id: it may have been removed while we were fetching.
-                var added = Subs.Subscriptions.FirstOrDefault(s => s.Id == sub.Id)?.ServerCount ?? 0;
-                var list = ServerList();
-                return (object)new ImportResultDto(added, 0, 0, "subscription", list);
-            }, ct);
-        }
-
-        var parsed = NodeImporter.Parse(trimmed);
-
-        return await WithStateValueAsync(async () =>
-        {
-            var (added, duplicates) = NodeImporter.Dedupe(Servers.Servers.ToList(), parsed.Valid);
-            if (added.Count == 0 && duplicates == 0)
-                throw new InvalidOperationException("无法识别的节点内容");
-
-            foreach (var s in added)
-                Servers.Add(s);
-            if (added.Count > 0)
-                await Persistence.SaveAsync();
-
-            var list = ServerList();
-            return (object)new ImportResultDto(added.Count, duplicates, parsed.Invalid, parsed.Format, list);
-        }, ct);
-    }
-
-    /// <summary>True when the whole (trimmed) text is a single http:// or https:// URL.</summary>
-    private static bool IsSingleHttpUrl(string text)
-    {
-        if (text.Contains('\n') || text.Contains('\r'))
-            return false;
-        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri))
-            return false;
-        return uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
-    }
-
-    /// <summary>
     ///     Implements games.importRule: parses the payload (Game+ rule JSON or gameplus-rule: share
     ///     string) OUTSIDE the state lock, then detects conflicts + applies the import under it. The
     ///     result is always a CUSTOM game (id "custom-" + incoming id) — built-in games are never
@@ -1251,73 +1185,6 @@ internal sealed class RpcRouter
                 string.IsNullOrWhiteSpace(node.Remark) ? node.Hostname : node.Remark,
                 st.Latency, st.Loss, options);
         }, ct);
-    }
-
-    /// <summary>
-    ///     Switches acceleration to the next-ranked node for <paramref name="gameId" />, excluding the
-    ///     given node ids (current node + nodes already tried this session). Ranks exactly like
-    ///     <see cref="PickBestNodeAsync" /> but never pings. Returns the candidate's display name, or
-    ///     null when no candidate is left.
-    /// </summary>
-    internal async Task<string?> SwitchToNextNodeAsync(
-        string gameId, IReadOnlySet<string> excludeNodeIds, CancellationToken ct)
-    {
-        var game = await WithStateValue(
-            () => Games.Games.FirstOrDefault(x => x.Id == gameId)
-                  ?? throw new InvalidOperationException("游戏不存在"),
-            ct);
-
-        // Snapshot the pool + its stable ids under the lock (no pinging — reuse the last measurements).
-        var (pool, ids) = await WithStateValue(() =>
-        {
-            var list = Servers.Servers.ToList();
-            return (list, ServerIds.Assign(list));
-        }, ct);
-        if (pool.Count == 0)
-            return null;
-
-        // Same penalty/choice reads as PickBestNodeAsync — no network I/O inside this block.
-        var (penalty, choice) = await WithStateValue(() =>
-        {
-            var p = SettingsSvc.Settings.Advanced.RegionPenaltyMs;
-            var c = SettingsSvc.Settings.GameServerChoice.GetValueOrDefault(game.Id);
-            return (p, c);
-        }, ct);
-
-        var ranking = NodeRanker.Rank(game, pool, penalty, choice);
-
-        // The ranking orders tested (Delay >= 0) nodes first, so the first pass over it already prefers
-        // tested nodes; the second pass only falls back when nothing tested is left at all.
-        Server? candidate = null;
-        foreach (var c in ranking.Candidates)
-        {
-            if (c.Delay < 0)
-                continue;
-            if (ids.TryGetValue(c.Server, out var cid) && !excludeNodeIds.Contains(cid))
-            {
-                candidate = c.Server;
-                break;
-            }
-        }
-
-        if (candidate is null)
-        {
-            foreach (var c in ranking.Candidates)
-            {
-                if (ids.TryGetValue(c.Server, out var cid) && !excludeNodeIds.Contains(cid))
-                {
-                    candidate = c.Server;
-                    break;
-                }
-            }
-        }
-
-        if (candidate is null)
-            return null;
-
-        await StopAccelAsync(ct);
-        await StartAccelAsync(gameId, ids[candidate], ct);
-        return string.IsNullOrWhiteSpace(candidate.Remark) ? candidate.Hostname : candidate.Remark;
     }
 
     /// <summary>

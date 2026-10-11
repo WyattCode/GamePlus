@@ -20,26 +20,61 @@ internal sealed partial class RpcRouter
         // A single http(s) URL → treat as a subscription: create it exactly like subs.add, then refresh.
         if (IsSingleHttpUrl(trimmed))
         {
-            var sub = await WithStateValueAsync(async () =>
+            // Under the state lock: find an already configured subscription with the same link and
+            // snapshot the current pool size (used to report how many servers the refresh added).
+            var (existing, poolCountBefore) = await WithStateValue(() =>
             {
-                var s = new Netch.Core.Models.Subscription
-                {
-                    Remark = Netch.Core.Models.Subscription.DefaultRemarkFor(trimmed),
-                    Link = trimmed
-                };
-                s.EnsureId();
-                Subs.Add(s);
-                await Persistence.SaveAsync();
-                return s;
+                var found = Subs.Subscriptions.FirstOrDefault(s =>
+                    string.Equals(s.Link?.Trim() ?? "", trimmed, StringComparison.Ordinal));
+                return (found, Servers.Servers.ToList().Count);
             }, ct);
 
-            await RefreshSubscriptionAsync(sub.Id, ct);
+            if (existing != null)
+            {
+                // Duplicate link: do not create a second subscription, just refresh the existing one.
+                await RefreshSubscriptionAsync(existing.Id, ct);
+            }
+            else
+            {
+                var sub = await WithStateValueAsync(async () =>
+                {
+                    var s = new Netch.Core.Models.Subscription
+                    {
+                        Remark = Netch.Core.Models.Subscription.DefaultRemarkFor(trimmed),
+                        Link = trimmed
+                    };
+                    s.EnsureId();
+                    Subs.Add(s);
+                    await Persistence.SaveAsync();
+                    return s;
+                }, ct);
+
+                try
+                {
+                    await RefreshSubscriptionAsync(sub.Id, ct);
+                }
+                catch (Exception)
+                {
+                    // First refresh of a newly added subscription failed: don't leave an orphan
+                    // (empty) subscription behind. Remove it again if it is still present.
+                    await WithStateValueAsync(async () =>
+                    {
+                        var s = Subs.Subscriptions.FirstOrDefault(x => x.Id == sub.Id);
+                        if (s != null)
+                        {
+                            Subs.Remove(s);
+                            await Persistence.SaveAsync();
+                        }
+                        return 0;
+                    }, CancellationToken.None); // cleanup must run even when the import was cancelled
+                    throw;
+                }
+            }
 
             return await WithStateValue(() =>
             {
-                // Report only the servers this subscription added, not the whole pool. Look the
-                // subscription up again by id: it may have been removed while we were fetching.
-                var added = Subs.Subscriptions.FirstOrDefault(s => s.Id == sub.Id)?.ServerCount ?? 0;
+                // Report only the servers the refresh added to the pool, not the whole pool.
+                var added = Math.Max(0, Servers.Servers.Count - poolCountBefore);
                 var list = ServerList();
                 return (object)new ImportResultDto(added, 0, 0, "subscription", list);
             }, ct);

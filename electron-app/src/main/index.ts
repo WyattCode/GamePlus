@@ -74,6 +74,14 @@ function sendLaunchRequest(gameId: string): void {
   win.webContents.send('launch:request', gameId)
 }
 
+/**
+ * True when an IPC call comes from the main window. The mini window shares the same preload, so
+ * privileged handlers (launching programs, creating shortcuts, writing files) must check the sender.
+ */
+function isFromMainWindow(event: Electron.IpcMainInvokeEvent): boolean {
+  return !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents
+}
+
 /** Sends a tray quick action to the renderer (which owns the accel/diagnostics stores). */
 function sendTrayAction(action: 'toggle' | 'diagnose'): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -390,7 +398,8 @@ function registerWindowControls(): void {
   ipcMain.handle('prefs:set', (_e, patch) => setPrefs(patch ?? {}))
 
   // --- 「加速并启动」: execute a validated launch target ---
-  ipcMain.handle('launch:game', async (_e, target: unknown) => {
+  ipcMain.handle('launch:game', async (event, target: unknown) => {
+    if (!isFromMainWindow(event)) return { ok: false, error: INVALID_TARGET_MESSAGE }
     if (typeof target !== 'string' || target.length === 0) {
       return { ok: false, error: INVALID_TARGET_MESSAGE }
     }
@@ -420,7 +429,8 @@ function registerWindowControls(): void {
   })
 
   // --- 「加速并启动」: create the desktop shortcut pointing back at Game+ ---
-  ipcMain.handle('launch:create-shortcut', (_e, gameId: unknown, gameName: unknown) => {
+  ipcMain.handle('launch:create-shortcut', (event, gameId: unknown, gameName: unknown) => {
+    if (!isFromMainWindow(event)) return { ok: false, error: '无效的游戏 ID' }
     if (typeof gameId !== 'string' || !isValidGameId(gameId)) {
       return { ok: false, error: '无效的游戏 ID' }
     }
@@ -442,7 +452,8 @@ function registerWindowControls(): void {
   })
 
   // --- 「加速并启动」: file picker for the .exe launch target ---
-  ipcMain.handle('launch:pick-exe', async () => {
+  ipcMain.handle('launch:pick-exe', async (event) => {
+    if (!isFromMainWindow(event)) return null
     const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
     const result = await dialog.showOpenDialog(win as BrowserWindow, {
       title: '选择游戏启动程序',
@@ -537,7 +548,8 @@ function registerWindowControls(): void {
     recentEvents: getRecentEvents(200)
   }))
 
-  ipcMain.handle('diag:save-bundle', async (_e, fileName: unknown, base64: unknown) => {
+  ipcMain.handle('diag:save-bundle', async (event, fileName: unknown, base64: unknown) => {
+    if (!isFromMainWindow(event)) throw new Error('无效的请求来源')
     if (typeof fileName !== 'string' || !/^GamePlus-diagnostics-\d{8}-\d{6}\.zip$/.test(fileName)) {
       throw new Error('无效的文件名')
     }

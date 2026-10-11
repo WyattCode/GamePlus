@@ -383,8 +383,8 @@ internal sealed partial class RpcRouter
                         throw new InvalidOperationException(ProcessModeSupport.UnavailableMessage);
                     if (mode == "process" && game.ProxyProcesses.Count == 0)
                         throw new InvalidOperationException("该游戏没有进程规则，无法使用进程模式");
-                    if (mode == "tun" && game.ProxyIps.Count == 0)
-                        throw new InvalidOperationException("该游戏没有 IP 规则，无法使用 TUN 模式");
+                    if (mode == "tun" && game.ProxyIps.Count == 0 && game.ProxyProcesses.Count == 0)
+                        throw new InvalidOperationException("该游戏没有进程或 IP 规则，无法使用 TUN 模式");
                     if (mode == "proxy" && game.ProxyDomains.Count == 0)
                         throw new InvalidOperationException("该游戏没有域名规则，无法使用系统代理模式");
 

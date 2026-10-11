@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
-import { backend, isValidProcessName, PROCESS_MODE_UNAVAILABLE } from '@/api/backend'
+import { backend, isValidProcessName } from '@/api/backend'
 import { useAccelStore } from '@/stores/accel'
 import { useToastStore, errorMessage } from '@/stores/toast'
 import type { ExtraApp, ExtraAppMode } from '@shared/types'
@@ -12,7 +12,6 @@ const toast = useToastStore()
 const apps = ref<ExtraApp[]>([])
 const loaded = ref(false)
 const saving = ref(false)
-const processModeAvailable = ref(true)
 
 const name = ref('')
 const process = ref('')
@@ -22,7 +21,6 @@ onMounted(async () => {
   try {
     const s = await backend.getSettings()
     apps.value = s.extraApps ?? []
-    processModeAvailable.value = s.advanced.processModeAvailable !== false
   } catch {
     // backend not reachable (e.g. browser preview)
   } finally {
@@ -30,19 +28,17 @@ onMounted(async () => {
   }
 })
 
-// Only process-capture mode can do per-app routing; TUN / system-proxy cannot.
+// Per-app routing works in TUN mode (and process mode); system-proxy cannot.
 const captureMode = computed(() => accel.status.captureMode)
 const running = computed(
   () => accel.status.state === 'accelerating' || accel.status.state === 'connecting'
 )
 const modeWarning = computed<string | null>(() => {
   if (!running.value) return null
-  if (captureMode.value === 'tun') return '当前为 TUN 模式，分流不生效'
   if (captureMode.value === 'proxy') return '当前为系统代理模式，分流不生效'
   return null
 })
 const chipWarning = computed<string | null>(() => {
-  if (!processModeAvailable.value) return `${PROCESS_MODE_UNAVAILABLE}，按应用分流暂不生效`
   return modeWarning.value
 })
 
@@ -99,7 +95,7 @@ async function setMode(index: number, m: ExtraAppMode): Promise<void> {
       <div>
         <div class="s-name">额外应用</div>
         <div class="muted small">
-          为语音、直播等应用单独指定走加速通道或保持直连。仅在“进程模式”下生效；TUN / 系统代理模式不支持按应用分流。修改将在下次开始加速时生效。
+          为语音、直播等应用单独指定走加速通道或保持直连。在 TUN 模式（以及进程模式）下按进程生效；系统代理模式不支持按应用分流。修改将在下次开始加速时生效。
         </div>
         <div v-if="chipWarning" class="chip warn-chip">{{ chipWarning }}</div>
       </div>

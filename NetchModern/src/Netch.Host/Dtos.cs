@@ -148,7 +148,8 @@ internal static class Mapping
 
         var available = new List<string>();
         if (g.ProxyProcesses.Count > 0 && processModeAvailable) available.Add("process");
-        if (g.ProxyIps.Count > 0) available.Add("tun");
+        // TUN (sing-box) routes by process, sniffed domain and IP, so process rules make it usable too.
+        if (g.ProxyIps.Count > 0 || g.ProxyProcesses.Count > 0) available.Add("tun");
         if (g.ProxyDomains.Count > 0) available.Add("proxy");
 
         var compat = g.Compat is null

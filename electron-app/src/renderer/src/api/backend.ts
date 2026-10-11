@@ -288,7 +288,10 @@ const MOCK_PROCESS_MODE_AVAILABLE = false
 export function availableModesFor(game: Game, processModeAvailable = true): CaptureModeKind[] {
   const modes: CaptureModeKind[] = []
   if (processModeAvailable && game.proxyProcesses && game.proxyProcesses.length > 0) modes.push('process')
-  if (game.proxyIps && game.proxyIps.length > 0) modes.push('tun')
+  // TUN (sing-box) routes by process, sniffed domain and IP, so process rules make it usable too.
+  if ((game.proxyIps && game.proxyIps.length > 0) || (game.proxyProcesses && game.proxyProcesses.length > 0)) {
+    modes.push('tun')
+  }
   if (game.proxyDomains && game.proxyDomains.length > 0) modes.push('proxy')
   return modes
 }
@@ -296,7 +299,7 @@ export function availableModesFor(game: Game, processModeAvailable = true): Capt
 /** Chinese error for a mode that the game's rules cannot support; null when the mode is usable. */
 export function modeUnavailableError(mode: CaptureModeKind): string {
   if (mode === 'process') return '该游戏没有进程规则，无法使用进程模式'
-  if (mode === 'tun') return '该游戏没有 IP 规则，无法使用 TUN 模式'
+  if (mode === 'tun') return '该游戏没有进程或 IP 规则，无法使用 TUN 模式'
   return '该游戏没有域名规则，无法使用系统代理模式'
 }
 

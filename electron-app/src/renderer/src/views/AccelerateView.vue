@@ -354,7 +354,7 @@ const MODE_LABELS: Record<CaptureMode, string> = {
 
 const MODE_UNAVAILABLE_HINT: Record<CaptureModeKind, string> = {
   process: '该游戏没有进程规则',
-  tun: '该游戏没有 IP 规则',
+  tun: '该游戏没有进程或 IP 规则',
   proxy: '该游戏没有域名规则'
 }
 
@@ -439,14 +439,9 @@ const processModeNotice = computed<string | null>(() => {
     override === 'process' ||
     (override == null && globalDefaultMode.value === 'process')
   if (effectiveProcess) {
-    return `${PROCESS_MODE_UNAVAILABLE}，当前设置为进程模式，加速会失败。请改用「自动」或其它模式。`
+    return `${PROCESS_MODE_UNAVAILABLE}，当前设置为进程模式，加速会失败。请改用「自动」或「TUN 模式」（同样按进程加速）。`
   }
-  const proc = selectedGame.value.proxyProcesses?.length ?? 0
-  const ips = selectedGame.value.proxyIps?.length ?? 0
-  const domains = selectedGame.value.proxyDomains?.length ?? 0
-  if (proc > 0 && ips === 0 && domains === 0) {
-    return `${PROCESS_MODE_UNAVAILABLE}，该游戏只有进程规则，暂时无法加速。请在游戏库中编辑该游戏，补充 IP 或域名规则。`
-  }
+  // Process-only games are fine: 自动 / TUN route them by process through sing-box TUN.
   return null
 })
 

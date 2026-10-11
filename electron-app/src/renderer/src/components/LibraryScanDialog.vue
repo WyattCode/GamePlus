@@ -2,7 +2,6 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
-import { backend, PROCESS_MODE_UNAVAILABLE } from '@/api/backend'
 import { useLibraryStore } from '@/stores/library'
 import { useAccelStore } from '@/stores/accel'
 import { useToastStore, errorMessage } from '@/stores/toast'
@@ -17,7 +16,6 @@ const toast = useToastStore()
 const router = useRouter()
 
 const added = ref<Set<string>>(new Set())
-const processModeAvailable = ref(true)
 
 const matched = computed<DetectedGame[]>(
   () => library.scanResult?.games.filter((g) => g.gameId != null) ?? []
@@ -75,20 +73,7 @@ function onKey(e: KeyboardEvent): void {
   if (e.key === 'Escape' && props.open) emit('close')
 }
 
-// Best-effort load of process-mode availability; must not block listener registration.
-async function loadProcessModeAvailable(): Promise<void> {
-  try {
-    const s = await backend.getSettings()
-    processModeAvailable.value = s.advanced.processModeAvailable !== false
-  } catch {
-    // backend not reachable (e.g. browser preview)
-  }
-}
-
-onMounted(() => {
-  window.addEventListener('keydown', onKey)
-  void loadProcessModeAvailable()
-})
+onMounted(() => window.addEventListener('keydown', onKey))
 onUnmounted(() => window.removeEventListener('keydown', onKey))
 
 watch(
@@ -164,11 +149,8 @@ watch(
                     </button>
                   </div>
                 </div>
-                <div v-if="!processModeAvailable" class="notice muted small">
-                  {{ PROCESS_MODE_UNAVAILABLE }}：添加后的游戏只有进程规则，暂时无法加速。请在游戏库中编辑该游戏补充域名或 IP 规则。
-                </div>
-                <div v-else class="notice muted small">
-                  添加后将按进程加速（需要管理员权限的进程模式）；如需更准确的规则，可在游戏库中编辑该游戏补充域名/IP。
+                <div class="notice muted small">
+                  添加后将按进程加速（自动使用 TUN 模式，需要管理员权限）；如需更准确的规则，可在游戏库中编辑该游戏补充域名/IP。
                 </div>
               </div>
             </template>

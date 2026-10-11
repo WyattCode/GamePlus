@@ -6,26 +6,17 @@
 
 ## 1. 原生组件（必须）
 
-- [ ] 将以下二进制放入 `NetchModern/native/`（必需）：`xray.exe`、`sing-box.exe`、`geoip.dat`、`geosite.dat`、`wintun.dll`、`tun2socks.bin`、`RouteHelper.bin`。
-- [ ] 可选（进程模式）：`Redirector.bin`、`nfapi.dll`、`nfdriver.sys` —— 仅在决定保留进程模式时提供（见第 2 节 NetFilter SDK 决策）。
-- [ ] 填写 `xray.exe` 的**确切版本 + 下载 URL**：[native/README.md:19](../NetchModern/native/README.md#L19)。
-- [ ] 填写 `sing-box.exe` 的**确切版本 + 下载 URL**：[native/README.md:20](../NetchModern/native/README.md#L20)。
-- [ ] 确认 `geoip.dat` / `geosite.dat` 的**数据集来源 + 许可证 + 版本 + URL**：[native/README.md:21](../NetchModern/native/README.md#L21)、[native/README.md:22](../NetchModern/native/README.md#L22)。
-- [ ] 填写 `wintun.dll` 的**确切版本 + 下载 URL**：[native/README.md:23](../NetchModern/native/README.md#L23)。
-- [ ] 确认 `tun2socks.bin` 的**上游仓库 + 许可证 + 版本 + URL**：[native/README.md:24](../NetchModern/native/README.md#L24)。
-- [ ] 确认 `RouteHelper.bin` 的**上游仓库 + 许可证 + 版本 + URL**：[native/README.md:25](../NetchModern/native/README.md#L25)。
-- [ ] （进程模式）确认 `Redirector.bin` 的**上游仓库 + 许可证 + 版本 + URL**：[native/README.md:34](../NetchModern/native/README.md#L34)。
-- [ ] （进程模式）确认 `nfapi.dll` 的**许可证 + 版本 + URL**：[native/README.md:35](../NetchModern/native/README.md#L35)。
-- [ ] （进程模式）确认 `nfdriver.sys` 的**许可证 + 版本 + URL**：[native/README.md:36](../NetchModern/native/README.md#L36)。
+- [x] 必需组件已固定在 [`NetchModern/native/native-manifest.json`](../NetchModern/native/native-manifest.json)（官方 release URL + 版本 + sha256），由 [`NetchModern/fetch-native.ps1`](../NetchModern/fetch-native.ps1) 下载、校验并放入 `NetchModern/native/`：Xray-core v25.12.8、sing-box v1.14.3、Loyalsoldier/v2ray-rules-dat 202610102207（geoip.dat / geosite.dat）、WinTUN 0.14.1、Netch 1.9.7（tun2socks.bin / RouteHelper.bin）。详见 [native/README.md](../NetchModern/native/README.md)。
+- [ ] 确认上述版本选择（尤其：Xray 固定在 v25.12.8，因为 v26.x 移除了 `allowInsecure`；如需升级到 v26.x，需先把代码迁移到 `pinnedPeerCertSha256`）。
+- [ ] （进程模式，可选）`Redirector.bin`、`nfapi.dll`、`nfdriver.sys` **未下载、未打包** —— 取决于第 2 节 NetFilter SDK 决策：[native/README.md:45](../NetchModern/native/README.md#L45)。
 
 ## 2. 许可证与第三方声明（发布前必须）
 
-- [ ] 记录 `xray.exe`（Xray-core）**版本/tag 与确切 release 资源链接**：[THIRD_PARTY_NOTICES.md:29](../THIRD_PARTY_NOTICES.md#L29)、[THIRD_PARTY_NOTICES.md:83](../THIRD_PARTY_NOTICES.md#L83)。
-- [ ] 记录 `sing-box.exe` **版本/tag**，并确认其**附加许可条款 / 命名条件**已满足：[THIRD_PARTY_NOTICES.md:30](../THIRD_PARTY_NOTICES.md#L30)、[THIRD_PARTY_NOTICES.md:80](../THIRD_PARTY_NOTICES.md#L80)。
-- [ ] 记录 `wintun.dll`（WinTUN）**版本**：[THIRD_PARTY_NOTICES.md:31](../THIRD_PARTY_NOTICES.md#L31)、[THIRD_PARTY_NOTICES.md:86](../THIRD_PARTY_NOTICES.md#L86)。
-- [ ] 记录 `geoip.dat` / `geosite.dat` 的**实际数据集来源、版本/日期与许可证**（如 v2fly/geoip — CC-BY-SA-4.0；v2fly/domain-list-community — MIT；Loyalsoldier/v2ray-rules-dat — GPL-3.0），并加入所需署名：[THIRD_PARTY_NOTICES.md:36](../THIRD_PARTY_NOTICES.md#L36)、[THIRD_PARTY_NOTICES.md:37](../THIRD_PARTY_NOTICES.md#L37)、[THIRD_PARTY_NOTICES.md:77](../THIRD_PARTY_NOTICES.md#L77)。
-- [ ] 记录 Netch 原生辅助程序（`tun2socks.bin`、`RouteHelper.bin`、`Redirector.bin`）的**确切上游仓库、commit/tag 与构建来源**：[THIRD_PARTY_NOTICES.md:32](../THIRD_PARTY_NOTICES.md#L32)、[THIRD_PARTY_NOTICES.md:33](../THIRD_PARTY_NOTICES.md#L33)、[THIRD_PARTY_NOTICES.md:34](../THIRD_PARTY_NOTICES.md#L34)、[THIRD_PARTY_NOTICES.md:74](../THIRD_PARTY_NOTICES.md#L74)。
-- [ ] **决定 NetFilter SDK（`nfapi.dll` / `nfdriver.sys`）**：持有有效的商业再分发许可证，或从安装包中移除 `nfdriver.sys` / 进程模式：[THIRD_PARTY_NOTICES.md:70](../THIRD_PARTY_NOTICES.md#L70)。
+- [x] Xray-core、sing-box、WinTUN、geo 数据集、Netch 辅助程序的版本/来源/许可证已记录：[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
+- [ ] **决定 NetFilter SDK（`nfapi.dll` / `nfdriver.sys`）**：持有有效的商业再分发许可证，或继续不打包进程模式：[THIRD_PARTY_NOTICES.md:67](../THIRD_PARTY_NOTICES.md#L67)。
+- [ ] 确认 sing-box 的**附加许可条款 / 命名条件**已满足：[THIRD_PARTY_NOTICES.md:74](../THIRD_PARTY_NOTICES.md#L74)。
+- [ ] 确认 GPL 组件的源码提供方式（链接上游 tag 是否足够，或自行镜像源码）：[THIRD_PARTY_NOTICES.md:77](../THIRD_PARTY_NOTICES.md#L77)。
+- [ ] 确认 geoip.dat 中 MaxMind GeoLite2 数据的署名满足 GeoLite2 EULA：[THIRD_PARTY_NOTICES.md:38](../THIRD_PARTY_NOTICES.md#L38)。
 
 ## 3. 发布渠道
 
@@ -36,7 +27,9 @@
 ## 4. CI
 
 - [ ] （可选）设置仓库变量 `ALLOW_INCOMPLETE_RELEASE` —— 仅用于测试 tag。
-- [ ] **决定原生组件的来源**（仓库中不含 natives，tag 构建会失败）：三选一 —— 通过 Git LFS 提交、在 CI 中从固定 URL 下载并校验 sha256、或使用私有 artifact。
+- [x] 原生组件来源已决定：CI 从官方 release URL 下载固定版本并校验 sha256（`Fetch native components` 步骤）。
+- [x] 为节省 Actions 存储配额：安装包 artifact 仅在 push（分支与 v* tag）时上传，保留 5 天；PR 运行不上传。
+- [ ] Actions 存储配额已满时上传会失败 —— 在仓库/账户 Settings → Actions → 删除旧 artifact，或等待配额重新计算。
 
 ## 5. Windows 实机验证
 

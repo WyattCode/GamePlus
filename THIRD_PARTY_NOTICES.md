@@ -21,20 +21,22 @@ open an issue.
 
 ## Bundled native components
 
-These binaries are staged by `NetchModern/build.ps1` from `NetchModern/native/` into
-`resources/backend/bin` and are redistributed inside the installer.
+These binaries are downloaded from the official release URLs pinned (with SHA-256) in
+[`NetchModern/native/native-manifest.json`](NetchModern/native/native-manifest.json) by
+`NetchModern/fetch-native.ps1`, staged by `NetchModern/build.ps1` into `resources/backend/bin` and
+redistributed inside the installer. The manifest is the source of truth for versions and hashes.
 
 | Component | Used for | Upstream | Licence (SPDX) | Bundled | Notes / obligations |
 | --- | --- | --- | --- | --- | --- |
-| `xray.exe` (Xray-core) | Proxy core: ss / trojan / vmess / vless / socks | https://github.com/XTLS/Xray-core | `MPL-2.0` | Yes | MPL-2.0 is file-level copyleft. We redistribute an **unmodified** binary. Obligation: make the source of the exact build available — link to the exact upstream release tag used. `TODO(owner): record the Xray-core version/tag and the download URL of the exact release asset shipped.` |
-| `sing-box.exe` (sing-box) | Proxy core: hysteria2 | https://github.com/SagerNet/sing-box | `GPL-3.0-or-later` | Yes | GPL-3.0-or-later. Obligation: provide corresponding source (upstream link) and preserve notices. sing-box has **additional terms / naming conditions** in its licence — review them before redistribution. `TODO(owner): record the sing-box version/tag shipped and confirm the additional licence terms are satisfied.` |
-| `wintun.dll` (WinTUN) | TUN adapter driver DLL | https://www.wintun.net/ (source: https://git.zx2c4.com/wintun) | Prebuilt-binaries licence (redistribution of the **unmodified** DLL permitted); source is `GPL-2.0` / `MIT` | Yes | We redistribute the **unmodified** prebuilt DLL, which the WinTUN prebuilt-binaries licence permits. Do not modify the DLL. `TODO(owner): record the WinTUN version shipped.` |
-| `tun2socks.bin` | TUN-mode traffic capture helper | `TODO(owner): verify exact upstream repo and version.` | `GPL-3.0` (per Netch project) | Yes | Native helper from the Netch project. Obligation: provide corresponding source. `TODO(owner): confirm the exact upstream repository, commit/tag and build provenance of this binary.` |
-| `RouteHelper.bin` | Route-table helper for TUN mode | `TODO(owner): verify exact upstream repo and version.` | `GPL-3.0` (per Netch project) | Yes | Native helper from the Netch project. Obligation: provide corresponding source. `TODO(owner): confirm the exact upstream repository, commit/tag and build provenance of this binary.` |
-| `Redirector.bin` | Process-mode traffic capture helper (netfilter2) | `TODO(owner): verify exact upstream repo and version.` | `GPL-3.0` (per Netch project) | Yes | Native helper from the Netch project. Obligation: provide corresponding source. `TODO(owner): confirm the exact upstream repository, commit/tag and build provenance of this binary.` |
-| `nfdriver.sys` (NetFilter SDK 2 driver) | Kernel driver used by Process mode (netfilter2) | https://netfiltersdk.com/ | **Commercial** (proprietary) | Yes | **Redistribution requires a valid commercial licence from NetFilterSDK.com.** See the Unresolved section — this must be verified by the owner before distribution. |
-| `geoip.dat` | IP-based routing data | `TODO(owner): record the actual dataset source.` | `TODO(owner): depends on source — see Unresolved.` | Yes | `TODO(owner): record which dataset is actually shipped (e.g. v2fly/geoip — CC-BY-SA-4.0; Loyalsoldier/v2ray-rules-dat — GPL-3.0) and its version/date.` |
-| `geosite.dat` | Domain-based routing data | `TODO(owner): record the actual dataset source.` | `TODO(owner): depends on source — see Unresolved.` | Yes | `TODO(owner): record which dataset is actually shipped (e.g. v2fly/domain-list-community — MIT; Loyalsoldier/v2ray-rules-dat — GPL-3.0) and its version/date.` |
+| `xray.exe` (Xray-core **v25.12.8**) | Proxy core: ss / trojan / vmess / vless / socks | https://github.com/XTLS/Xray-core — asset https://github.com/XTLS/Xray-core/releases/download/v25.12.8/Xray-windows-64.zip | `MPL-2.0` | Yes | Unmodified official binary. Source of the exact build: https://github.com/XTLS/Xray-core/tree/v25.12.8. |
+| `sing-box.exe` (sing-box **v1.14.3**) | Proxy core: hysteria2, Shadowsocks plugins | https://github.com/SagerNet/sing-box — asset https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-windows-amd64.zip | `GPL-3.0-or-later` | Yes | Unmodified official binary; source https://github.com/SagerNet/sing-box/tree/v1.14.3. sing-box has **additional terms / naming conditions** in its licence — `TODO(owner): confirm they are satisfied.` |
+| `wintun.dll` (WinTUN **0.14.1**, amd64) | TUN adapter driver DLL | https://www.wintun.net/ — asset https://www.wintun.net/builds/wintun-0.14.1.zip (source: https://git.zx2c4.com/wintun) | Prebuilt-binaries licence (redistribution of the **unmodified** DLL permitted); source is `GPL-2.0` / `MIT` | Yes | Unmodified signed DLL (`wintun/bin/amd64/wintun.dll`). Do not modify the DLL. |
+| `tun2socks.bin` (Netch **1.9.7**) | TUN-mode traffic capture helper | https://github.com/netchx/netch — official release asset https://github.com/netchx/netch/releases/download/1.9.7/Netch.7z (`Netch/bin/tun2socks.bin`) | `GPL-3.0` | Yes | Unmodified binary from the official Netch 1.9.7 release. Corresponding source: https://github.com/netchx/netch/tree/1.9.7 (Netch's own cgo build; based on xjasonlyu/tun2socks per Netch's bin/README). |
+| `RouteHelper.bin` (Netch **1.9.7**) | Route-table helper for TUN mode | https://github.com/netchx/netch — same `Netch.7z` asset (`Netch/bin/RouteHelper.bin`) | `GPL-3.0` | Yes | Unmodified binary from the official Netch 1.9.7 release. Corresponding source: https://github.com/netchx/netch/tree/1.9.7. |
+| `Redirector.bin` | Process-mode traffic capture helper (netfilter2) | https://github.com/netchx/netch | `GPL-3.0` | **No** (not fetched) | Only useful together with the NetFilter SDK (`nfapi.dll`), which is not shipped. Process mode stays optional / missing — see Unresolved. |
+| `nfapi.dll` / `nfdriver.sys` (NetFilter SDK 2) | Process mode (netfilter2) | https://netfiltersdk.com/ | **Commercial** (proprietary) | **No** | Not downloaded and not shipped. **Redistribution requires a valid commercial licence from NetFilterSDK.com.** See Unresolved. |
+| `geoip.dat` (Loyalsoldier/v2ray-rules-dat **202610102207**) | IP-based routing data | https://github.com/Loyalsoldier/v2ray-rules-dat — asset https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202610102207/geoip.dat | `GPL-3.0`; the GeoIP data is generated from MaxMind GeoLite2 Country (GeoLite2 EULA, attribution: "This product includes GeoLite2 data created by MaxMind, available from https://www.maxmind.com") | Yes | Unmodified release file. `TODO(owner): confirm the GeoLite2 attribution above satisfies the GeoLite2 EULA for redistribution.` |
+| `geosite.dat` (Loyalsoldier/v2ray-rules-dat **202610102207**) | Domain-based routing data | https://github.com/Loyalsoldier/v2ray-rules-dat — asset https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202610102207/geosite.dat | `GPL-3.0` (built on v2fly/domain-list-community, `MIT`) | Yes | Unmodified release file. |
 
 ## Managed / runtime dependencies
 
@@ -60,30 +62,20 @@ These binaries are staged by `NetchModern/build.ps1` from `NetchModern/native/` 
 ## ⚠ Unresolved / owner must verify
 
 The following items are **not yet resolved** and must be confirmed by the project owner before
-distribution. Do not ship a release until each is either resolved or removed from the bundle.
+distribution.
 
-1. **NetFilter SDK 2 commercial licence (`nfdriver.sys`, Redirector / nfapi).**
+1. **NetFilter SDK 2 commercial licence (`nfapi.dll`, `nfdriver.sys`, hence `Redirector.bin`).**
    Process mode depends on the NetFilter SDK 2 kernel driver, which is **commercial** software.
-   Redistribution of `nfdriver.sys` (and the associated netfilter API) requires a valid licence from
-   NetFilterSDK.com. Netch's own builds may have been signed under their licence — this does **not**
-   automatically grant Game+ the right to redistribute.
-   `TODO(owner): confirm a valid NetFilter SDK redistribution licence is held, or remove nfdriver.sys / Process mode from the installer.`
+   Redistribution requires a valid licence from NetFilterSDK.com. Netch's own builds may have been
+   signed under their licence — this does **not** grant Game+ the right to redistribute. These files
+   are therefore **not** in the manifest and are not fetched; process mode stays optional/missing.
+   `TODO(owner): decide — obtain a NetFilter SDK redistribution licence, or keep process mode out of the installer.`
 
-2. **Exact upstream + version of the Netch native helpers.**
-   `tun2socks.bin`, `RouteHelper.bin`, `Redirector.bin` are native helpers from the Netch project.
-   `TODO(owner): record the exact upstream repository, commit/tag and build provenance for each binary.`
+2. **sing-box licence terms.**
+   `TODO(owner): confirm sing-box's additional licence terms / naming conditions are satisfied.`
 
-3. **Which `geoip.dat` / `geosite.dat` datasets are shipped.**
-   `TODO(owner): record the actual dataset source and version (v2fly/geoip — CC-BY-SA-4.0; v2fly/domain-list-community — MIT; Loyalsoldier/v2ray-rules-dat — GPL-3.0) and include the required attribution.`
-
-4. **sing-box version and licence terms.**
-   `TODO(owner): record the sing-box version shipped and confirm its additional licence terms / naming conditions are satisfied.`
-
-5. **Xray-core version.**
-   `TODO(owner): record the Xray-core version/tag shipped and link to the exact release asset source.`
-
-6. **WinTUN version.**
-   `TODO(owner): record the WinTUN version shipped.`
+3. **GPL source offer for bundled GPL binaries** (sing-box, Netch helpers, geo datasets): the exact
+   upstream tags are linked above. `TODO(owner): confirm linking the upstream tags is sufficient for your distribution, or mirror the sources.`
 
 ---
 

@@ -36,3 +36,13 @@
 ## 5. Windows 实机验证
 
 - [ ] 合并前在 Windows 实机运行 [WINDOWS_TEST_CHECKLIST.md](WINDOWS_TEST_CHECKLIST.md) 并全部通过。
+
+## 6. TUN 按进程加速
+
+> TUN 模式现在由第二个 sing-box.exe（v1.14.3）实例实现（`GamePlus` WinTUN 适配器，按进程/嗅探域名/IP-CIDR 分流）。注意：**没有 IP 规则的游戏（仅进程规则，如库扫描游戏）现在也可以通过 TUN 加速**。
+
+- [ ] 在 Windows 实机完成 [WINDOWS_TEST_CHECKLIST.md](WINDOWS_TEST_CHECKLIST.md) 的「TUN 按进程加速（sing-box）」章节并记录结果（含 UDP 为主游戏、启动器/子进程、反作弊、停止/强杀后的清理）。
+- [ ] 决定是否从安装包与 `fetch-native.ps1` 中移除 tun2socks.bin / RouteHelper.bin / wintun.dll（Netch 1.9.7 遗留，TUN 模式已不再使用），并同步更新 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
+- [ ] 决定是否需要捕获 IPv6（当前 TUN 无 IPv6 地址，IPv6 流量直连）。
+- [ ] 仅当测试中出现 DNS 污染 / geo DNS 问题时，再决定游戏域名是否需要远程 DNS（当前 TUN `dns_mode` 为 `disabled`，游戏 DNS 走系统解析器）。
+- [ ] 根据实机测试结果补充规则中缺失的子进程/启动器进程（反作弊、崩溃报告器、launcher → game 交接等）。

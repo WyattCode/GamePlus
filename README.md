@@ -11,6 +11,39 @@ server you configure, using the bundled **Xray** / **sing-box** cores, with TUN 
 
 ![Game+ dashboard](NetchModern/docs/screenshot.png)
 
+## How acceleration works (TUN, per process)
+
+TUN mode is implemented by a second **sing-box** instance (v1.14.3) that owns a WinTUN interface named
+`GamePlus` (172.19.0.1/30, gvisor stack, `auto_route`). It routes **by process** (the game's process
+rules plus any extra apps from 分应用分流; names match with or without `.exe`, case-insensitive, by
+executable path), **by sniffed domain** (TLS/HTTP/QUIC on ports 80/443 only) and **by IP/CIDR**.
+Matched traffic — TCP and UDP — is forwarded to the local SOCKS5 inbound of the node core
+(Xray / sing-box); everything else goes direct. Administrator rights are required.
+
+- No NetFilter is needed; process mode stays unavailable/hidden. 自动 picks: process mode (only if
+  NetFilter files are present) → TUN (the game has process or IP rules) → system proxy (domain-only
+  games). Library-scan games (process rules only) are acceleratable via TUN.
+- DNS: the TUN's `dns_mode` is `disabled`. Windows resolves DNS in the DNS Client service (svchost),
+  so lookups cannot be attributed to a game process; hijacking or fakeip would push every app's DNS
+  through sing-box and leave fake IPs in the Windows DNS cache after stopping. Game DNS lookups
+  therefore behave exactly as without acceleration (system resolver, not proxied). Proxied
+  connections use the IP the system resolved; domain rules still match via SNI/Host sniffing.
+- Loop prevention: `xray.exe`, `sing-box.exe` and `gameplus-host.exe` are always direct, and the node
+  server's IPv4 is excluded from the TUN routes; `auto_detect_interface` is on.
+- Steam download split: download (CDN) domains are forced direct before the process rules, unless
+  「游戏下载走代理」 is on. LAN share is unchanged (consoles talk to the core's LAN inbound; the
+  core's own traffic is excluded from the TUN).
+- Not captured: IPv6 (the TUN has no IPv6 address, so IPv6 traffic goes direct) and ICMP/ping.
+- The legacy tun2socks path (`tun2socks.bin`, `RouteHelper.bin`, `wintun.dll` from Netch 1.9.7) is
+  no longer used by TUN mode, but is still downloaded and packaged.
+- Known risks that only a real Windows test can confirm: process lookup for UDP-heavy games;
+  child/launcher processes missing from the rules (anti-cheat, crash reporter, launcher → game
+  handoff); games that resolve via poisoned or geo DNS; anti-cheat reacting to a TUN adapter; the
+  adapter and routes disappearing after Stop and after a crash/kill; coexistence with other VPN/TUN
+  software; the performance overhead of routing ALL traffic through the gvisor stack (non-game
+  traffic goes direct but is still processed in user space). See
+  [`docs/WINDOWS_TEST_CHECKLIST.md`](docs/WINDOWS_TEST_CHECKLIST.md).
+
 ## Repository layout
 
 ```

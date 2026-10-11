@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
-import { backend } from '@/api/backend'
+import { backend, PROCESS_MODE_UNAVAILABLE } from '@/api/backend'
 import { errorMessage, useToastStore } from '@/stores/toast'
 import { validateDns, validateLocalPort, validateRegionPenalty } from '@/utils/advanced'
 import type { AdvancedSettings, CaptureMode, EngineSettings } from '@shared/types'
@@ -19,6 +19,7 @@ const socksPort = ref(0)
 const measureEffect = ref(false)
 const regionPenalty = ref(60)
 const defaultCaptureMode = ref<CaptureMode>('auto')
+const processModeAvailable = ref(true)
 const autoSwitchEnabled = ref(false)
 const autoSwitchLossPct = ref(5)
 const autoSwitchLatencyMs = ref(200)
@@ -46,6 +47,7 @@ function apply(s: EngineSettings): void {
   measureEffect.value = s.advanced.measureEffect
   regionPenalty.value = s.advanced.regionPenaltyMs
   defaultCaptureMode.value = s.advanced.defaultCaptureMode
+  processModeAvailable.value = s.advanced.processModeAvailable !== false
   autoSwitchEnabled.value = s.advanced.autoSwitchEnabled
   autoSwitchLossPct.value = s.advanced.autoSwitchLossPct
   autoSwitchLatencyMs.value = s.advanced.autoSwitchLatencyMs
@@ -259,10 +261,22 @@ async function resetDefaults(): Promise<void> {
             @change="onCaptureModeChange"
           >
             <option value="auto">自动（推荐）</option>
-            <option value="process">进程模式</option>
+            <option
+              v-if="processModeAvailable || defaultCaptureMode === 'process'"
+              value="process"
+              :disabled="!processModeAvailable"
+            >
+              {{ processModeAvailable ? '进程模式' : '进程模式（暂不可用）' }}
+            </option>
             <option value="tun">TUN 模式</option>
             <option value="proxy">系统代理</option>
           </select>
+          <div v-if="!processModeAvailable && defaultCaptureMode === 'process'" class="small danger">
+            {{ PROCESS_MODE_UNAVAILABLE }}，请改选其它模式，否则加速会失败。
+          </div>
+          <div v-else-if="!processModeAvailable" class="muted small">
+            {{ PROCESS_MODE_UNAVAILABLE }}，「自动」将依次尝试 TUN → 系统代理。
+          </div>
         </div>
       </div>
     </div>

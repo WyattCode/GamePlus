@@ -275,10 +275,19 @@ function fromBase64Url(s: string): string {
   return decodeURIComponent(escape(atob(b64)))
 }
 
+/** Shown wherever process mode would be offered but the NetFilter components are not shipped. */
+export const PROCESS_MODE_UNAVAILABLE = '进程模式暂不可用：未包含 NetFilter 组件'
+
+/**
+ * The mock mirrors the shipped build: NetFilter (process mode) is not included, so the backend reports
+ * processModeAvailable = false and never lists 'process' in availableModes.
+ */
+const MOCK_PROCESS_MODE_AVAILABLE = false
+
 /** Capture methods available for a game's rules (mirrors the backend's GameDto.AvailableModes). */
-export function availableModesFor(game: Game): CaptureModeKind[] {
+export function availableModesFor(game: Game, processModeAvailable = true): CaptureModeKind[] {
   const modes: CaptureModeKind[] = []
-  if (game.proxyProcesses && game.proxyProcesses.length > 0) modes.push('process')
+  if (processModeAvailable && game.proxyProcesses && game.proxyProcesses.length > 0) modes.push('process')
   if (game.proxyIps && game.proxyIps.length > 0) modes.push('tun')
   if (game.proxyDomains && game.proxyDomains.length > 0) modes.push('proxy')
   return modes
@@ -372,7 +381,7 @@ class MockBackend implements Backend {
       captureMode: this.gameModes.get(g.id) ?? null,
       downloadViaProxy: this.downloadProxy.get(g.id) ?? false,
       launchTarget: this.launchTargets.get(g.id) ?? null,
-      availableModes: availableModesFor(g)
+      availableModes: availableModesFor(g, MOCK_PROCESS_MODE_AVAILABLE)
     }))
   }
 
@@ -603,6 +612,7 @@ class MockBackend implements Backend {
     advanced: {
       ...ADVANCED_DEFAULTS,
       defaultCaptureMode: 'auto' as CaptureMode,
+      processModeAvailable: MOCK_PROCESS_MODE_AVAILABLE,
       autoSwitchEnabled: false,
       autoSwitchLossPct: 5,
       autoSwitchLatencyMs: 200,
@@ -951,7 +961,8 @@ class MockBackend implements Backend {
     } else if (mode === 'auto') {
       this.gameModes.set(id, 'auto')
     } else {
-      const available = availableModesFor(g)
+      if (mode === 'process' && !MOCK_PROCESS_MODE_AVAILABLE) throw new Error(PROCESS_MODE_UNAVAILABLE)
+      const available = availableModesFor(g, MOCK_PROCESS_MODE_AVAILABLE)
       if (!available.includes(mode)) throw new Error(modeUnavailableError(mode))
       this.gameModes.set(id, mode)
     }
@@ -1124,6 +1135,7 @@ class MockBackend implements Backend {
         if (m !== 'auto' && m !== 'process' && m !== 'tun' && m !== 'proxy') {
           throw new Error('加速模式只能是 auto、process、tun 或 proxy')
         }
+        if (m === 'process' && !MOCK_PROCESS_MODE_AVAILABLE) throw new Error(PROCESS_MODE_UNAVAILABLE)
       }
       if (adv.autoSwitchLossPct !== undefined && (adv.autoSwitchLossPct < 1 || adv.autoSwitchLossPct > 50)) {
         throw new Error('自动切换丢包阈值必须在 1–50% 之间')
@@ -1157,6 +1169,7 @@ class MockBackend implements Backend {
       advanced: {
         ...ADVANCED_DEFAULTS,
         defaultCaptureMode: 'auto' as CaptureMode,
+        processModeAvailable: MOCK_PROCESS_MODE_AVAILABLE,
         autoSwitchEnabled: false,
         autoSwitchLossPct: 5,
         autoSwitchLatencyMs: 200,

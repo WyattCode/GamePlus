@@ -7,7 +7,7 @@ import EffectChart from '@/components/EffectChart.vue'
 import GameGlyph from '@/components/GameGlyph.vue'
 import LaunchTargetDialog from '@/components/LaunchTargetDialog.vue'
 import { gameColor } from '@/utils/gameIcon'
-import { backend } from '@/api/backend'
+import { PROCESS_MODE_UNAVAILABLE, backend } from '@/api/backend'
 import { adviseBeforeAccel, adviseDuringAccel, type EffectAdvice } from '@/utils/effectAdvice'
 import { createShortcut } from '@/utils/launchApi'
 import { useAccelStore } from '@/stores/accel'
@@ -358,6 +358,9 @@ const MODE_UNAVAILABLE_HINT: Record<CaptureModeKind, string> = {
   proxy: '该游戏没有域名规则'
 }
 
+// Whether process capture is usable (false when NetFilter components are not shipped).
+const processModeAvailable = ref(true)
+
 // Global default capture mode, read from settings (best-effort; falls back to "auto").
 const globalDefaultMode = ref<CaptureMode>('auto')
 
@@ -368,6 +371,7 @@ onMounted(async () => {
     if (m === 'auto' || m === 'process' || m === 'tun' || m === 'proxy') {
       globalDefaultMode.value = m
     }
+    processModeAvailable.value = s.advanced.processModeAvailable !== false
   } catch {
     // backend not reachable (e.g. browser preview)
   }
@@ -397,6 +401,19 @@ const modeOptions = computed<
   ]
   const kinds: CaptureMode[] = ['auto', 'process', 'tun', 'proxy']
   for (const k of kinds) {
+    // NetFilter not shipped: hide the process button entirely, unless the game's own override is
+    // 'process' — keep it visible (disabled) so the active state stays readable.
+    if (k === 'process' && !processModeAvailable.value) {
+      if (captureMode.value !== 'process') continue
+      opts.push({
+        value: k,
+        label: MODE_LABELS[k],
+        disabled: true,
+        title: PROCESS_MODE_UNAVAILABLE,
+        recommended: false
+      })
+      continue
+    }
     const isKind = k !== 'auto'
     const disabled = isKind && !avail.includes(k as CaptureModeKind)
     opts.push({
@@ -412,6 +429,26 @@ const modeOptions = computed<
 })
 
 const currentModeValue = computed<CaptureMode | 'default'>(() => captureMode.value ?? 'default')
+
+// Warning line under the 加速模式 row when process capture cannot work; null when fine.
+const processModeNotice = computed<string | null>(() => {
+  if (processModeAvailable.value) return null
+  if (!selectedGame.value) return null
+  const override = captureMode.value
+  const effectiveProcess =
+    override === 'process' ||
+    (override == null && globalDefaultMode.value === 'process')
+  if (effectiveProcess) {
+    return `${PROCESS_MODE_UNAVAILABLE}，当前设置为进程模式，加速会失败。请改用「自动」或其它模式。`
+  }
+  const proc = selectedGame.value.proxyProcesses?.length ?? 0
+  const ips = selectedGame.value.proxyIps?.length ?? 0
+  const domains = selectedGame.value.proxyDomains?.length ?? 0
+  if (proc > 0 && ips === 0 && domains === 0) {
+    return `${PROCESS_MODE_UNAVAILABLE}，该游戏只有进程规则，暂时无法加速。请在游戏库中编辑该游戏，补充 IP 或域名规则。`
+  }
+  return null
+})
 
 async function setCaptureMode(mode: CaptureMode | 'default'): Promise<void> {
   const g = selectedGame.value
@@ -528,6 +565,12 @@ watch(
             </button>
           </div>
           <span class="muted small server-hint">手动指定后失败不会自动降级</span>
+        </div>
+
+        <!-- Process mode unavailable (NetFilter not shipped) -->
+        <div v-if="processModeNotice" class="capture-hint warn">
+          <AppIcon name="warning" :size="14" />
+          {{ processModeNotice }}
         </div>
 
         <!-- Per-game compatibility note (anti-cheat / recommended mode hints) -->

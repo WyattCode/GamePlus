@@ -147,6 +147,11 @@ export interface AdvancedSettings {
   localSocksPort: number
   /** Global default acceleration mode; per-game overrides take precedence. */
   defaultCaptureMode: CaptureMode
+  /**
+   * Read-only capability reported by the backend: false when the NetFilter components (process mode)
+   * are not shipped. Ignored by settings.set. Missing = assume available (older backends).
+   */
+  processModeAvailable?: boolean
   /** Master switch for automatic node switching on sustained bad quality. */
   autoSwitchEnabled: boolean
   /** Loss percentage threshold (1–50); loss >= this counts as a bad sample. */

@@ -69,10 +69,16 @@ jobs:
         run: npx vitest run
 
       # ---------------------------------------------------------------- native cores
-      # The native proxy cores (xray.exe, sing-box.exe, geoip.dat, ...) are NOT committed to the
-      # repository (TODO(owner): decide on hosting). A normal push/PR therefore builds an incomplete
-      # dev/CI package: it must not fail the job, it only warns. A v* tag is a release and must be
-      # complete, unless the repository variable ALLOW_INCOMPLETE_RELEASE is set to 'true'.
+      # The native components (xray.exe, sing-box.exe, geoip.dat, ...) are NOT committed to the
+      # repository. They are downloaded from their official release URLs pinned in
+      # NetchModern/native/native-manifest.json; fetch-native.ps1 verifies the SHA-256 of every
+      # download and every extracted file and fails the job on any mismatch.
+      - name: Fetch native components (pinned, sha256-verified)
+        run: ./NetchModern/fetch-native.ps1 -CacheDir "$env:RUNNER_TEMP/native-cache"
+
+      # Safety net: should a required file still be missing, a normal push/PR builds an incomplete
+      # dev/CI package (warning only). A v* tag is a release and must be complete, unless the
+      # repository variable ALLOW_INCOMPLETE_RELEASE is set to 'true'.
       - name: Check native binaries
         id: native
         env:
@@ -189,7 +195,10 @@ jobs:
           $summary | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
       # ---------------------------------------------------------------- artifact
+      # Only push builds (branches and v* tags) upload, to save Actions storage quota. PR runs build
+      # and test the same commit but keep no artifact. The release job needs the tag-push artifact.
       - name: Upload installer artifact
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           # Tag builds are named after the tag, everything else after the commit SHA.
@@ -198,7 +207,7 @@ jobs:
             electron-app/dist/*.exe
             electron-app/dist/*.exe.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 5
 
   # -------------------------------------------------------------------- release
   # Draft release only: a human reviews the notes/checksums and publishes manually.

@@ -52,7 +52,8 @@ internal sealed class AutoSwitchHost
                 {
                     await TickAsync(DateTime.Now, ct);
                 }
-                catch (OperationCanceledException)
+                // 只有真正的关闭（ct 取消）才退出循环；切换期间被用户停止抛出的 OCE 不能杀死整个循环。
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
                     break;
                 }
@@ -131,6 +132,14 @@ internal sealed class AutoSwitchHost
             _policy.RecordSwitch(now);
             _log.Log(LogLevel.Info, $"线路质量下降（{reason}），自动切换：{snapshot.NodeName} → {to}");
             Raise(new AutoSwitchEvent("switched", snapshot.GameId, snapshot.NodeName, to, reason, null));
+        }
+        catch (AutoSwitchAbortedException)
+        {
+            // 用户在切换期间改变了加速状态：不计入切换预算，也不发事件。
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // 同上：切换被用户操作中断（并非进程关闭）。
         }
         catch (OperationCanceledException)
         {

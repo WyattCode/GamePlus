@@ -1,0 +1,7 @@
+This product includes GeoLite Data created by MaxMind, available from https://www.maxmind.com.
+
+The geoip.dat shipped with Game+ (Loyalsoldier/v2ray-rules-dat release 202610102207) is generated
+from MaxMind GeoLite2 Country data by https://github.com/Loyalsoldier/geoip. MaxMind's GeoLite data
+is licensed under the Creative Commons Attribution-ShareAlike 4.0 International License together with
+the GeoLite End User License Agreement: https://www.maxmind.com/en/geolite2/eula
+(see Loyalsoldier-geoip-LICENSE-CC-BY-SA-4.0.txt for the CC BY-SA 4.0 text).

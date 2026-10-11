@@ -20,6 +20,11 @@ extraResources:
     to: LICENSE
   - from: ../THIRD_PARTY_NOTICES.md
     to: THIRD_PARTY_NOTICES.md
+  # Verbatim licence texts of the bundled third-party components (see licenses/README.md).
+  - from: ../licenses
+    to: licenses
+    filter:
+      - '**/*'
 win:
   icon: build/icon.ico
   target:

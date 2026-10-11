@@ -47,10 +47,11 @@ Version notes:
 | File | Purpose | Upstream | Licence | Status |
 | --- | --- | --- | --- | --- |
 | `Redirector.bin` | Process-mode capture helper (netfilter2) | [netchx/netch](https://github.com/netchx/netch) | `GPL-3.0` | Not fetched: useless without `nfapi.dll` |
-| `nfapi.dll` | NetFilter SDK API | [netfiltersdk.com](https://netfiltersdk.com/) | **Commercial** | Not fetched — owner decision pending |
-| `nfdriver.sys` | NetFilter SDK kernel driver | [netfiltersdk.com](https://netfiltersdk.com/) | **Commercial** | Not fetched — owner decision pending |
+| `nfapi.dll` | NetFilter SDK API | [netfiltersdk.com](https://netfiltersdk.com/) | **Commercial** | Not fetched, not shipped (decision) |
+| `nfdriver.sys` | NetFilter SDK kernel driver | [netfiltersdk.com](https://netfiltersdk.com/) | **Commercial** | Not fetched, not shipped (decision) |
 
-The NetFilter SDK is proprietary; it is never downloaded from unofficial sources (Netch's release archive
+**Decision (owner): process mode is kept out of the installer until a NetFilter SDK redistribution
+licence is obtained.** The NetFilter SDK is proprietary; it is never downloaded from unofficial sources (Netch's release archive
 contains copies, but Netch's licence does not grant Game+ redistribution rights). Without these files
 Game+ falls back to TUN mode or the system proxy.
 
@@ -69,4 +70,5 @@ match their pinned hash (`-Force` re-places them). To bump a component, edit `na
 ## Licensing
 
 See [`../../THIRD_PARTY_NOTICES.md`](../../THIRD_PARTY_NOTICES.md) for the full attribution and the
-list of items the owner must still verify (NetFilter SDK licence, sing-box naming terms, GPL source offer).
+source code offer, the sing-box naming condition and the MaxMind GeoLite attribution. The verbatim
+licence texts shipped in the installer live in [`../../licenses/`](../../licenses/README.md).

@@ -8,15 +8,17 @@
 
 - [x] 必需组件已固定在 [`NetchModern/native/native-manifest.json`](../NetchModern/native/native-manifest.json)（官方 release URL + 版本 + sha256），由 [`NetchModern/fetch-native.ps1`](../NetchModern/fetch-native.ps1) 下载、校验并放入 `NetchModern/native/`：Xray-core v25.12.8、sing-box v1.14.3、Loyalsoldier/v2ray-rules-dat 202610102207（geoip.dat / geosite.dat）、WinTUN 0.14.1、Netch 1.9.7（tun2socks.bin / RouteHelper.bin）。详见 [native/README.md](../NetchModern/native/README.md)。
 - [ ] 确认上述版本选择（尤其：Xray 固定在 v25.12.8，因为 v26.x 移除了 `allowInsecure`；如需升级到 v26.x，需先把代码迁移到 `pinnedPeerCertSha256`）。
-- [ ] （进程模式，可选）`Redirector.bin`、`nfapi.dll`、`nfdriver.sys` **未下载、未打包** —— 取决于第 2 节 NetFilter SDK 决策：[native/README.md:45](../NetchModern/native/README.md#L45)。
+- [x] **决定：进程模式不进入安装包**（`Redirector.bin`、`nfapi.dll`、`nfdriver.sys` 不下载、不打包、不再分发），直到取得 NetFilter SDK 再分发许可证：[native/README.md](../NetchModern/native/README.md)、[README.md](../README.md)。
 
 ## 2. 许可证与第三方声明（发布前必须）
 
 - [x] Xray-core、sing-box、WinTUN、geo 数据集、Netch 辅助程序的版本/来源/许可证已记录：[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
-- [ ] **决定 NetFilter SDK（`nfapi.dll` / `nfdriver.sys`）**：持有有效的商业再分发许可证，或继续不打包进程模式：[THIRD_PARTY_NOTICES.md:67](../THIRD_PARTY_NOTICES.md#L67)。
-- [ ] 确认 sing-box 的**附加许可条款 / 命名条件**已满足：[THIRD_PARTY_NOTICES.md:74](../THIRD_PARTY_NOTICES.md#L74)。
-- [ ] 确认 GPL 组件的源码提供方式（链接上游 tag 是否足够，或自行镜像源码）：[THIRD_PARTY_NOTICES.md:77](../THIRD_PARTY_NOTICES.md#L77)。
-- [ ] 确认 geoip.dat 中 MaxMind GeoLite2 数据的署名满足 GeoLite2 EULA：[THIRD_PARTY_NOTICES.md:38](../THIRD_PARTY_NOTICES.md#L38)。
+- [x] **NetFilter SDK**：决定不打包进程模式，直到取得商业再分发许可证（见上文第 1 节与 THIRD_PARTY_NOTICES.md「NetFilter SDK / process mode — not shipped」）。
+- [x] **sing-box 命名条件**：已引用 v1.14.3 LICENSE 原文；产品名/安装包/UI 不使用 sing-box 名称或品牌，「关于」页声明无关联（THIRD_PARTY_NOTICES.md「sing-box naming condition」）。
+- [x] **GPL 源码提供**：安装包内附 `resources/licenses/`（各组件许可证原文）；THIRD_PARTY_NOTICES.md 列出各组件固定 tag 的源码地址并附书面源码提供承诺（written offer）。
+- [x] **MaxMind GeoLite 署名**：已按 GeoLite EULA 第 3 节加入署名（THIRD_PARTY_NOTICES.md、设置 → 关于、`licenses/MaxMind-GeoLite-ATTRIBUTION.txt`）。
+- [ ] **首次公开发布前**：书面承诺的联系渠道指向 `WyattCode/GamePlus-releases`（尚未创建）；Game+ 源码仓库目前为私有 —— 需创建该仓库，或公开 Game+ 源码 / 提供源码镜像。
+- [ ] **需律师/owner 判断**：GeoLite EULA §6.3（更新后 30 天内销毁旧版本）与 §6.1（向第三方披露的条件）对固定版本 `geoip.dat` 的影响。建议：至少每月更新一次 rules-dat 固定版本，或把唯一使用的 `geoip:private` 规则改为显式私有网段并移除 `geoip.dat`。
 
 ## 3. 发布渠道
 

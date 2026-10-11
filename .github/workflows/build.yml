@@ -155,6 +155,18 @@ jobs:
           CSC_KEY_PASSWORD: ''
         run: npx electron-builder --win nsis --publish never
 
+      - name: Verify licence files are packaged
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $res = 'electron-app/dist/win-unpacked/resources'
+          $expected = @('LICENSE', 'THIRD_PARTY_NOTICES.md') + @(Get-ChildItem licenses -File | ForEach-Object { "licenses/$($_.Name)" })
+          $missing = @($expected | Where-Object { -not (Test-Path (Join-Path $res $_)) })
+          if ($missing.Count -gt 0) {
+            Write-Host "::error::Licence files missing from the package: $($missing -join ', ')"
+            exit 1
+          }
+          Write-Host "All $($expected.Count) licence files are packaged under resources/."
+
       # ---------------------------------------------------------------- checksums
       - name: Compute SHA-256 of installers
         id: sums

@@ -1,8 +1,13 @@
 # Game+
 
 Game+ is a **Windows game accelerator**: it routes a game's (or any app's) traffic through a proxy
-server you configure, using the bundled **Xray** / **sing-box** cores, with process-level, TUN or
-system-proxy capture.
+server you configure, using the bundled **Xray** / **sing-box** cores, with TUN or system-proxy capture.
+
+> **Process mode is not included in the installer.** It needs the proprietary NetFilter SDK
+> (`nfapi.dll` / `nfdriver.sys`), which Game+ is not licensed to redistribute. It stays out of the
+> installer until a NetFilter SDK redistribution licence is obtained (see `docs/OWNER_TODO.md`).
+> Game+ is not affiliated with or endorsed by the bundled third-party projects; see
+> [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ![Game+ dashboard](NetchModern/docs/screenshot.png)
 
@@ -16,7 +21,8 @@ system-proxy capture.
 │   ├── native/       #   native binaries (git-ignored; see native/README.md)
 │   └── build.ps1     #   publishes + stages the backend for electron-builder
 ├── LICENSE           # GPL-3.0-only
-└── THIRD_PARTY_NOTICES.md
+├── THIRD_PARTY_NOTICES.md
+└── licenses/         # verbatim third-party licence texts (shipped in the installer)
 ```
 
 The Electron main process spawns `gameplus-host.exe` as a sidecar and talks to it over a loopback
@@ -127,13 +133,13 @@ certutil -hashfile "Game+-x.y.z-x64.exe" SHA256
 Get-FileHash "Game+-x.y.z-x64.exe" -Algorithm SHA256
 ```
 
-加速功能会安装 netfilter / WinTUN 驱动，部分杀毒软件可能误报，请自行判断是否信任。
+加速功能会使用 WinTUN 驱动，部分杀毒软件可能误报，请自行判断是否信任。（安装包不含 NetFilter 驱动 / 进程模式。）
 
 The installer is **not code-signed**. On first run Windows SmartScreen shows
 "Windows 已保护你的电脑" — click 「更多信息」 → 「仍要运行」. Optionally verify the SHA-256 of the
 downloaded installer (`certutil -hashfile "Game+-x.y.z-x64.exe" SHA256` or PowerShell
-`Get-FileHash`) against the published value. Antivirus software may flag the netfilter / WinTUN
-drivers bundled for acceleration.
+`Get-FileHash`) against the published value. Antivirus software may flag the WinTUN
+driver bundled for acceleration (the NetFilter driver / process mode is not bundled).
 
 ## 隐私 / Privacy
 

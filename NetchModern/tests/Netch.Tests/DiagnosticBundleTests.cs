@@ -86,6 +86,18 @@ public class DiagnosticBundleTests
         Assert.Contains("password=***", sanitized);
     }
 
+    [Fact]
+    public void LogSanitizer_ReplacesLongestHostFirst()
+    {
+        var sanitized = LogSanitizer.Sanitize(
+            "via a.b.example.com and b.example.com done",
+            new[] { "b.example.com", "a.b.example.com" });
+
+        Assert.Equal("via <node> and <node> done", sanitized);
+        Assert.DoesNotContain("a.<node>", sanitized);
+        Assert.DoesNotContain("example.com", sanitized);
+    }
+
     // --- DiagnosticBundleBuilder ---
 
     private static BundleInput SampleInput(IReadOnlyList<string>? logs = null) => new(
@@ -99,6 +111,13 @@ public class DiagnosticBundleTests
         CrashFiles: new List<(string, string)> { ("crash-host-1.txt", $"boom password={PlantedSecret}") },
         Diagnostics: new { summary = "ok" },
         Client: JsonNode.Parse("""{ "appVersion": "3.0.0" }"""));
+
+    private static string ReadEntry(ZipArchive zip, string entryName)
+    {
+        var entry = zip.GetEntry(entryName)!;
+        using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+        return reader.ReadToEnd();
+    }
 
     [Fact]
     public void Build_ContainsExpectedEntries()
@@ -149,5 +168,74 @@ public class DiagnosticBundleTests
         Assert.True(lineCount <= 5000, $"expected <= 5000 lines, got {lineCount}");
         Assert.Contains("line 5999", text);
         Assert.DoesNotContain("line 0\n", text);
+    }
+
+    [Fact]
+    public void Build_ReplacesSensitiveHostsInLogs()
+    {
+        var logs = new List<string>
+        {
+            "System-proxy routing 3 domain(s) via jp1.example.net",
+            "Capturing 2 IP rule(s) via TUN → 203.0.113.7"
+        };
+        var input = SampleInput(logs) with { SensitiveHosts = new[] { "jp1.example.net", "203.0.113.7" } };
+        var bytes = DiagnosticBundleBuilder.Build(input, new DateTime(2025, 1, 2, 3, 4, 5));
+
+        using var zip = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
+        var text = ReadEntry(zip, "logs/backend.log");
+
+        Assert.DoesNotContain("jp1.example.net", text);
+        Assert.DoesNotContain("203.0.113.7", text);
+        Assert.Contains("<node>", text);
+    }
+
+    [Fact]
+    public void Build_RedactsEmbeddedUrlsInClientJson()
+    {
+        var input = SampleInput() with
+        {
+            Client = JsonNode.Parse("""{ "message": "失败：https://sub.example.com/p?token=abc" }""")
+        };
+        var bytes = DiagnosticBundleBuilder.Build(input, new DateTime(2025, 1, 2, 3, 4, 5));
+
+        using var zip = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
+        var text = ReadEntry(zip, "client/client.json");
+
+        Assert.DoesNotContain("token=abc", text);
+        Assert.DoesNotContain("/p?", text);
+    }
+
+    [Fact]
+    public void Build_RedactsSensitiveHostsInSettingsJson()
+    {
+        var input = SampleInput() with
+        {
+            Settings = JsonNode.Parse("""{ "proxy": { "endpoint": "203.0.113.7:8080" } }"""),
+            SensitiveHosts = new[] { "203.0.113.7" }
+        };
+        var bytes = DiagnosticBundleBuilder.Build(input, new DateTime(2025, 1, 2, 3, 4, 5));
+
+        using var zip = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
+        var text = ReadEntry(zip, "config/settings.json");
+
+        Assert.DoesNotContain("203.0.113.7", text);
+        Assert.Contains("<node>:8080", text);
+    }
+
+    [Fact]
+    public void Build_RedactsSensitiveHostsInDiagnosticsJson()
+    {
+        var input = SampleInput() with
+        {
+            Diagnostics = new { route = "selected via 198.51.100.5" },
+            SensitiveHosts = new[] { "198.51.100.5" }
+        };
+        var bytes = DiagnosticBundleBuilder.Build(input, new DateTime(2025, 1, 2, 3, 4, 5));
+
+        using var zip = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
+        var text = ReadEntry(zip, "diagnostics.json");
+
+        Assert.DoesNotContain("198.51.100.5", text);
+        Assert.Contains("<node>", text);
     }
 }

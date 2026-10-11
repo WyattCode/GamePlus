@@ -717,7 +717,7 @@ internal sealed partial class RpcRouter
 
         // Snapshot everything that touches shared state under the lock. Servers are reduced to a
         // non-identifying summary (no host, no credentials); subscription links are redacted.
-        var (settingsNode, servers, subscriptions, logLines, crashFiles) = await WithStateValue(() =>
+        var (settingsNode, servers, subscriptions, logLines, crashFiles, hosts) = await WithStateValue(() =>
         {
             var settings = JsonSerializer.SerializeToNode(SettingsSvc.Settings);
 
@@ -747,8 +747,15 @@ internal sealed partial class RpcRouter
 
             var crashes = ReadCrashFiles();
 
+            // Node hostnames/IPs: replaced with <node> in logs/crash/settings/client/diagnostics.
+            var nodeHosts = Servers.Servers
+                .Select(s => s.Hostname)
+                .Where(h => !string.IsNullOrWhiteSpace(h))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
             return (settings, (IReadOnlyList<object>)serverList, (IReadOnlyList<object>)subList,
-                (IReadOnlyList<string>)logs, crashes);
+                (IReadOnlyList<string>)logs, crashes, (IReadOnlyCollection<string>)nodeHosts);
         }, ct);
 
         // Diagnostics run OUTSIDE the lock (network I/O), exactly like diag.run with no game/node.
@@ -784,7 +791,8 @@ internal sealed partial class RpcRouter
             logLines,
             crashFiles,
             diagnostics,
-            clientNode);
+            clientNode,
+            hosts);
 
         var bytes = DiagnosticBundleBuilder.Build(input, now);
         var fileName = $"GamePlus-diagnostics-{now:yyyyMMdd-HHmmss}.zip";

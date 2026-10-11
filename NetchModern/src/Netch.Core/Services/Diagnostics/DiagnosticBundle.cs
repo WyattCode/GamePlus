@@ -32,6 +32,16 @@ public static class ConfigSanitizer
     /// <summary>Returns a sanitized deep copy of <paramref name="node" /> (never the same instance).</summary>
     public static JsonNode? Sanitize(JsonNode? node)
     {
+        return Sanitize(node, null);
+    }
+
+    /// <summary>
+    ///     Returns a sanitized deep copy of <paramref name="node" /> (never the same instance).
+    ///     When <paramref name="sensitiveHosts" /> is supplied, every occurrence of those
+    ///     hostnames/IPs is replaced with <c>&lt;node&gt;</c> in string values.
+    /// </summary>
+    public static JsonNode? Sanitize(JsonNode? node, IReadOnlyCollection<string>? sensitiveHosts)
+    {
         if (node is null)
             return null;
 
@@ -53,11 +63,11 @@ public static class ConfigSanitizer
 
                     if (IsLinkName(name))
                     {
-                        result[name] = RedactLinkValue(value);
+                        result[name] = RedactLinkValue(value, sensitiveHosts);
                         continue;
                     }
 
-                    result[name] = Sanitize(value);
+                    result[name] = Sanitize(value, sensitiveHosts);
                 }
                 return result;
             }
@@ -65,13 +75,17 @@ public static class ConfigSanitizer
             {
                 var result = new JsonArray();
                 foreach (var item in arr)
-                    result.Add(Sanitize(item));
+                    result.Add(Sanitize(item, sensitiveHosts));
                 return result;
             }
             case JsonValue val:
             {
-                if (val.TryGetValue<string>(out var s) && LooksLikeUrl(s))
-                    return JsonValue.Create(RedactString(s));
+                if (val.TryGetValue<string>(out var s))
+                {
+                    if (LooksLikeUrl(s))
+                        return JsonValue.Create(RedactString(s));
+                    return JsonValue.Create(LogSanitizer.Sanitize(s, sensitiveHosts));
+                }
                 return JsonValue.Create(val.GetValue<object?>());
             }
             default:
@@ -119,13 +133,17 @@ public static class ConfigSanitizer
         return JsonValue.Create("***");
     }
 
-    private static JsonNode? RedactLinkValue(JsonNode? value)
+    private static JsonNode? RedactLinkValue(JsonNode? value, IReadOnlyCollection<string>? sensitiveHosts)
     {
         if (value is null)
             return null;
         if (value is JsonValue v && v.TryGetValue<string>(out var s))
-            return string.IsNullOrEmpty(s) ? JsonValue.Create(s) : JsonValue.Create(RedactString(s));
-        return Sanitize(value);
+        {
+            if (string.IsNullOrEmpty(s))
+                return JsonValue.Create(s);
+            return JsonValue.Create(LooksLikeUrl(s) ? RedactString(s) : LogSanitizer.Sanitize(s, sensitiveHosts));
+        }
+        return Sanitize(value, sensitiveHosts);
     }
 
     private static bool LooksLikeUrl(string s)
@@ -174,11 +192,34 @@ public static class LogSanitizer
     /// <summary>Returns <paramref name="line" /> with URLs and credential pairs redacted.</summary>
     public static string Sanitize(string line)
     {
+        return Sanitize(line, null);
+    }
+
+    /// <summary>
+    ///     Returns <paramref name="line" /> with URLs and credential pairs redacted. When
+    ///     <paramref name="sensitiveHosts" /> is supplied, every occurrence (case-insensitive) of
+    ///     those hostnames/IPs is replaced with <c>&lt;node&gt;</c>; longer hosts are replaced
+    ///     first so suffixes do not shadow them.
+    /// </summary>
+    public static string Sanitize(string line, IReadOnlyCollection<string>? sensitiveHosts)
+    {
         if (string.IsNullOrEmpty(line))
             return line ?? string.Empty;
 
         var result = UrlRegex.Replace(line, m => RedactMatch(m.Value));
         result = PairRegex.Replace(result, m => m.Groups["key"].Value + "***");
+
+        if (sensitiveHosts is { Count: > 0 })
+        {
+            var hosts = sensitiveHosts
+                .Where(h => !string.IsNullOrWhiteSpace(h) && h.Trim().Length >= 3)
+                .Select(h => h.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(h => h.Length);
+            foreach (var host in hosts)
+                result = result.Replace(host, "<node>", StringComparison.OrdinalIgnoreCase);
+        }
+
         return result;
     }
 
@@ -205,7 +246,8 @@ public sealed record BundleInput(
     IReadOnlyList<string> LogLines,
     IReadOnlyList<(string Name, string Content)> CrashFiles,
     object? Diagnostics,
-    JsonNode? Client);
+    JsonNode? Client,
+    IReadOnlyCollection<string>? SensitiveHosts = null);
 
 /// <summary>
 ///     Builds the one-click diagnostic zip entirely in memory. The caller (Electron main) is
@@ -227,6 +269,8 @@ public static class DiagnosticBundleBuilder
     /// <summary>Builds the zip and returns its bytes.</summary>
     public static byte[] Build(BundleInput input, DateTime now)
     {
+        var hosts = input.SensitiveHosts;
+
         using var ms = new MemoryStream();
         using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
         {
@@ -248,7 +292,7 @@ public static class DiagnosticBundleBuilder
             AddText(zip, "info.json", info.ToJsonString(JsonOptions), ref budget);
 
             AddText(zip, "config/settings.json",
-                ConfigSanitizer.Sanitize(input.Settings)?.ToJsonString(JsonOptions) ?? "null", ref budget);
+                ConfigSanitizer.Sanitize(input.Settings, hosts)?.ToJsonString(JsonOptions) ?? "null", ref budget);
 
             AddText(zip, "config/servers.json",
                 JsonSerializer.Serialize(input.Servers, JsonOptions), ref budget);
@@ -261,14 +305,14 @@ public static class DiagnosticBundleBuilder
             if (logs.Count > MaxLogLines)
                 logs = logs.Skip(logs.Count - MaxLogLines).ToList();
 
-            var logText = BuildLogText(logs);
+            var logText = BuildLogText(logs, hosts);
             if (Encoding.UTF8.GetByteCount(logText) > budget)
             {
                 // Drop the oldest lines until it fits (or nothing is left).
                 var kept = logs.ToList();
-                while (kept.Count > 0 && Encoding.UTF8.GetByteCount(BuildLogText(kept)) > budget)
+                while (kept.Count > 0 && Encoding.UTF8.GetByteCount(BuildLogText(kept, hosts)) > budget)
                     kept.RemoveAt(0);
-                logText = BuildLogText(kept);
+                logText = BuildLogText(kept, hosts);
             }
             AddText(zip, "logs/backend.log", logText, ref budget);
 
@@ -277,7 +321,7 @@ public static class DiagnosticBundleBuilder
             {
                 if (crashCount >= MaxCrashFiles)
                     break;
-                var content = BuildLogText((crash.Content ?? string.Empty).Split('\n'));
+                var content = BuildLogText((crash.Content ?? string.Empty).Split('\n'), hosts);
                 if (Encoding.UTF8.GetByteCount(content) > MaxCrashFileBytes)
                     content = TruncateUtf8(content, MaxCrashFileBytes);
                 var name = SafeName(crash.Name);
@@ -287,23 +331,37 @@ public static class DiagnosticBundleBuilder
                 crashCount++;
             }
 
-            AddText(zip, "diagnostics.json",
-                input.Diagnostics is null
-                    ? "null"
-                    : JsonSerializer.Serialize(input.Diagnostics, JsonOptions), ref budget);
+            AddText(zip, "diagnostics.json", BuildDiagnosticsText(input.Diagnostics, hosts), ref budget);
 
             AddText(zip, "client/client.json",
-                ConfigSanitizer.Sanitize(input.Client)?.ToJsonString(JsonOptions) ?? "null", ref budget);
+                ConfigSanitizer.Sanitize(input.Client, hosts)?.ToJsonString(JsonOptions) ?? "null", ref budget);
         }
 
         return ms.ToArray();
     }
 
-    private static string BuildLogText(IReadOnlyList<string> lines)
+    private static string BuildDiagnosticsText(object? diagnostics, IReadOnlyCollection<string>? sensitiveHosts)
+    {
+        if (diagnostics is null)
+            return "null";
+
+        var raw = JsonSerializer.Serialize(diagnostics, JsonOptions);
+        try
+        {
+            var node = JsonNode.Parse(raw);
+            return ConfigSanitizer.Sanitize(node, sensitiveHosts)?.ToJsonString(JsonOptions) ?? "null";
+        }
+        catch (JsonException)
+        {
+            return LogSanitizer.Sanitize(raw, sensitiveHosts);
+        }
+    }
+
+    private static string BuildLogText(IReadOnlyList<string> lines, IReadOnlyCollection<string>? sensitiveHosts)
     {
         var sb = new StringBuilder();
         foreach (var line in lines)
-            sb.Append(LogSanitizer.Sanitize(line)).Append('\n');
+            sb.Append(LogSanitizer.Sanitize(line, sensitiveHosts)).Append('\n');
         return sb.ToString();
     }
 
@@ -363,7 +421,7 @@ public static class DiagnosticBundleBuilder
         "  - config/settings.json  脱敏后的设置 / sanitized settings\n" +
         "  - config/servers.json   线路摘要（不含地址与凭据）/ server summary (no host/credentials)\n" +
         "  - config/subscriptions.json 订阅摘要（链接已脱敏）/ subscription summary (links redacted)\n" +
-        "  - logs/backend.log      脱敏后的日志（最近 5000 行）/ sanitized logs (last 5000 lines)\n" +
+        "  - logs/backend.log      脱敏后的日志（最近 5000 行，节点地址已替换为 <node>）/ sanitized logs (last 5000 lines, node addresses replaced with <node>)\n" +
         "  - crash/                崩溃报告（最多 10 个）/ crash reports (max 10)\n" +
         "  - diagnostics.json      诊断结果 / diagnostics result\n" +
         "  - client/client.json    客户端信息 / client info\n\n" +
